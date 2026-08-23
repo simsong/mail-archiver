@@ -27,6 +27,7 @@ jobs:
           sudo apt-get install --yes clamav-daemon
           sudo systemctl stop clamav-daemon clamav-freshclam
           sudo freshclam
+          sudo chmod -R a+rX /var/lib/clamav
           mkdir -p "${RUNNER_TEMP}/mailarchiver-clamav"
           {
             echo 'MAILARCHIVER_CLAMD=/usr/sbin/clamd'
