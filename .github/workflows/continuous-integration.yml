@@ -1,19 +1,26 @@
 name: Continuous integration
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.0.1
       - name: Install ClamAV
         run: |
           sudo apt-get update
@@ -33,8 +40,23 @@ jobs:
             "PidFile ${RUNNER_TEMP}/mailarchiver-clamav/clamd.pid" \
             > "${RUNNER_TEMP}/mailarchiver-clamav/clamd.conf"
       - name: Install dependencies
-        run: uv sync --all-groups
-      - name: Check
+        run: uv sync --locked --all-groups
+      - name: Pytest
         run: make check
+
+  pylint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
       - name: Pylint
         run: make pylint
