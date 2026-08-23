@@ -28,7 +28,7 @@ jobs:
           sudo systemctl stop clamav-daemon clamav-daemon.socket clamav-freshclam
           sudo freshclam
           sudo chmod -R a+rX /var/lib/clamav
-          sudo chown "$(id -u):$(id -g)" /run/clamav
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /run/clamav
           mkdir -p "${RUNNER_TEMP}/mailarchiver-clamav"
           {
             echo 'MAILARCHIVER_CLAMD=/usr/sbin/clamd'
