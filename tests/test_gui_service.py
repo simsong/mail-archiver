@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import mailbox
 import time
 from pathlib import Path
@@ -27,6 +28,7 @@ from mailarchiver.gui_app import GuiApi
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mbox import add_message
 from mailarchiver.search import index_message
+from mailarchiver.standalone_verify import semantic_bytes
 
 
 SIMPLE_MESSAGE = (
@@ -97,6 +99,25 @@ def make_gui_archive(tmp_path: Path) -> Path:
             "INSERT INTO locations(message_pk, generation_pk, byte_offset, byte_length) VALUES (?, ?, ?, ?)",
             ((message_pk, generation[0], location.byte_offset, location.byte_length)
              for message_pk, location in zip(message_pks, locations)),
+        )
+        run = catalog.execute("INSERT INTO ingest_runs(started_at) VALUES (?)", ("2026-08-23T00:00:00+00:00",)).lastrowid
+        volume = catalog.execute(
+            "INSERT INTO source_volumes(identity_json, metadata_json, first_observed_at, last_observed_at) VALUES (?, ?, ?, ?)",
+            (
+                json.dumps({"kind": "local-volume", "stable_id": "fixture"}),
+                json.dumps({"volume_label": "Fixture Backup", "current_mount_path": "/Volumes/Fixture"}),
+                "2026-08-23T00:00:00+00:00", "2026-08-23T00:00:00+00:00",
+            ),
+        ).lastrowid
+        source_file = catalog.execute(
+            "INSERT INTO source_files(source_volume_pk, source_path, path_kind, source_kind) VALUES (?, 'mail/simple.eml', 'file', 'message')",
+            (volume,),
+        ).lastrowid
+        catalog.execute(
+            "INSERT INTO observations(run_pk, message_pk, source_file_pk, source_offset, raw_sha256, semantic_sha256, disposition, detail) "
+            "VALUES (?, ?, ?, 0, ?, ?, 'archived', 'Archive')",
+            (run, message_pks[0], source_file, hashlib.sha256(SIMPLE_MESSAGE).hexdigest(),
+             hashlib.sha256(semantic_bytes(SIMPLE_MESSAGE)).hexdigest()),
         )
         catalog.commit()
     finally:
@@ -193,6 +214,18 @@ def test_gui_selects_multipart_views_and_sanitizes_html(tmp_path: Path) -> None:
     assert "https://tracker.example/pixel" in allowed.content
     assert not allowed.remote_content_blocked
     assert "Subject: multipart message" in render_part(archive, 2, RAW_PART_ID).content
+
+
+def test_gui_displays_archive_and_source_locations(tmp_path: Path) -> None:
+    """Requirement: the message viewer distinguishes archive mailboxes from source discoveries."""
+    archive = make_gui_archive(tmp_path)
+
+    view = describe_message(archive, 1)
+
+    assert view.archive_path == "data/mbox/2024-Archive1.mbox:0"
+    assert [(item.volume, item.path, item.offset) for item in view.source_locations] == [
+        ("Fixture Backup", "mail/simple.eml", 0)
+    ]
 
 
 def test_gui_exports_exact_eml_and_decoded_attachment(tmp_path: Path) -> None:

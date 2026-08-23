@@ -83,11 +83,18 @@ requirement.
   messages sharing only a Message-ID.
 * Messages missing Message-ID are retained and identified by their SHA-256;
   they are reported as metadata exceptions.
-* The archive records every source observation: source kind, source path or
-  remote account/folder/UID, source byte offset where applicable, ingest run,
-  raw message SHA-256, and disposition (`archived`, `duplicate`,
-  `autosave-excluded`, or error). Parser failures retain the exception detail
-  and identify the source record without printing message content.
+* A **source** is where mail was found; an **archive mailbox** is where this
+  program saved a deduplicated canonical copy. Every source observation links
+  to one source file and source volume, records its source/forensic path,
+  offset where applicable, ingest run, raw RFC 5322 SHA-256, semantic (`h3`)
+  SHA-256, and disposition (`archived`, `duplicate`, `autosave-excluded`, or
+  error). One archived message can retain many source observations.
+* A source volume has a stable identity plus normalized JSON metadata. Local
+  ingest records the complete OS volume report available at ingest time,
+  including label, format information when available, and current mount path.
+  Cloud adapters use a provider/account/container identity and provider JSON.
+  Source evidence is retained in the private archive catalog and excluded from
+  redacted or public derivative packages by default.
 * Idempotence is at message level.  After a raw message hash and Message-ID
   have been obtained, a matching stored identity is skipped before ClamAV,
   text extraction, and MBOX writing.  A deliberate rescan/reindex mode is
@@ -179,7 +186,9 @@ content.  It tracks at least:
 * each final MBOX filename, message byte offset, byte length, and archive
   generation; and
 * sources, ingest runs, exclusions, duplicates, validation results, and
-  integrity metadata.
+  integrity metadata. Source volumes are distinct from source files: many
+  paths may be found on one volume, and observations connect those paths to
+  logical archive messages.
 
 Logical messages and physical locations are separate relations.  MBOX offsets
 are generation-specific and must be replaced atomically when a file is
@@ -269,6 +278,9 @@ HTTP(S) images may load only after an explicit per-message action. Embedded
 CID images may render from the verified message. Attachments appear in a list,
 safe images and PDFs can be previewed inline, and opening any attachment is an
 explicit action with an additional warning for executable or container types.
+At the bottom of every message view, the GUI displays the archive mailbox path
+separately from every source volume and source/forensic path where the message
+was found.
 Command-1 through Command-9 select the MIME part having that numeric part ID;
 Command-0 and Command-Shift-U select the raw RFC 5322 source.
 

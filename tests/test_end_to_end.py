@@ -15,6 +15,7 @@ from shutil import copy, copytree
 import pytest
 
 from mailarchiver.layout import mbox_directory
+from mailarchiver.standalone_verify import semantic_bytes
 
 
 TEST_DATA = Path(__file__).parent / "data"
@@ -113,16 +114,25 @@ def test_ingest_routes_preserves_and_indexes_messages(
         assert catalog.execute("SELECT count(*) FROM locations").fetchone() == (4,)
         assert catalog.execute("SELECT count(*) FROM observations").fetchone() == (6,)
         assert catalog.execute("SELECT count(*) FROM source_files").fetchone() == (4,)
+        assert catalog.execute("SELECT count(*) FROM source_volumes").fetchone() == (1,)
+        assert catalog.execute(
+            "SELECT count(*) FROM observations WHERE disposition = 'duplicate' AND message_pk IS NULL"
+        ).fetchone() == (0,)
+        raw_hash, semantic_hash = catalog.execute(
+            "SELECT raw_sha256, semantic_sha256 FROM observations WHERE message_pk IS NOT NULL ORDER BY observation_pk LIMIT 1"
+        ).fetchone()
+        assert raw_hash == hashlib.sha256(raw["sent"]).hexdigest()
+        assert semantic_hash == hashlib.sha256(semantic_bytes(raw["sent"])).hexdigest()
         fingerprints = {
-            Path(path): (modified_at_ns, byte_length, sha256)
+            path: (modified_at_ns, byte_length, sha256)
             for path, modified_at_ns, byte_length, sha256 in catalog.execute(
-                "SELECT source_path, modified_at_ns, byte_length, sha256 FROM source_files"
+                "SELECT source_files.source_path, modified_at_ns, byte_length, sha256 FROM source_files"
             )
         }
         for path in source.rglob("*"):
             if path.is_file():
                 stat = path.stat()
-                assert fingerprints[path.resolve()] == (
+                assert fingerprints[path.resolve().relative_to(source.anchor).as_posix()] == (
                     stat.st_mtime_ns,
                     stat.st_size,
                     hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -239,7 +249,8 @@ def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, d
         assert catalog.execute("SELECT count(*) FROM observations").fetchone() == (6,)
         assert catalog.execute("SELECT count(*) FROM source_files WHERE completed_run = 2").fetchone() == (4,)
         assert catalog.execute(
-            "SELECT modified_at_ns FROM source_files WHERE source_path = ?", (str(touched.resolve()),)
+            "SELECT modified_at_ns FROM source_files WHERE source_path = ?",
+            (touched.resolve().relative_to(touched.anchor).as_posix(),),
         ).fetchone() == (touched.stat().st_mtime_ns,)
     finally:
         catalog.close()
@@ -463,8 +474,12 @@ def test_parser_failure_records_source_identity_and_failed_run(tmp_path: Path) -
         assert run_result == "failed"
         assert detail.startswith("RuntimeError: failed to parse")
         assert catalog.execute(
-            "SELECT source_path, source_offset, source_sha256, disposition, detail FROM observations"
-        ).fetchone() == (str(source), 0, digest, "error", f"ValueError: no date or year path fallback for {source}")
+            "SELECT source_files.source_path, source_offset, raw_sha256, disposition, detail FROM observations "
+            "JOIN source_files USING (source_file_pk)"
+        ).fetchone() == (
+            source.resolve().relative_to(source.anchor).as_posix(), 0, digest, "error",
+            f"ValueError: no date or year path fallback for {source}",
+        )
     finally:
         catalog.close()
     assert not list(mbox_directory(archive).glob("*.mbox"))

@@ -219,6 +219,10 @@ inside a sandboxed iframe. Remote image URLs are omitted unless the user
 explicitly enables them for that view. Individual image and PDF attachments
 are base64-transferred only on an explicit preview action; other attachment
 payloads are written to a private temporary directory before macOS opens them.
+The viewer also reads the archive mailbox location and linked source
+observations from the catalog, then displays archive path, source-volume label,
+and source or forensic path at the bottom without treating an archive mailbox
+as a source.
 
 `search.sqlite3` contains separate `message_fts` and `attachment_fts` virtual
 tables so message text remains searchable without attachment matches.
@@ -293,16 +297,24 @@ messages(message_pk, message_id_normalized, sha256, sender_address_pk, subject,
 recipients(message_pk, address_pk)
 mbox_generations(generation_pk, filename, sha256, message_count, byte_count)
 locations(message_pk, generation_pk, byte_offset, byte_length)
-source_files(source_path, modified_at_ns, byte_length, sha256, checked_at,
+source_volumes(source_volume_pk, identity_json, metadata_json,
+               first_observed_at, last_observed_at)
+source_files(source_file_pk, source_volume_pk, source_path, path_kind,
+             source_kind, modified_at_ns, byte_length, sha256, checked_at,
              completed_run)
-observations(observation_pk, source_path, source_offset, source_sha256,
-             message_pk, disposition, run_pk, detail)
+observations(observation_pk, source_file_pk, source_offset, raw_sha256,
+             semantic_sha256, message_pk, disposition, run_pk, detail)
 metadata_defects(message_pk, field, detail)
 ingest_runs(run_pk, started_at, completed_at, result, detail)
 ```
 
-`message_pk` is nullable in `observations` so malformed and autosave-excluded
-source records are still reviewable.  The deduplication lookup is indexed on `(message_id_normalized, sha256)`;
+`source_volumes.identity_json` is a canonical stable identity and
+`metadata_json` retains the complete current OS/provider report. Local files
+use a volume-relative path; future cloud adapters use provider/account/container
+identities and forensic adapters may use a forensic path. `message_pk` is
+nullable in `observations` so malformed and autosave-excluded source records
+are still reviewable. Each observation directly stores raw (`h2`) and semantic
+(`h3`) SHA-256 values for fast forensic lookup. The deduplication lookup is indexed on `(message_id_normalized, sha256)`;
 `sha256` also supports the missing-Message-ID exception path.  Do not make
 Message-ID unique.  `email_addresses.address`, `messages.sender_address_pk`,
 and `recipients.address_pk` are indexed; recipient role and ordering are not

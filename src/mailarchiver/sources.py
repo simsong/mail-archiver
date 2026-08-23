@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from .source_volume import SourceVolume, local_source_volume
+
 
 class SourceMessage(BaseModel):
     path: Path
@@ -22,6 +24,8 @@ class SourceMessage(BaseModel):
 
 class SourceFile(BaseModel):
     path: Path
+    volume: SourceVolume
+    source_path: str
     kind: Literal["emlx", "mbox", "message"]
     modified_at_ns: int
     byte_length: int
@@ -75,6 +79,7 @@ def source_files(source: Path) -> Iterator[SourceFile]:
             for directory, _subdirectories, filenames in os.walk(source, onerror=raise_walk_error)
             for filename in filenames
         )
+    volumes: dict[int, SourceVolume] = {}
     for path in paths:
         path = path.resolve()
         kind: Literal["emlx", "mbox", "message"] | None = None
@@ -91,7 +96,18 @@ def source_files(source: Path) -> Iterator[SourceFile]:
             kind = "message"
         if kind is not None:
             stat = path.stat()
-            yield SourceFile(path=path, kind=kind, modified_at_ns=stat.st_mtime_ns, byte_length=stat.st_size)
+            volume = volumes.get(stat.st_dev)
+            if volume is None:
+                volume = local_source_volume(path)
+                volumes[stat.st_dev] = volume
+            yield SourceFile(
+                path=path,
+                volume=volume,
+                source_path=path.relative_to(volume.mount_path).as_posix(),
+                kind=kind,
+                modified_at_ns=stat.st_mtime_ns,
+                byte_length=stat.st_size,
+            )
 
 
 def source_messages(source: SourceFile, start_offset: int = 0) -> Iterator[SourceMessage]:

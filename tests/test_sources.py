@@ -1,6 +1,7 @@
 """Requirements: source fingerprints verify complete files and prior-length prefixes."""
 
 import hashlib
+import json
 import mailbox
 from pathlib import Path
 
@@ -25,6 +26,21 @@ def test_one_pass_hashing_returns_prefix_and_complete_sha256(tmp_path: Path) -> 
 
     assert hashes.prefix_sha256 == hashlib.sha256(prior).hexdigest()
     assert hashes.sha256 == hashlib.sha256(prior + appended).hexdigest()
+
+
+def test_local_source_file_has_a_stable_volume_identity_and_relative_path(tmp_path: Path) -> None:
+    """Requirement: every local source file records its source volume and path within that volume."""
+    path = tmp_path / "message.eml"
+    path.write_bytes(b"Message-ID: <source@example>\n\nbody\n")
+
+    source = next(source_files(path))
+
+    metadata = json.loads(source.volume.metadata_json)
+    identity = json.loads(source.volume.identity_json)
+    assert identity["kind"] == "local-volume"
+    assert metadata["current_mount_path"] == str(source.volume.mount_path)
+    assert source.path == path.resolve()
+    assert source.source_path == path.resolve().relative_to(source.volume.mount_path).as_posix()
 
 
 def test_modern_apple_mail_package_reads_complete_emlx_only(tmp_path: Path) -> None:

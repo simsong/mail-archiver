@@ -216,6 +216,12 @@ to one numbered ingest run:
 uv run mailarchiver review --run 1
 ```
 
+A **source** is where mail was found. Its source volume and source or forensic
+path are retained separately from the **archive mailbox**, the canonical MBOX
+where the deduplicated message was saved. The graphical message viewer displays
+both locations; source metadata stays in the private catalog and is excluded
+from public or redacted derivative packages by default.
+
 ## Report archive contents
 
 `report` reads only `archive.sqlite3`.  It lists each year with the number of

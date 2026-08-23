@@ -28,7 +28,7 @@ async function initialize() {
   initialized = true;
   for (const id of ["choose-archive", "search-form", "search", "archive-label", "result-status", "result-list", "load-more",
     "sort-by", "sort-direction", "search-attachments", "message-content", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
-    "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "error"]) {
+    "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "error"]) {
     elements[id] = byId(id);
   }
   elements["choose-archive"].addEventListener("click", chooseArchive);
@@ -185,8 +185,24 @@ async function selectMessage(messagePk) {
   elements["part-select"].replaceChildren(...view.body_parts.map(partOption));
   elements["part-select"].value = String(view.preferred_part_id);
   renderAttachments(view.attachments);
+  renderLocations(view);
   await showPart(view.preferred_part_id, false);
   prepareDrag(messagePk);
+}
+
+function renderLocations(view) {
+  const locations = [];
+  if (view.archive_path) locations.push(["Archive mailbox", view.archive_path]);
+  for (const source of view.source_locations) {
+    locations.push(["Source volume", source.volume]);
+    locations.push(["Source path", `${source.path}:${source.offset}`]);
+  }
+  elements["provenance-section"].hidden = locations.length === 0;
+  elements["message-locations"].replaceChildren(...locations.flatMap(([label, value]) => {
+    const term = document.createElement("dt"); term.textContent = `${label}:`;
+    const detail = document.createElement("dd"); detail.textContent = value;
+    return [term, detail];
+  }));
 }
 
 function navigateResults(event) {
