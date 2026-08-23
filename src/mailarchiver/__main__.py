@@ -374,6 +374,7 @@ def ingest(args: argparse.Namespace) -> None:
                     progress.set_phase("checking sources")
                     plan = plan_source(source_file)
                     register_source_file(source_file)
+                    catalog.commit()
                     if plan.skip:
                         assert plan.sha256 is not None
                         checkpoint(source_file, plan.sha256)
