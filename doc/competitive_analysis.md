@@ -81,6 +81,14 @@ projects. [The National Archives' current workflow](https://www.nationalarchives
 separates selection/capture, pre-ingest, preservation, and access, and points to
 different tools for different stages.
 
+References:
+* [Preserving Email (2011)](https://www.dpconline.org/docs/technology-watch-reports/739-dpctw11-01-pdf/file)
+* [Preserving Email (2019)](https://www.dpconline.org/docs/technology-watch-reports/2159-twr19-01/file)
+* [Preserving Email (2021)](https://www.dpconline.org/docs/technology-watch-reports/2472-preserving-email/file)
+* [US Library of Congress, Personal Archiving](https://digitalpreservation.gov/personalarchiving/email.html)
+* [UK National Archives](https://www.nationalarchives.gov.uk/archives-sector/advice-and-guidance/managing-your-collection/preserving-digital-collections/email-preservation-workflows/)
+
+
 Institutional experience reaches the same conclusion. [Yale's email task
 force](https://campuspress.yale.edu/borndigital/2020/01/30/email-task-force-report/)
 selected a combination of ePADD, FTK, and Aid4Mail for further testing rather
