@@ -25,21 +25,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes clamav-daemon
-          sudo systemctl stop clamav-daemon clamav-freshclam
+          sudo systemctl stop clamav-daemon clamav-daemon.socket clamav-freshclam
           sudo freshclam
           sudo chmod -R a+rX /var/lib/clamav
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /run/clamav/mailarchiver
           mkdir -p "${RUNNER_TEMP}/mailarchiver-clamav"
           {
             echo 'MAILARCHIVER_CLAMD=/usr/sbin/clamd'
             echo 'MAILARCHIVER_CLAMDSCAN=/usr/bin/clamdscan'
             echo "MAILARCHIVER_CLAMD_CONFIG=${RUNNER_TEMP}/mailarchiver-clamav/clamd.conf"
-            echo "MAILARCHIVER_CLAMD_SOCKET=${RUNNER_TEMP}/mailarchiver-clamav/clamd.sock"
+            echo 'MAILARCHIVER_CLAMD_SOCKET=/run/clamav/mailarchiver/clamd.sock'
           } >> "${GITHUB_ENV}"
           printf '%s\n' \
             'DatabaseDirectory /var/lib/clamav' \
             "User $(id -un)" \
-            "LocalSocket ${RUNNER_TEMP}/mailarchiver-clamav/clamd.sock" \
-            "PidFile ${RUNNER_TEMP}/mailarchiver-clamav/clamd.pid" \
+            'LocalSocket /run/clamav/mailarchiver/clamd.sock' \
+            'PidFile /run/clamav/mailarchiver/clamd.pid' \
             > "${RUNNER_TEMP}/mailarchiver-clamav/clamd.conf"
       - name: Smoke-test on-demand ClamAV
         shell: bash
@@ -62,7 +63,7 @@ jobs:
           kill "$clamd_pid"
           wait "$clamd_pid"
           trap - EXIT
-          rm -f "$MAILARCHIVER_CLAMD_SOCKET" "${RUNNER_TEMP}/mailarchiver-clamav/clamd.pid"
+          rm -f "$MAILARCHIVER_CLAMD_SOCKET" /run/clamav/mailarchiver/clamd.pid
       - name: Install dependencies
         run: uv sync --locked --all-groups
       - name: Pytest
