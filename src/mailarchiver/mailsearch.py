@@ -19,6 +19,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from .archive_path import add_archive_argument, require_archive
+from .layout import mbox_path
 from .message import decoded_header
 from .mbox import MboxLocation, read_verified_location
 from .search import SEARCH_CATEGORIES, decoded_part, html_text, is_attachment
@@ -217,7 +218,7 @@ def read_message_bytes(archive: Path, message_pk: int) -> bytes:
         raise ValueError(f"archive invariant failed: message {message_pk} has no MBOX location")
     try:
         raw = read_verified_location(
-            archive / filename,
+            mbox_path(archive, filename),
             MboxLocation(byte_offset=offset, byte_length=length),
             target,
         )

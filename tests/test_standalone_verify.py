@@ -7,8 +7,13 @@ import json
 import mailbox
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
+from mailarchiver.bagit import initialize_bag, refresh_tag_manifest, write_bag_checkpoint
+from mailarchiver.catalog import address_pk, create_catalog
+from mailarchiver.layout import integrity_path, mbox_directory
+from mailarchiver.mbox import add_message
 from mailarchiver.standalone_verify import (
     INSTALLED_NAME,
     IntegrityMessage,
@@ -33,16 +38,35 @@ def make_integrity_archive(tmp_path: Path) -> tuple[Path, Path, bytes]:
         b"Delivered-To: mailbox@example\nSubject: integrity\nDate: Thu, 1 Feb 2024 12:00:00 +0000\n"
         b"Status: RO\n\nPreserve these bytes.\n"
     )
-    path = tmp_path / "2024-Archive1.mbox"
+    initialize_bag(tmp_path)
+    path = mbox_directory(tmp_path) / "2024-Archive1.mbox"
     box = mailbox.mbox(path)
     try:
-        box.add(raw)
-        box.flush()
+        location = add_message(box, path, raw)
     finally:
         box.close()
-    message = IntegrityMessage("verify@example", hashlib.sha256(raw).hexdigest(), raw)
-    write_integrity_file(path, (message,), 1)
-    return path, path.with_name(f"{path.name}.integrity"), raw
+    catalog = create_catalog(tmp_path / "archive.sqlite3")
+    sender_pk = address_pk(catalog, "sender@example")
+    message_pk = catalog.execute(
+        "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("verify@example", hashlib.sha256(raw).hexdigest(), sender_pk, "integrity",
+         "2024-02-01T12:00:00+00:00", "date", "Archive"),
+    ).lastrowid
+    generation_pk = catalog.execute(
+        "INSERT INTO mbox_generations(filename, sha256, message_count, byte_count) VALUES (?, '', 0, 0)",
+        (path.name,),
+    ).lastrowid
+    catalog.execute(
+        "INSERT INTO locations(message_pk, generation_pk, byte_offset, byte_length) VALUES (?, ?, ?, ?)",
+        (message_pk, generation_pk, location.byte_offset, location.byte_length),
+    )
+    catalog.commit()
+    install_archive_verifier(tmp_path)
+    write_bag_checkpoint(tmp_path, catalog, datetime(2026, 8, 22, tzinfo=timezone.utc))
+    catalog.commit()
+    catalog.close()
+    return path, integrity_path(tmp_path, path.name), raw
 
 
 def test_standalone_verifier_checks_current_file_and_message_hashes(tmp_path: Path) -> None:
@@ -60,12 +84,14 @@ def test_standalone_verifier_checks_current_file_and_message_hashes(tmp_path: Pa
     fields[-1] = "h3:" + "0" * 64
     lines[-1] = "\t".join(fields)
     integrity.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    refresh_tag_manifest(tmp_path)
     bad_message = run_verifier(script, tmp_path)
     assert bad_message.returncode == 1
     assert "message 1 h3 mismatch" in bad_message.stderr
 
     write_integrity_file(
         path,
+        integrity,
         (IntegrityMessage("verify@example", hashlib.sha256(raw).hexdigest(), raw),),
         1,
     )
@@ -98,7 +124,12 @@ def test_integrity_serialization_is_deterministic(tmp_path: Path) -> None:
     """Requirement: regenerating unchanged declarations and inputs reproduces exact bytes."""
     path, integrity, raw = make_integrity_archive(tmp_path)
     first = integrity.read_bytes()
-    write_integrity_file(path, (IntegrityMessage("verify@example", hashlib.sha256(raw).hexdigest(), raw),), 1)
+    write_integrity_file(
+        path,
+        integrity,
+        (IntegrityMessage("verify@example", hashlib.sha256(raw).hexdigest(), raw),),
+        1,
+    )
     assert integrity.read_bytes() == first
 
 
@@ -119,6 +150,7 @@ def test_verifier_accepts_multiple_digest_algorithms_for_one_standard(tmp_path: 
     lines.insert(4, json.dumps(h4, separators=(",", ":"), sort_keys=True))
     lines[-1] += f"\th4:{hashlib.sha512(semantic_bytes(raw)).hexdigest()}"
     integrity.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    refresh_tag_manifest(tmp_path)
     script = install_archive_verifier(tmp_path)
 
     verified = run_verifier(script, tmp_path)
@@ -129,15 +161,17 @@ def test_verifier_accepts_multiple_digest_algorithms_for_one_standard(tmp_path: 
 def test_message_id_field_is_json_null_when_header_is_absent(tmp_path: Path) -> None:
     """Requirement: the TSV diagnostic field does not invent a Message-ID."""
     raw = b"From: sender@example\nSubject: no identifier\n\nbody\n"
-    path = tmp_path / "2024-Archive1.mbox"
+    initialize_bag(tmp_path)
+    path = mbox_directory(tmp_path) / "2024-Archive1.mbox"
     box = mailbox.mbox(path)
     try:
         box.add(raw)
         box.flush()
     finally:
         box.close()
-    write_integrity_file(path, (IntegrityMessage(None, hashlib.sha256(raw).hexdigest(), raw),), 1)
+    sidecar = integrity_path(tmp_path, path.name)
+    write_integrity_file(path, sidecar, (IntegrityMessage(None, hashlib.sha256(raw).hexdigest(), raw),), 1)
 
-    fields = path.with_name(f"{path.name}.integrity").read_text(encoding="utf-8").splitlines()[-1].split("\t")
+    fields = sidecar.read_text(encoding="utf-8").splitlines()[-1].split("\t")
 
     assert fields[1] == "null"

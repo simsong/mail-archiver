@@ -21,7 +21,9 @@ from pydantic import BaseModel
 from tabulate import tabulate
 
 from .archive_path import add_archive_argument, require_archive
+from .bagit import initialize_bag, write_bag_checkpoint
 from .catalog import address_pk, create_catalog, create_search, owner_tokens
+from .layout import mbox_directory, mbox_path
 from .message import ParsedMessage, parse_message
 from .mbox import (
     DiskFullError,
@@ -32,7 +34,6 @@ from .mbox import (
     journal_publication,
     mailbox_name,
     recover_publication,
-    write_integrity_files,
 )
 from .scanner import ClamScanner
 from .search import QUARANTINE_MAILBOX, SEARCH_CATEGORIES, index_message, index_message_safely
@@ -209,16 +210,19 @@ def ingest(args: argparse.Namespace) -> None:
     catalog_path = archive / "archive.sqlite3"
     existing_output = (
         any(archive.glob("*.mbox"))
+        or any(mbox_directory(archive).glob("*.mbox"))
         or (archive / "search.sqlite3").exists()
         or any(archive.glob("*.mbox.integrity"))
+        or any((archive / "integrity").glob("*.mbox.integrity"))
     )
     if not catalog_path.exists() and existing_output:
         raise RuntimeError("cannot create a fresh catalog beside existing archive output; use a new empty archive directory")
+    initialize_bag(archive)
     catalog, search = create_catalog(catalog_path), create_search(archive / "search.sqlite3")
     install_archive_verifier(archive)
     recovery = recover_publication(archive, catalog, search)
     if recovery is not PublicationRecovery.NONE:
-        write_integrity_files(archive, catalog)
+        write_bag_checkpoint(archive, catalog)
         print(f"recovered: pending message publication {recovery.value}", file=sys.stderr)
     owners = owner_tokens(Path(args.owner_names_file))
     run_pk = catalog.execute("INSERT INTO ingest_runs(started_at) VALUES (?)", (datetime.now(timezone.utc).isoformat(),)).lastrowid
@@ -277,11 +281,11 @@ def ingest(args: argparse.Namespace) -> None:
     def archive_scanned(candidate: PendingScan, infected: bool) -> None:
         raw, parsed = candidate.source.raw, candidate.parsed
         category = "INFECTED" if infected else ("Sent" if any(token in parsed.sender.lower() for token in owners) else "Archive")
-        mbox_path = archive / mailbox_name(parsed, category)
-        file_existed = mbox_path.exists()
+        destination = mbox_path(archive, mailbox_name(parsed, category))
+        file_existed = destination.exists()
         publication = PendingPublication(
-            filename=mbox_path.name,
-            prior_size=mbox_path.stat().st_size if mbox_path.exists() else 0,
+            filename=destination.name,
+            prior_size=destination.stat().st_size if destination.exists() else 0,
             file_existed=file_existed,
             message_id=parsed.message_id,
             sha256=parsed.sha256,
@@ -296,16 +300,16 @@ def ingest(args: argparse.Namespace) -> None:
                 "INSERT OR IGNORE INTO metadata_defects(message_pk, field, detail) VALUES (?, ?, ?)",
                 ((message_pk, defect.field, defect.detail) for defect in parsed.defects),
             )
-            box = boxes.get(mbox_path)
+            box = boxes.get(destination)
             if box is None:
-                box = mailbox.mbox(mbox_path, create=True)
-                boxes[mbox_path] = box
+                box = mailbox.mbox(destination, create=True)
+                boxes[destination] = box
             journal_publication(archive, publication)
-            location = add_message(box, mbox_path, raw)
+            location = add_message(box, destination, raw)
             generation = catalog.execute(
                 "INSERT INTO mbox_generations(filename, sha256, message_count, byte_count) VALUES (?, '', 0, 0) "
                 "ON CONFLICT(filename) DO UPDATE SET filename = excluded.filename RETURNING generation_pk",
-                (mbox_path.name,),
+                (destination.name,),
             ).fetchone()
             assert generation is not None
             catalog.execute(
@@ -319,9 +323,9 @@ def ingest(args: argparse.Namespace) -> None:
             catalog.rollback()
             if box is not None:
                 box.close()
-                boxes.pop(mbox_path, None)
+                boxes.pop(destination, None)
             if recover_publication(archive, catalog, search) is not PublicationRecovery.NONE:
-                write_integrity_files(archive, catalog)
+                write_bag_checkpoint(archive, catalog)
             raise
         if category in SEARCH_CATEGORIES:
             index_message_safely(catalog, search, message_pk, raw, args.index_attachments)
@@ -437,24 +441,30 @@ def ingest(args: argparse.Namespace) -> None:
     finally:
         for box in boxes.values():
             box.close()
+        result = "completed" if succeeded else "interrupted" if interrupted else "disk-full" if disk_full else "failed"
+        catalog.execute(
+            "UPDATE ingest_runs SET completed_at = ?, result = ?, detail = ? WHERE run_pk = ?",
+            (datetime.now(timezone.utc).isoformat(), result, failure_detail, run_pk),
+        )
+        catalog.commit()
         integrity_error: Exception | None = None
-        if boxes:
+        if boxes or succeeded or interrupted:
             try:
-                write_integrity_files(archive, catalog)
+                write_bag_checkpoint(archive, catalog)
+                catalog.commit()
             except Exception as error:
                 integrity_error = error
                 if failure_detail is None:
                     failure_detail = f"{type(error).__name__}: {error}"
                 else:
                     print(f"integrity refresh also failed: {error}", file=sys.stderr)
-        result = "completed" if succeeded else "interrupted" if interrupted else "disk-full" if disk_full else "failed"
         if integrity_error is not None:
             result = "failed"
-        catalog.execute(
-            "UPDATE ingest_runs SET completed_at = ?, result = ?, detail = ? WHERE run_pk = ?",
-            (datetime.now(timezone.utc).isoformat(), result, failure_detail, run_pk),
-        )
-        catalog.commit()
+            catalog.execute(
+                "UPDATE ingest_runs SET result = ?, detail = ? WHERE run_pk = ?",
+                (result, failure_detail, run_pk),
+            )
+            catalog.commit()
         catalog.close()
         search.close()
         progress.finish(result)
@@ -579,7 +589,7 @@ def refresh_index(args: argparse.Namespace) -> None:
     temporary.unlink(missing_ok=True)
     search = create_search(temporary)
     try:
-        for path in archive.glob("*.mbox"):
+        for path in mbox_directory(archive).glob("*.mbox"):
             if QUARANTINE_MAILBOX.fullmatch(path.name):
                 continue
             box = mailbox.mbox(path, factory=None, create=False)

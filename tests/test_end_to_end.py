@@ -14,6 +14,8 @@ from shutil import copy, copytree
 
 import pytest
 
+from mailarchiver.layout import mbox_directory
+
 
 TEST_DATA = Path(__file__).parent / "data"
 
@@ -94,13 +96,16 @@ def test_ingest_routes_preserves_and_indexes_messages(
     assert "  2024       1           2" in result.stdout
     assert "top senders" in result.stdout
 
-    assert mailbox_message_bytes(archive / "2024-Sent1.mbox") == [raw["sent"]]
-    assert mailbox_message_bytes(archive / "2024-Archive1.mbox") == [
+    assert mailbox_message_bytes(mbox_directory(archive) / "2024-Sent1.mbox") == [raw["sent"]]
+    assert mailbox_message_bytes(mbox_directory(archive) / "2024-Archive1.mbox") == [
         raw["collision_one"],
         raw["collision_two"],
     ]
-    assert len(mailbox_message_bytes(archive / "INFECTED1.mbox")) == 1
-    assert all(b"autosave@example" not in item for item in mailbox_message_bytes(archive / "2024-Sent1.mbox"))
+    assert len(mailbox_message_bytes(mbox_directory(archive) / "INFECTED1.mbox")) == 1
+    assert all(
+        b"autosave@example" not in item
+        for item in mailbox_message_bytes(mbox_directory(archive) / "2024-Sent1.mbox")
+    )
 
     catalog = sqlite3.connect(archive / "archive.sqlite3")
     try:
@@ -160,23 +165,35 @@ def test_ingest_routes_preserves_and_indexes_messages(
         assert search.execute("SELECT count(*) FROM message_fts WHERE sha256 = ?", (infected_sha256,)).fetchone() == (0,)
     finally:
         search.close()
-    assert (archive / "2024-Archive1.mbox.integrity").is_file()
-    assert (archive / "INFECTED1.mbox.integrity").is_file()
+    assert (archive / "integrity" / "2024-Archive1.mbox.integrity").is_file()
+    assert (archive / "integrity" / "INFECTED1.mbox.integrity").is_file()
+    assert (archive / "manifest-sha256.txt").is_file()
+    assert (archive / "tagmanifest-sha256.txt").is_file()
+    assert (archive / "mailbag.csv").is_file()
     assert (archive / "verify_mail_archive.py").is_file()
     assert not (archive / ".mailarchiver-pending.json").exists()
+    verified = subprocess.run(
+        [sys.executable, "-I", str(archive / "verify_mail_archive.py"), str(archive)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert_success(verified)
+    assert "Archive integrity verified." in verified.stdout
 
 
 def test_refresh_index_excludes_quarantine_mailboxes(tmp_path: Path) -> None:
     """Requirement: FTS rebuild excludes infected and malformed quarantine mail."""
     archive = tmp_path / "archive"
     archive.mkdir()
+    mbox_directory(archive).mkdir(parents=True)
     messages = {
         "2024-Archive1.mbox": b"Message-ID: <normal@example>\nSubject: normal\n\nnormal body\n",
         "INFECTED1.mbox": b"Message-ID: <infected@example>\nSubject: infected\n\ninfected body\n",
         "MALFORMED1.mbox": b"Message-ID: <malformed@example>\nSubject: malformed\n\nmalformed body\n",
     }
     for filename, raw in messages.items():
-        box = mailbox.mbox(archive / filename, create=True)
+        box = mailbox.mbox(mbox_directory(archive) / filename, create=True)
         try:
             box.add(raw)
             box.flush()
@@ -206,7 +223,7 @@ def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, d
     archive = tmp_path / "archive"
     owner_names = Path(__file__).parents[1] / "owner-names.txt"
     assert_success(run_ingest(source, archive, owner_names))
-    before = {path.name: path.read_bytes() for path in archive.glob("*.mbox")}
+    before = {path.name: path.read_bytes() for path in mbox_directory(archive).glob("*.mbox")}
     touched = source / "three_messages.mbox"
     stat = touched.stat()
     os.utime(touched, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
@@ -214,7 +231,7 @@ def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, d
     rerun = run_ingest(source, archive, owner_names)
     assert_success(rerun)
 
-    assert {path.name: path.read_bytes() for path in archive.glob("*.mbox")} == before
+    assert {path.name: path.read_bytes() for path in mbox_directory(archive).glob("*.mbox")} == before
     catalog = sqlite3.connect(archive / "archive.sqlite3")
     try:
         assert catalog.execute("SELECT count(*) FROM messages").fetchone() == (4,)
@@ -263,7 +280,7 @@ def test_completed_file_is_published_before_later_source_failure(tmp_path: Path)
 
     assert result.returncode == 1
     assert "source not found" in result.stderr
-    assert mailbox_message_bytes(archive / "2024-Archive1.mbox") == [raw]
+    assert mailbox_message_bytes(mbox_directory(archive) / "2024-Archive1.mbox") == [raw]
     catalog = sqlite3.connect(archive / "archive.sqlite3")
     try:
         assert catalog.execute("SELECT count(*) FROM messages").fetchone() == (1,)
@@ -331,7 +348,7 @@ def test_malformed_subject_is_archived_with_metadata_defect(tmp_path: Path) -> N
     result = run_ingest(source, archive, owner_names)
 
     assert_success(result)
-    assert mailbox_message_bytes(archive / "2003-Archive1.mbox") == [raw]
+    assert mailbox_message_bytes(mbox_directory(archive) / "2003-Archive1.mbox") == [raw]
     catalog = sqlite3.connect(archive / "archive.sqlite3")
     try:
         assert catalog.execute("SELECT subject FROM messages").fetchone() == (subject,)
@@ -450,7 +467,7 @@ def test_parser_failure_records_source_identity_and_failed_run(tmp_path: Path) -
         ).fetchone() == (str(source), 0, digest, "error", f"ValueError: no date or year path fallback for {source}")
     finally:
         catalog.close()
-    assert not list(archive.glob("*.mbox"))
+    assert not list(mbox_directory(archive).glob("*.mbox"))
 
 
 def test_fresh_catalog_is_refused_beside_existing_mbox(tmp_path: Path) -> None:
@@ -459,7 +476,8 @@ def test_fresh_catalog_is_refused_beside_existing_mbox(tmp_path: Path) -> None:
     source.write_bytes(b"Message-ID: <one@example>\nDate: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n")
     archive = tmp_path / "archive"
     archive.mkdir()
-    existing = archive / "2024-Archive1.mbox"
+    mbox_directory(archive).mkdir(parents=True)
+    existing = mbox_directory(archive) / "2024-Archive1.mbox"
     existing.write_bytes(b"existing canonical bytes\n")
     owner_names = Path(__file__).parents[1] / "owner-names.txt"
 
@@ -493,4 +511,4 @@ def test_unusable_source_fails_cleanly(
     assert result.returncode == 1
     assert diagnostic in result.stderr
     assert "Traceback" not in result.stderr
-    assert not list(archive.glob("*.mbox"))
+    assert not list(mbox_directory(archive).glob("*.mbox"))

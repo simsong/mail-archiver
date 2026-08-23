@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import mailbox
 import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Iterable
 
 BUFFER_SIZE = 1024 * 1024
@@ -20,8 +24,19 @@ FORMAT_VERSION = 1
 INTEGRITY_SUFFIX = ".integrity"
 INSTALLED_NAME = "verify_mail_archive.py"
 TABLE_HEADER = "ordinal\tmessage-id-json\thashes..."
+BAGIT_DECLARATION = b"BagIt-Version: 1.0\nTag-File-Character-Encoding: UTF-8\n"
+PAYLOAD_MANIFEST = "manifest-sha256.txt"
+TAG_MANIFEST = "tagmanifest-sha256.txt"
+MAILBAG_HEADERS = (
+    "Error", "Mailbag-Message-ID", "Message-ID", "Original-File",
+    "Message-Path", "Derivatives-Path", "Attachments",
+)
 CODE_PATTERN = re.compile(r"h[1-9][0-9]*")
 HEX_PATTERN = re.compile(r"[0-9a-f]+")
+SHA256_PATTERN = re.compile(r"[0-9A-Fa-f]{64}")
+MAILBAG_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
+SPLIT_CSV_PATTERN = re.compile(r"mailbag-([1-9][0-9]*)\.csv")
+MAILBAG_ROW_LIMIT = 100_000
 FIELD_NAME_PATTERN = re.compile(rb"[!-9;-~]+")
 ALGORITHMS = {"sha256": 64, "sha512": 128}
 
@@ -163,7 +178,12 @@ def _standard_records() -> list[dict[str, object]]:
     ]
 
 
-def write_integrity_file(mbox_path: Path, messages: Iterable[IntegrityMessage], message_count: int) -> str:
+def write_integrity_file(
+    mbox_path: Path,
+    integrity_path: Path,
+    messages: Iterable[IntegrityMessage],
+    message_count: int,
+) -> str:
     """Atomically write the current integrity format and return the MBOX SHA-256."""
     initial_stat = mbox_path.stat()
     initial_identity = (
@@ -184,7 +204,7 @@ def write_integrity_file(mbox_path: Path, messages: Iterable[IntegrityMessage], 
         {COLUMNS: ["ordinal", "message-id-json", "hashes..."], ENCODING: "tsv",
          TYPE: "message-table"},
     ]
-    destination = mbox_path.with_name(f"{mbox_path.name}{INTEGRITY_SUFFIX}")
+    destination = integrity_path
     temporary = destination.with_name(f".{destination.name}.tmp")
     written = 0
     try:
@@ -325,10 +345,9 @@ def _check_hashes(tokens: list[str], standards: list[HashStandard], data: bytes)
     return errors
 
 
-def verify_mbox(path: Path) -> list[str]:
-    integrity = path.with_name(f"{path.name}{INTEGRITY_SUFFIX}")
+def verify_mbox(path: Path, integrity: Path) -> list[str]:
     if not integrity.is_file():
-        return [f"{path.name}: missing integrity file {integrity.name}"]
+        return [f"{path.name}: missing integrity file {integrity.relative_to(integrity.parents[1])}"]
     try:
         with integrity.open("rb") as source:
             manifest = _load_json(source.readline())
@@ -421,15 +440,267 @@ def verify_mbox(path: Path) -> list[str]:
     return errors
 
 
+def _decode_manifest_path(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        code = match.group(1).lower()
+        if code not in {"0a", "0d", "25"}:
+            raise ValueError(f"invalid BagIt pathname escape %{match.group(1)}")
+        return {"0a": "\n", "0d": "\r", "25": "%"}[code]
+
+    if re.search(r"%(?![0-9A-Fa-f]{2})", value):
+        raise ValueError("invalid BagIt pathname escape")
+    return re.sub(r"%([0-9A-Fa-f]{2})", replace, value)
+
+
+def _safe_manifest_target(archive: Path, value: str) -> tuple[str, Path]:
+    decoded = _decode_manifest_path(value)
+    logical = PurePosixPath(decoded)
+    if logical.is_absolute() or not logical.parts or any(part in {"", ".", ".."} for part in logical.parts):
+        raise ValueError(f"unsafe BagIt pathname: {value}")
+    target = archive.joinpath(*logical.parts)
+    component = archive
+    for part in logical.parts:
+        component /= part
+        if component.is_symlink():
+            raise ValueError(f"BagIt manifests may not reference a symlink: {value}")
+    try:
+        target.resolve(strict=True).relative_to(archive.resolve(strict=True))
+    except (FileNotFoundError, ValueError) as error:
+        raise ValueError(f"missing or unsafe BagIt pathname: {value}") from error
+    return logical.as_posix(), target
+
+
+def _verify_bagit_manifest(path: Path, archive: Path, payload: bool) -> tuple[list[str], set[str]]:
+    errors: list[str] = []
+    declared: set[str] = set()
+    try:
+        data = path.read_bytes()
+        if b"\r" in data or (data and not data.endswith(b"\n")):
+            raise ValueError("manifest must use LF-terminated records")
+        for ordinal, raw_line in enumerate(data.splitlines(), 1):
+            line = raw_line.decode("utf-8")
+            fields = line.split(None, 1)
+            if len(fields) != 2 or not SHA256_PATTERN.fullmatch(fields[0]):
+                raise ValueError(f"invalid manifest row {ordinal}")
+            logical, target = _safe_manifest_target(archive, fields[1])
+            if payload != logical.startswith("data/"):
+                raise ValueError(f"row {ordinal} has the wrong manifest scope: {logical}")
+            if logical in declared:
+                raise ValueError(f"duplicate manifest pathname: {logical}")
+            declared.add(logical)
+            actual = _digest_file(target, ("sha256",))["sha256"]
+            if actual.lower() != fields[0].lower():
+                errors.append(f"{path.name}: SHA-256 mismatch for {logical}: expected {fields[0]}, found {actual}")
+    except (OSError, UnicodeError, ValueError) as error:
+        return [f"{path.name}: {error}"], declared
+    return errors, declared
+
+
+def _bag_info(archive: Path, payloads: list[Path]) -> list[str]:
+    path = archive / "bag-info.txt"
+    try:
+        fields: dict[str, str] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            label, separator, value = line.partition(": ")
+            if not separator or not label or label in fields:
+                raise ValueError("invalid or duplicate metadata field")
+            fields[label] = value
+        required = {
+            "Bag-Type": "Mailbag",
+            "Mailbag-Source": "mbox",
+            "Mailbag-Specification-Version": "1.0",
+            "Original-Included": "False",
+            "Mailbag-Agent": "mailarchiver",
+        }
+        for label, expected in required.items():
+            if fields.get(label) != expected:
+                raise ValueError(f"invalid {label}")
+        for label in ("Bagging-Timestamp", "Bagging-Date", "External-Identifier", "Mailbag-Agent-Version"):
+            if not fields.get(label):
+                raise ValueError(f"missing {label}")
+        packaged = datetime.fromisoformat(fields["Bagging-Timestamp"])
+        if packaged.tzinfo is None or packaged.date().isoformat() != fields["Bagging-Date"]:
+            raise ValueError("inconsistent Bagging-Timestamp and Bagging-Date")
+        expected_oxum = f"{sum(item.stat().st_size for item in payloads)}.{len(payloads)}"
+        if fields.get("Payload-Oxum") != expected_oxum:
+            raise ValueError(f"Payload-Oxum mismatch: expected {expected_oxum}")
+    except (OSError, UnicodeError, ValueError) as error:
+        return [f"bag-info.txt: {error}"]
+    return []
+
+
+def _mailbag_csv_paths(archive: Path) -> list[Path]:
+    single = archive / "mailbag.csv"
+    split = []
+    for path in archive.glob("mailbag-*.csv"):
+        match = SPLIT_CSV_PATTERN.fullmatch(path.name)
+        if match:
+            split.append((int(match.group(1)), path))
+    split.sort()
+    if single.is_file() and split:
+        raise ValueError("both mailbag.csv and split mailbag CSV files are present")
+    if single.is_file():
+        return [single]
+    if not split or [index for index, _ in split] != list(range(1, len(split) + 1)):
+        raise ValueError("missing or noncontiguous Mailbag CSV files")
+    width = len(str(len(split)))
+    if any(path.name != f"mailbag-{index:0{width}d}.csv" for index, path in split):
+        raise ValueError("Mailbag CSV numbering has inconsistent zero padding")
+    return [path for _, path in split]
+
+
+def _verify_mailbag_csv(
+    archive: Path,
+    expected_mailboxes: dict[str, int],
+) -> tuple[list[str], list[Path]]:
+    try:
+        paths = _mailbag_csv_paths(archive)
+    except ValueError as error:
+        return [str(error)], []
+    identifiers: set[str] = set()
+    references: dict[str, int] = {}
+    rows = 0
+    try:
+        for file_index, path in enumerate(paths):
+            data = path.read_bytes()
+            remainder = data.replace(b"\r\n", b"")
+            if data and (not data.endswith(b"\r\n") or b"\n" in remainder or b"\r" in remainder):
+                raise ValueError(f"{path.name} must use CRLF records")
+            records = csv.reader(io.StringIO(data.decode("utf-8"), newline=""))
+            if file_index == 0:
+                header = next(records, None)
+                if tuple(header or ()) != MAILBAG_HEADERS:
+                    raise ValueError(f"{path.name} has an invalid header")
+            file_rows = 0
+            for record in records:
+                file_rows += 1
+                rows += 1
+                if len(record) != len(MAILBAG_HEADERS):
+                    raise ValueError(f"{path.name} row {rows} has the wrong field count")
+                identifier = record[1]
+                if (not MAILBAG_ID_PATTERN.fullmatch(identifier) or len(identifier) > 36
+                        or identifier.casefold() in identifiers):
+                    raise ValueError(f"invalid or duplicate Mailbag-Message-ID: {identifier}")
+                identifiers.add(identifier.casefold())
+                original = PurePosixPath(record[3])
+                if (original.is_absolute() or len(original.parts) != 1
+                        or any(part in {"", ".", ".."} for part in original.parts)):
+                    raise ValueError(f"Mailbag row has unsafe MBOX path: {record[3]}")
+                if not (archive / "data" / "mbox").joinpath(*original.parts).is_file():
+                    raise ValueError(f"Mailbag row references missing MBOX: {record[3]}")
+                references[original.name] = references.get(original.name, 0) + 1
+                if not record[6].isdigit():
+                    raise ValueError(f"Mailbag row has invalid attachment count: {record[6]}")
+            if file_rows > MAILBAG_ROW_LIMIT:
+                raise ValueError(f"{path.name} exceeds {MAILBAG_ROW_LIMIT} message rows")
+            if len(paths) > 1 and file_index < len(paths) - 1 and file_rows != MAILBAG_ROW_LIMIT:
+                raise ValueError(f"{path.name} must contain {MAILBAG_ROW_LIMIT} message rows")
+            if len(paths) > 1 and file_rows == 0:
+                raise ValueError(f"{path.name} has no message rows")
+        expected_messages = sum(expected_mailboxes.values())
+        if rows != expected_messages:
+            raise ValueError(f"Mailbag CSV has {rows} messages; expected {expected_messages}")
+        if references != expected_mailboxes:
+            raise ValueError("Mailbag CSV message counts do not match their MBOX containers")
+    except (OSError, UnicodeError, ValueError, csv.Error) as error:
+        return [str(error)], paths
+    return [], paths
+
+
+def _payload_files(archive: Path) -> tuple[list[Path], list[str]]:
+    data = archive / "data"
+    if not data.is_dir():
+        return [], ["missing BagIt payload directory data/"]
+    files: list[Path] = []
+    errors: list[str] = []
+    for path in sorted(data.rglob("*")):
+        if path.is_symlink():
+            errors.append(f"payload symlink is not supported: {path.relative_to(archive)}")
+        elif path.is_file():
+            files.append(path)
+    return files, errors
+
+
 def verify_archive(archive: Path) -> list[str]:
-    mailboxes = sorted(archive.glob("*.mbox"))
-    errors = [] if mailboxes else [f"{archive}: no .mbox files found"]
+    errors: list[str] = []
+    legacy = sorted((*archive.glob("*.mbox"), *archive.glob("*.mbox.integrity")))
+    if legacy:
+        errors.append(
+            "unsupported root-level legacy archive output: "
+            + ", ".join(path.name for path in legacy)
+        )
+    declaration = archive / "bagit.txt"
+    try:
+        if declaration.read_bytes() != BAGIT_DECLARATION:
+            errors.append("bagit.txt: unsupported BagIt declaration")
+    except OSError as error:
+        errors.append(f"bagit.txt: {error}")
+
+    supported_manifests = {PAYLOAD_MANIFEST, TAG_MANIFEST}
+    additional_manifests = sorted(
+        path.name
+        for pattern in ("manifest-*.txt", "tagmanifest-*.txt")
+        for path in archive.glob(pattern)
+        if path.name not in supported_manifests
+    )
+    if additional_manifests:
+        errors.append(f"unsupported additional BagIt manifests: {', '.join(additional_manifests)}")
+
+    payloads, payload_errors = _payload_files(archive)
+    errors.extend(payload_errors)
+    payload_manifest = archive / PAYLOAD_MANIFEST
+    payload_hash_errors, declared_payloads = _verify_bagit_manifest(payload_manifest, archive, True)
+    errors.extend(payload_hash_errors)
+    actual_payloads = {path.relative_to(archive).as_posix() for path in payloads}
+    if declared_payloads != actual_payloads:
+        missing = sorted(actual_payloads - declared_payloads)
+        extra = sorted(declared_payloads - actual_payloads)
+        if missing:
+            errors.append(f"{PAYLOAD_MANIFEST}: missing payload entries: {', '.join(missing)}")
+        if extra:
+            errors.append(f"{PAYLOAD_MANIFEST}: nonexistent payload entries: {', '.join(extra)}")
+
+    mailboxes = sorted((archive / "data" / "mbox").glob("*.mbox"))
+    native_payloads = {path.relative_to(archive).as_posix() for path in mailboxes}
+    unexpected_payloads = sorted(actual_payloads - native_payloads)
+    if unexpected_payloads:
+        errors.append(f"unsupported native archive payloads: {', '.join(unexpected_payloads)}")
     for path in mailboxes:
-        errors.extend(verify_mbox(path))
+        errors.extend(verify_mbox(path, archive / "integrity" / f"{path.name}{INTEGRITY_SUFFIX}"))
     mailbox_names = {path.name for path in mailboxes}
-    for integrity in sorted(archive.glob(f"*.mbox{INTEGRITY_SUFFIX}")):
+    for integrity in sorted((archive / "integrity").glob(f"*.mbox{INTEGRITY_SUFFIX}")):
         if integrity.name.removesuffix(INTEGRITY_SUFFIX) not in mailbox_names:
             errors.append(f"{integrity.name}: integrity file has no MBOX file")
+
+    expected_mailboxes: dict[str, int] = {}
+    for path in mailboxes:
+        box = mailbox.mbox(path, factory=None, create=False)
+        try:
+            expected_mailboxes[path.name] = len(box)
+        finally:
+            box.close()
+    csv_errors, csv_paths = _verify_mailbag_csv(archive, expected_mailboxes)
+    errors.extend(csv_errors)
+    errors.extend(_bag_info(archive, payloads))
+
+    tag_manifest = archive / TAG_MANIFEST
+    tag_hash_errors, declared_tags = _verify_bagit_manifest(tag_manifest, archive, False)
+    errors.extend(tag_hash_errors)
+    if TAG_MANIFEST in declared_tags:
+        errors.append(f"{TAG_MANIFEST}: a tag manifest must not list itself")
+    required_tags = {
+        "bagit.txt",
+        "bag-info.txt",
+        PAYLOAD_MANIFEST,
+        *(path.relative_to(archive).as_posix() for path in csv_paths),
+        *(f"integrity/{path.name}{INTEGRITY_SUFFIX}" for path in mailboxes),
+    }
+    verifier = archive / INSTALLED_NAME
+    if verifier.is_file():
+        required_tags.add(INSTALLED_NAME)
+    missing_tags = sorted(required_tags - declared_tags)
+    if missing_tags:
+        errors.append(f"{TAG_MANIFEST}: missing tag entries: {', '.join(missing_tags)}")
     return errors
 
 
@@ -437,17 +708,22 @@ def install_archive_verifier(archive: Path) -> Path:
     """Install this dependency-free source file in an archive atomically."""
     source = Path(__file__).read_bytes()
     destination = archive / INSTALLED_NAME
+    if destination.is_symlink():
+        raise ValueError(f"archive verifier may not be a symlink: {destination}")
     if destination.is_file() and destination.read_bytes() == source:
         return destination
     temporary = archive / f".{INSTALLED_NAME}.tmp"
     temporary.write_bytes(source)
     os.chmod(temporary, 0o755)
     temporary.replace(destination)
+    _sync_directory(archive)
     return destination
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify every integrity digest in a mailarchiver archive.")
+    parser = argparse.ArgumentParser(
+        description="Validate BagIt, Mailbag, whole-MBOX, raw-message, and semantic-message hashes."
+    )
     parser.add_argument("archive", nargs="?", type=Path, default=Path(__file__).resolve().parent)
     archive = parser.parse_args().archive
     if not archive.is_dir():

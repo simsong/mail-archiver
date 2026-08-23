@@ -4,14 +4,16 @@ import hashlib
 import mailbox
 from pathlib import Path
 
+from mailarchiver.bagit import initialize_bag
 from mailarchiver.catalog import create_catalog, create_search
+from mailarchiver.layout import mbox_directory
 from mailarchiver.mbox import PendingPublication, PublicationRecovery, add_message, journal_publication, recover_publication
 
 
 def test_recovery_truncates_orphaned_mbox_append_and_search_row(tmp_path: Path) -> None:
     archive = tmp_path / "archive"
-    archive.mkdir()
-    path = archive / "2024-Archive1.mbox"
+    initialize_bag(archive)
+    path = mbox_directory(archive) / "2024-Archive1.mbox"
     box = mailbox.mbox(path, create=True)
     try:
         original = b"Message-ID: <original@example>\n\noriginal\n"
@@ -53,8 +55,8 @@ def test_recovery_truncates_orphaned_mbox_append_and_search_row(tmp_path: Path) 
 
 def test_recovery_keeps_catalogued_mbox_append(tmp_path: Path) -> None:
     archive = tmp_path / "archive"
-    archive.mkdir()
-    path = archive / "2024-Archive1.mbox"
+    initialize_bag(archive)
+    path = mbox_directory(archive) / "2024-Archive1.mbox"
     raw = b"Message-ID: <committed@example>\n\ncommitted\n"
     digest = hashlib.sha256(raw).hexdigest()
     box = mailbox.mbox(path, create=True)

@@ -1,0 +1,4 @@
+Error,Mailbag-Message-ID,Message-ID,Original-File,Message-Path,Derivatives-Path,Attachments
+,m-2e05c816f842aa9897c9e93eee1db8c5,<one@example.test>,three-messages.mbox,,,0
+,m-06da4b673c0d75a22851561554442b17,<two@example.test>,three-messages.mbox,,,0
+,m-e54e778007c2e976bd1377d2c491c59f,<three@example.test>,three-messages.mbox,,,1

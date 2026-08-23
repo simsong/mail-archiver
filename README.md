@@ -2,21 +2,54 @@
 
 `mailarchiver` turns scattered email exports into a durable archive that you
 can inspect with ordinary tools decades from now. It preserves the original
-RFC 5322 message bytes in standard MBOX files, hashes every message for
-long-term integrity, records where each message came from, and builds a local
-search index that can always be discarded and rebuilt.
+RFC 5322 message bytes in standard MBOX files inside a native BagIt 1.0 /
+Mailbag 1.0 package, hashes every file and message for long-term integrity,
+records where each message came from, and builds a local search index that can
+always be discarded and rebuilt.
+
+## Goals
+
+`mailarchiver` is preservation infrastructure for personal and research email
+collections, not a mail client or a compliance appliance. Its goals are to:
+
+* harvest email from backup drives and active sources into one persistent,
+  deduplicated Mailbag whose canonical MBOX and integrity files can be
+  maintained with ordinary, independently implemented tools;
+* provide one local search interface across decades of mail, regardless of the
+  programs and providers that originally stored it;
+* support policy-driven redacted derivatives for confidentiality, donor,
+  privacy, and public-release requirements without modifying the canonical
+  messages;
+* maintain structured, rebuildable metadata suitable for reproducible digital
+  humanities reports about correspondents, chronology, threads, attachments,
+  entities, and provenance; and
+* interoperate with heterogeneous backups, including Outlook `.pst` and `.ost`
+  stores, Eudora backups, working IMAP client-cache directories, MBOX, EML,
+  Maildir, Apple Mail, Gmail exports, and live read-only IMAP accounts.
+
+“Plain-text archive” describes the standard, inspectable RFC 5322/MBOX
+container. Binary attachments remain MIME-encoded so their original bytes are
+preserved. Redaction and analysis outputs are derived products: they must be
+recreatable and must never silently replace or rewrite canonical mail.
 
 For each year it creates two logical archives: one for messages sent by the
 archive owner and one for messages received. They begin as
 `{YEAR}-Sent1.mbox` and `{YEAR}-Archive1.mbox`; additional numbered filenames
 are reserved for the planned rollover support. Messages are never rewritten just
 to make them easier to search: the SQLite databases and user interfaces are
-derived data, while MBOX and its versioned integrity files are the durable record.
+derived data, while the BagIt payload, Mailbag metadata, and versioned
+integrity tags are the portable durable record.
 
 This is the initial local-ingest implementation, not yet the complete email
 archiving system. It currently ingests local MBOX, EML, Maildir, and complete
-Apple Mail `.emlx` messages. Gmail, IMAP, sorting/repacking, and rollover remain
-planned; see [doc/implementation.md](doc/implementation.md).
+Apple Mail `.emlx` messages. Outlook `.pst`/`.ost`, Eudora, working IMAP cache
+directories, Gmail, live IMAP, redaction, richer research data, sorting/repacking,
+and rollover remain planned; see [doc/implementation.md](doc/implementation.md).
+The [competitive analysis](doc/competitive_analysis.md) explains how this
+combination differs from preservation, migration, search, forensic, and
+commercial compliance products. [Project direction](doc/project_direction.md)
+turns those findings into product principles, reuse decisions, non-goals,
+acceptance criteria, and a phased roadmap.
 
 ## Install
 
@@ -24,7 +57,7 @@ Install [uv](https://docs.astral.sh/uv/) and ClamAV, configure the ClamAV
 daemon and signatures, then prepare this project:
 
 ```console
-cd archiver
+cd mail-archiver
 uv sync
 ```
 
@@ -108,21 +141,30 @@ case-insensitive token in `owner-names.txt`; they go to the year's
 `{YEAR}-Archive1.mbox` series. `X-Apple-Auto-Saved` messages are logged but not
 copied.
 
-The archive directory contains:
+The archive directory is a native BagIt/Mailbag package containing:
 
-* canonical `.mbox` files and adjacent `.mbox.integrity` files containing
-  versioned `h1` complete-MBOX, `h2` raw-message, and `h3` semantic-message
-  SHA-256 digests as specified in
+* canonical MBOX payloads under `data/mbox/`;
+* `bagit.txt`, `bag-info.txt`, `mailbag.csv`, `manifest-sha256.txt`, and
+  `tagmanifest-sha256.txt` interoperability tags;
+* `integrity/*.mbox.integrity` tags containing versioned `h1` complete-MBOX,
+  `h2` raw-message, and `h3` semantic-message SHA-256 digests as specified in
   [doc/INTEGRITY_CONTROLS.md](doc/INTEGRITY_CONTROLS.md);
 * `archive.sqlite3`, the ingest catalog and observation log; and
 * `search.sqlite3`, a separately rebuildable FTS5 index.
 
 Ingest also places `verify_mail_archive.py` in the archive. It is a small,
 single-purpose Python program with no third-party dependencies. Run it to
-verify every declared whole-MBOX and per-message hash without changing the archive:
+verify BagIt payload/tag fixity, Mailbag structure, and every declared
+whole-MBOX and per-message hash without changing the archive:
 
 ```console
 python3 /path/to/mail-archive/verify_mail_archive.py
+```
+
+From this checkout, the equivalent command is:
+
+```console
+make verify ARCHIVE=/path/to/mail-archive
 ```
 
 The default index contains normalized headers and message body text only:
@@ -155,7 +197,7 @@ autosave exclusions, and infected messages.
 
 Pressing Control-C performs a controlled shutdown: mailarchiver closes the
 on-demand scanner and MBOX files, commits work through the last completed
-message, refreshes integrity files, prints `interrupted: ...`, and exits with status
+message, publishes a BagIt/Mailbag checkpoint, prints `interrupted: ...`, and exits with status
 130 rather than a traceback.  It then prints the normal `report` output for
 the committed partial archive.  If an MBOX append reports `ENOSPC`, mailarchiver
 truncates that attempted append back to its prior size where possible, prints

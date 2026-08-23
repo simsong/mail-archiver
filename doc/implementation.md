@@ -20,6 +20,54 @@ Apple Silicon host measured 2.74 GB/s for SHA-256 on 16 KiB blocks, versus
 1.61 GB/s for SHA-512 and 0.98 GB/s for SHA3-256.  Do not require BLAKE3: it
 would add a dependency and is less portable for long-term verification.
 
+## Native Mailbag storage
+
+[Mailbag 1.0](https://archives.albany.edu/mailbag/spec/) is the native archive
+layout, implemented directly without a `mailbagit` runtime dependency. The bag
+root contains operational SQLite tag files, while canonical mboxrd files are
+the only payload under `data/mbox/`. Rich per-message declarations live in the
+top-level BagIt tag directory `integrity/`. The exact interoperability contract
+is specified in [INTEGRITY_CONTROLS.md](INTEGRITY_CONTROLS.md).
+
+BagIt manifests describe complete files; mailarchiver declarations add exact
+RFC 5322 recovery and semantic hashes for each ordered message. The MBOX
+SHA-256 is deliberately present in both `manifest-sha256.txt` and the
+corresponding integrity tag. `mailbag.csv` connects each message to its MBOX,
+records its attachment count, and assigns a stable package identifier derived
+from normalized Message-ID plus raw SHA-256. It splits at Mailbag's 100,000-row
+boundary.
+
+The archive is appendable, so a write can temporarily invalidate the preceding
+manifest. `write_bag_checkpoint()` closes that interval by writing integrity
+tags and Mailbag CSV first, the payload manifest from already computed MBOX
+hashes, `bag-info.txt`, and the tag manifest last. Successful completion,
+controlled interruption, and publication recovery all use this path. A
+validator never treats an in-progress mismatch as valid.
+
+`archive.sqlite3` and `search.sqlite3` remain outside the tag manifest. This is
+intentional: SQLite journal state is operational rather than portable BagIt
+fixity, and the search database is disposable. The tag manifest instead covers
+all BagIt/Mailbag metadata, every integrity tag, and the installed verifier.
+
+`mailbagit` remains useful as an independent interoperability check and for
+future derivative packaging when it can operate without moving or
+reserializing canonical files. It is not the ingestion engine. Restricted or
+redacted releases are separate bags; PDF and WARC derivatives remain opt-in
+and sandboxed because rendering message HTML can contact remote resources.
+
+RATOM's [libratom](https://github.com/libratom/libratom) should be evaluated as
+the first PST/OST and entity-extraction backend. Reuse it behind the typed
+source-adapter boundary and contribute missing preservation behavior upstream
+rather than forking or writing another PST parser. Its lower-level
+`PffArchive` exposes folder/message traversal and attachment metadata, but its
+current high-level message formatter selects one body and does not construct a
+complete attachment-bearing MIME message. The adapter must therefore consume
+source-native components, account for every item, construct any necessary MIME
+with explicit reconstruction provenance, and remain replaceable by another
+backend. For extreme setup simplicity, supported releases need tested binary
+libpff bindings or a bundled runtime; requiring users to compile C tooling is
+not an acceptable default installation experience.
+
 ## Package shape
 
 ```text
@@ -29,6 +77,8 @@ archiver/
     cli.py              ingest, verify, review, refresh-index, repack
     config.py           TOML policy and owner-names loading
     model.py            pydantic records and enums
+    layout.py           native data/mbox and integrity tag paths
+    bagit.py            Mailbag CSV and BagIt checkpoint publication
     mbox.py             streaming reader, mboxrd encoder, verifier
     message.py          header/MIME/date/classification parsing
     catalog.py          archive.sqlite3 schema and transactions
@@ -37,6 +87,9 @@ archiver/
     ingest/
       directory.py      recursive type detection and provenance
       emlx.py           length-prefixed Apple Mail reader
+      outlook.py        read-only PST/OST adapter
+      eudora.py         Eudora mailbox and companion-file adapter
+      imap_cache.py     supported offline IMAP client-cache layouts
       imap.py            read-only IMAP fetcher
       gmail.py           OAuth Gmail API incremental fetcher
     normalize.py        dedupe, routing, staging, publishing, sorting
@@ -50,7 +103,8 @@ archiver/
 The first implementation supports recursive local MBOX, `.eml`, Maildir, and
 `.emlx` ingest, owner-token Sent classification, exact `(Message-ID, SHA-256)`
 deduplication, autosave exclusion, Date/Received/path-year date fallback, a temporary on-demand `clamd`,
-`INFECTED1.mbox`, SQLite catalog/FTS files, versioned `.mbox.integrity` files,
+`data/mbox/INFECTED1.mbox`, SQLite catalog/FTS files, native BagIt/Mailbag
+metadata, versioned `integrity/*.mbox.integrity` tags,
 per-run observation review, and year/correspondent reports.  The top-level
 `MAIL_ARCHIVE_DIR` selects the archive for every command by default; the
 `--archive` option overrides it. `ingest` takes one
@@ -67,7 +121,7 @@ loading virus definitions rather than retaining stale source progress. It uses
 streaming source byte offsets to show the current file and
 completion percentage and reports processed source-file plus
 archived/previously-seen/autosave/infected counts.  Control-C commits completed work, closes the
-temporary scanner, refreshes integrity files, reports a controlled interruption, and
+temporary scanner, publishes a BagIt/Mailbag checkpoint, reports a controlled interruption, and
 prints the partial-run archive report before returning 130.  An `ENOSPC` append is truncated back to the prior MBOX size where
 possible and reports a controlled nonzero stop.  Acceptance coverage includes
 the checked-in MBOX/EMLX corpus, source checkpoints, append resumption,
@@ -99,7 +153,8 @@ bounded queue of at most `2N` concurrent ClamAV scans.  A single writer emits
 MBOX records and SQLite rows in source order after scan completion.
 
 Rollover, date sorting/repacking, complete recipient metadata, `verify`, richer
-text extraction, IMAP, and Gmail remain planned work.  The delivered
+text extraction, Outlook PST/OST, Eudora, working IMAP cache directories, live
+IMAP, Gmail, redaction, and research-oriented metadata remain planned work. The delivered
 `mailsearch` command reads both databases without writing:
 it applies `to:`/`from:`/`subject:` catalog filters, UTC calendar-day
 `date:`/`before:`/`after:` filters, and ANDed FTS5 terms; it prints stable
@@ -202,14 +257,16 @@ API responses; dictionaries are confined to API-boundary decoding.
 
 `standalone_verify.py` is itself limited to the Python standard library. At
 ingest startup it copies its own source atomically to
-`verify_mail_archive.py` in the archive. The installed script accepts only the
-hybrid format in [INTEGRITY_CONTROLS.md](INTEGRITY_CONTROLS.md). It streams and
-validates the JSON declarations, complete-MBOX `h1` hashes, recovered-message
-`h2` hashes, and semantic-message `h3` hashes, returning nonzero on missing,
-orphaned, malformed, unsupported, or mismatched files. It neither imports the
-package nor reads SQLite.
+`verify_mail_archive.py` in the bag root. The installed script accepts only the
+native format in [INTEGRITY_CONTROLS.md](INTEGRITY_CONTROLS.md). It validates
+safe BagIt payload and tag manifests, required Mailbag metadata and CSV rows,
+then streams the JSON declarations, complete-MBOX `h1` hashes,
+recovered-message `h2` hashes, and semantic-message `h3` hashes. It returns
+nonzero on missing, orphaned, malformed, unsupported, unsafe, unlisted, or
+mismatched files. It neither imports the package nor reads SQLite.
 
-`write_integrity_files()` streams catalog locations in MBOX byte order and
+`write_bag_checkpoint()` streams catalog locations in MBOX byte order through
+`write_integrity_files()` and
 uses each catalogued raw SHA-256 to resolve mboxrd `>From ` ambiguity. It then
 atomically writes deterministic JSON control records followed by the TSV table.
 The initial declarations are `h1` (complete MBOX, SHA-256), `h2` (recovered
@@ -217,6 +274,11 @@ RFC 5322 bytes, SHA-256), and `h3` (semantic-message version 1, SHA-256).
 Semantic version 1 applies DKIM relaxed header and simple body canonicalization
 to the selected stable/delivery headers documented in `INTEGRITY_CONTROLS.md`;
 it includes `Delivered-To` and excludes mutable `Status` and `X-Status` fields.
+The same pass emits RFC 4180 Mailbag rows through a Pydantic `MailbagRow`, so
+generation does not reread the corpus to count MIME attachments. The payload
+manifest reuses the computed complete-MBOX hashes. `bag-info.txt` retains its
+external identifier while refreshing its timestamp and payload oxum, and the
+tag manifest is written last.
 
 ## Database design
 
@@ -301,7 +363,7 @@ For every candidate source record:
 8. Keep message, recipient, defect, observation, and location rows in one
    catalog transaction until the append succeeds. Commit the authoritative
    catalog and clear the journal. An exception or the next ingest startup
-   truncates an uncatalogued append and refreshes integrity files; a catalogued append
+   truncates an uncatalogued append and refreshes the BagIt/Mailbag checkpoint; a catalogued append
    is validated and retained. Index disposable search content afterward only
    for normal Sent and Archive mail.
 
@@ -315,7 +377,8 @@ Input detection must validate a stream rather than trust filename extensions.
 The MBOX reader recognizes separator lines, handles mboxrd `>From ` escaping,
 and reports malformed boundaries without silently merging messages.
 
-Writers produce an envelope `From ` line plus mboxrd-escaped message bytes.
+Writers produce an envelope `From ` line plus mboxrd-escaped message bytes under
+`data/mbox/`.
 They track the byte offset and byte length of each complete record.  Output
 selection enforces the 3.75 GiB limit before appending; the directory contains
 no nested per-message files.
@@ -329,7 +392,8 @@ the authoritative raw-message SHA-256; unresolved high-ambiguity input fails
 closed.
 
 At run completion, sort each touched normal mailbox by `(resolved_date_utc,
-sha256)`.  The sorter writes a new MBOX and integrity file beside the original,
+sha256)`. The sorter writes a new MBOX under `data/mbox/` and its integrity tag
+under `integrity/`,
 scans both end-to-end, compares the unordered identity sets, then atomically
 updates the relevant `mbox_generations`/`locations` rows.  It retains the old
 file until validation succeeds and deletes it only then.  `INFECTED` and
@@ -379,6 +443,35 @@ The `--days N` option uses `newer_than:Nd` on `messages.list`; `--after`
 accepts an epoch for timezone-precise collection.  Google Takeout is an MBOX directory input.  The program does not automate
 personal Takeout creation or download.
 
+## Planned source adapters and derivatives
+
+PST/OST, Eudora, and working IMAP caches are local read-only adapters, not
+remote-source modes. Each adapter produces a typed source record containing
+the available RFC 5322 bytes, source-native identity and folder context,
+completeness state, and extraction provenance. A proprietary-store parser or
+converter is isolated behind that interface and its name and version are
+stored with every run. Acceptance fixtures include corrupt and partial stores
+so item-accounting and error reporting are tested, not merely successful
+conversion. Candidate third-party components must be evaluated for byte
+fidelity, maintained format coverage, licensing, streaming behavior, and
+repeatable output before selection.
+
+The Eudora adapter treats mailbox data, table-of-contents files, attachment
+directories, and embedded-content directories as one source package while
+retaining the physical origin of every recovered component. The IMAP-cache
+adapter has layout-specific readers and emits explicit incomplete records for
+headers-only placeholders, evicted bodies, and detached parts. It never falls
+through to a network fetch.
+
+Redaction is a separate derivative pipeline over hash-verified canonical
+messages. A versioned Pydantic policy selects header values, body spans, MIME
+parts, attachments, or derived entities; the exporter writes a new corpus plus
+an access-controlled audit manifest linking each output to its canonical hash
+and transformation decisions. The canonical archive and catalog remain
+unchanged. Research tables likewise remain rebuildable and carry extractor,
+schema, and policy versions so correspondent, thread, entity, attachment, and
+provenance reports can declare how they were produced.
+
 ## Validation and tests
 
 Tests use small, hand-authored MBOX and EMLX fixtures covering mboxrd quoting,
@@ -389,8 +482,10 @@ not only record counts.  Use a real local `clamd` fixture only for the
 ClamAV integration test; parser and routing tests use recorded scanner result
 objects rather than mock message structures.
 
-`make check` runs unit/integration tests; `make verify ARCHIVE=...` performs
-read-only archive verification.  The first acceptance run is against a copied
+`make check` runs unit/integration tests; `make test-bagit` validates the
+database-independent three-message fixture and corruption cases. The installed
+`verify_mail_archive.py DIRECTORY` performs read-only validation of a supplied
+bag. The first acceptance run is against a copied
 small subset of `SLG Mail`, followed by a full read-only inventory comparison
 before any canonical archive is published.
 

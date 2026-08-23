@@ -8,12 +8,14 @@ import mailbox
 import os
 import shutil
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel
 
+from .layout import integrity_path, mbox_directory, mbox_path
 from .message import ParsedMessage
 from .standalone_verify import IntegrityMessage, write_integrity_file
 
@@ -77,7 +79,7 @@ def recover_publication(archive: Path, catalog: sqlite3.Connection, search: sqli
         filename, offset, length = committed
         try:
             read_verified_location(
-                archive / filename,
+                mbox_path(archive, filename),
                 MboxLocation(byte_offset=offset, byte_length=length),
                 publication.sha256,
             )
@@ -85,7 +87,7 @@ def recover_publication(archive: Path, catalog: sqlite3.Connection, search: sqli
             raise RuntimeError(f"committed pending publication failed validation for {filename}") from error
         clear_publication_journal(archive)
         return PublicationRecovery.COMMITTED
-    path = archive / publication.filename
+    path = mbox_path(archive, publication.filename)
     if not path.exists() and not publication.file_existed:
         search.execute("DELETE FROM message_fts WHERE sha256 = ?", (publication.sha256,))
         search.execute("DELETE FROM attachment_fts WHERE sha256 = ?", (publication.sha256,))
@@ -189,9 +191,14 @@ def read_verified_location(path: Path, location: MboxLocation, expected_sha256: 
     raise ValueError(f"MBOX location hash mismatch in {path}")
 
 
-def write_integrity_files(archive: Path, catalog: sqlite3.Connection) -> None:
-    """Regenerate every MBOX integrity sidecar from catalog-verified bytes."""
-    for path in sorted(archive.glob("*.mbox")):
+def write_integrity_files(
+    archive: Path,
+    catalog: sqlite3.Connection,
+    message_visitor: Callable[[str, int, IntegrityMessage], None] | None = None,
+) -> dict[str, str]:
+    """Regenerate every MBOX integrity tag from catalog-verified bytes."""
+    digests: dict[str, str] = {}
+    for path in sorted(mbox_directory(archive).glob("*.mbox")):
         rows = catalog.execute(
             "SELECT m.message_id_normalized, m.sha256, l.byte_offset, l.byte_length "
             "FROM messages m JOIN locations l USING (message_pk) "
@@ -207,7 +214,7 @@ def write_integrity_files(archive: Path, catalog: sqlite3.Connection) -> None:
         message_count = int(count_row[0])
 
         def messages():
-            for message_id, raw_sha256, offset, length in rows:
+            for ordinal, (message_id, raw_sha256, offset, length) in enumerate(rows, 1):
                 raw = read_verified_location(
                     path,
                     MboxLocation(byte_offset=offset, byte_length=length),
@@ -217,16 +224,21 @@ def write_integrity_files(archive: Path, catalog: sqlite3.Connection) -> None:
                 has_message_id = any(
                     line.partition(b":")[0].lower() == b"message-id" for line in header.split(b"\n")
                 )
-                yield IntegrityMessage(
+                message = IntegrityMessage(
                     message_id=message_id if has_message_id else None,
                     raw_sha256=raw_sha256,
                     raw=raw,
                 )
+                if message_visitor is not None:
+                    message_visitor(path.name, ordinal, message)
+                yield message
 
-        digest = write_integrity_file(path, messages(), message_count)
+        digest = write_integrity_file(path, integrity_path(archive, path.name), messages(), message_count)
+        digests[path.name] = digest
         result = catalog.execute(
             "UPDATE mbox_generations SET sha256 = ?, message_count = ?, byte_count = ? WHERE filename = ?",
             (digest, message_count, path.stat().st_size, path.name),
         )
         if result.rowcount != 1:
             raise ValueError(f"MBOX has no catalog generation: {path}")
+    return digests

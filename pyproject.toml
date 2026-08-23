@@ -15,6 +15,7 @@ mailarchiver = "mailarchiver.__main__:main"
 mailsearch = "mailarchiver.mailsearch:main"
 mailsearch-gui = "mailarchiver.gui_app:main"
 summarize = "mailarchiver.aisummarize:main"
+verify-mail-archive = "mailarchiver.standalone_verify:main"
 
 [build-system]
 requires = ["setuptools>=69"]

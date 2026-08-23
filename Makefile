@@ -1,4 +1,4 @@
-.PHONY: check gui gui-smoke pylint run search summary-smoke test test-gui test-mailsearch test-headers install-mac install-linux install-tika
+.PHONY: check fixture-bagit gui gui-smoke pylint run search summary-smoke test test-bagit test-gui test-mailsearch test-headers verify install-mac install-linux install-tika
 
 TIKA_VERSION ?= 3.3.2
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
@@ -7,6 +7,9 @@ TIKA_SHA512 := $(TIKA_JAR).sha512
 TIKA_URL := https://downloads.apache.org/tika/$(TIKA_VERSION)/tika-app-$(TIKA_VERSION).jar
 
 check: test
+
+fixture-bagit:
+	uv run python tests/generate_bagit_fixture.py tests/data/three-message-mailbag
 
 pylint:
 	uv run pylint src tests
@@ -17,8 +20,12 @@ run:
 search:
 	uv run mailsearch $(ARGS)
 
+verify:
+	@test -n "$(ARCHIVE)" || { echo 'usage: make verify ARCHIVE=/path/to/mailbag'; exit 2; }
+	uv run verify-mail-archive "$(ARCHIVE)"
+
 summary-smoke:
-	@printf '%s\n' 'During verification, the archiver reads every canonical MBOX file without changing it. It checks each declared complete-MBOX, raw-message, and semantic-message digest in the integrity file. If derived SQLite search data is missing or damaged, that data can be regenerated from the canonical MBOX files. A verification failure is reported for investigation rather than repaired automatically, preserving the original evidence.' | uv run summarize
+	@printf '%s\n' 'During verification, the archiver reads every canonical MBOX file without changing it. It checks BagIt payload and tag manifests, Mailbag metadata, and every declared complete-MBOX, raw-message, and semantic-message digest. Derived SQLite search data can be regenerated from canonical MBOX files. A failure is reported for investigation rather than repaired automatically.' | uv run summarize
 
 gui:
 	uv run mailsearch-gui $(ARGS)
@@ -28,6 +35,9 @@ gui-smoke:
 
 test:
 	uv run pytest -q
+
+test-bagit:
+	uv run pytest -q tests/test_bagit.py tests/test_standalone_verify.py
 
 test-mailsearch:
 	uv run pytest -q tests/test_mailsearch.py

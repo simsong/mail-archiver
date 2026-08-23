@@ -9,14 +9,16 @@ import sys
 from os import environ
 from pathlib import Path
 
+from mailarchiver.bagit import initialize_bag
 from mailarchiver.catalog import address_pk, create_catalog, create_search
+from mailarchiver.layout import mbox_directory
 from mailarchiver.mailsearch import MessageHeader, format_header, render_message
 from mailarchiver.mbox import add_message
 from mailarchiver.search import index_message
 
 
 def add_catalogued_message(archive: Path, message_pk: int, raw: bytes) -> None:
-    path = archive / "2024-Archive1.mbox"
+    path = mbox_directory(archive) / "2024-Archive1.mbox"
     box = mailbox.mbox(path, create=True)
     try:
         location = add_message(box, path, raw)
@@ -42,7 +44,7 @@ def add_catalogued_message(archive: Path, message_pk: int, raw: bytes) -> None:
 
 def make_archive(tmp_path: Path) -> tuple[Path, bytes]:
     archive = tmp_path / "archive"
-    archive.mkdir()
+    initialize_bag(archive)
     raw = (
         b"Message-ID: <one@example>\nFrom: sender@example.net\nTo: recipient@example.net\nCc: copy@example.net\nX-Trace: one\n"
         b"Subject: planning meeting\nDate: Wed, 03 Jan 2024 10:00:00 +0000\n\nMeeting agenda.\n"
@@ -123,7 +125,7 @@ def test_mailsearch_listing_excludes_quarantine_categories(tmp_path: Path) -> No
 def test_numbered_empty_message_restores_zero_source_bytes(tmp_path: Path) -> None:
     """Requirement: MBOX's separator newline does not change an empty message's identity."""
     archive = tmp_path / "archive"
-    archive.mkdir()
+    initialize_bag(archive)
     catalog = create_catalog(archive / "archive.sqlite3")
     search = create_search(archive / "search.sqlite3")
     try:

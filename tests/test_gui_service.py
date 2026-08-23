@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from mailarchiver.bagit import initialize_bag
 from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.gui_service import (
     RAW_PART_ID,
@@ -23,6 +24,7 @@ from mailarchiver.gui_service import (
     write_message,
 )
 from mailarchiver.gui_app import GuiApi
+from mailarchiver.layout import mbox_directory
 from mailarchiver.mbox import add_message
 from mailarchiver.search import index_message
 
@@ -53,7 +55,7 @@ MULTIPART_MESSAGE = (
 
 def make_gui_archive(tmp_path: Path) -> Path:
     archive = tmp_path / "archive"
-    archive.mkdir()
+    initialize_bag(archive)
     catalog = create_catalog(archive / "archive.sqlite3")
     search = create_search(archive / "search.sqlite3")
     message_pks: list[int] = []
@@ -77,7 +79,7 @@ def make_gui_archive(tmp_path: Path) -> Path:
     finally:
         catalog.close()
         search.close()
-    path = archive / "2024-Archive1.mbox"
+    path = mbox_directory(archive) / "2024-Archive1.mbox"
     box = mailbox.mbox(path)
     try:
         locations = [add_message(box, path, raw) for raw in (SIMPLE_MESSAGE, MULTIPART_MESSAGE)]

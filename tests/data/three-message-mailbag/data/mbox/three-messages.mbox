@@ -1,0 +1,37 @@
+From fixture1@example.test Mon Jan  1 00:00:01 2024
+Message-ID: <one@example.test>
+From: Alice <alice@example.test>
+To: archive@example.test
+Delivered-To: archive@example.test
+Subject: First fixture message
+Date: Mon, 01 Jan 2024 10:00:00 +0000
+
+The first preserved body.
+From fixture2@example.test Mon Jan  1 00:00:02 2024
+Message-ID: <two@example.test>
+From: Bob <bob@example.test>
+To: archive@example.test
+Subject: Mutable status fixture
+Date: Tue, 02 Jan 2024 11:00:00 +0000
+Status: RO
+
+Status is excluded only from the semantic digest.
+From fixture3@example.test Mon Jan  1 00:00:03 2024
+Message-ID: <three@example.test>
+From: Carol <carol@example.test>
+To: archive@example.test
+Subject: Attachment fixture
+Date: Wed, 03 Jan 2024 12:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=fixture
+
+--fixture
+Content-Type: text/plain; charset=utf-8
+
+The third preserved body.
+--fixture
+Content-Type: text/plain; name=note.txt
+Content-Disposition: attachment; filename=note.txt
+
+Attached text.
+--fixture--

@@ -1,0 +1,10 @@
+{"format_id":"tag:simson.net,2026:mailarchiver/integrity","format_version":1,"manifest_id":"h1:12f3f954508c1bf1a0e24b7de268d1e54fda354519956af22d86f2827b4ba85e","type":"integrity-manifest"}
+{"canonicalization":{"method":"none"},"code":"h1","digest_algorithm":"sha256","hash_standard":"mbox","hash_version":1,"id":"tag:simson.net,2026:mailarchiver/hash/mbox/v1/sha256","input":"complete-mbox-file","scope":"mbox","type":"hash-standard"}
+{"canonicalization":{"method":"none"},"code":"h2","digest_algorithm":"sha256","hash_standard":"raw","hash_version":1,"id":"tag:simson.net,2026:mailarchiver/hash/raw/v1/sha256","input":"recovered-rfc5322-message","scope":"message","type":"hash-standard"}
+{"canonicalization":{"body":{"length":"entire","method":"dkim-simple"},"domain_separator":"tag:simson.net,2026:mailarchiver/hash/semantic/v1\u0000","headers":{"method":"dkim-relaxed","occurrences":"all","order":["from","sender","reply-to","to","cc","bcc","delivered-to","date","message-id","subject","mime-version","content-type","content-transfer-encoding","content-disposition"],"repeated_field_order":"bottom-to-top"},"line_endings":"crlf-from-crlf-lf-or-cr"},"code":"h3","digest_algorithm":"sha256","hash_standard":"semantic","hash_version":1,"id":"tag:simson.net,2026:mailarchiver/hash/semantic/v1/sha256","input":"recovered-rfc5322-message","scope":"message","type":"hash-standard"}
+{"bytes":1023,"hashes":["h1:12f3f954508c1bf1a0e24b7de268d1e54fda354519956af22d86f2827b4ba85e"],"messages":3,"name":"three-messages.mbox","type":"mbox"}
+{"columns":["ordinal","message-id-json","hashes..."],"encoding":"tsv","type":"message-table"}
+ordinal	message-id-json	hashes...
+1	"one@example.test"	h2:f47164843d728e984dec0a01ce98473ecc2b46d92e33637122638bf6426516e4	h3:debd645840df1633ee34f5b25ab8b4158692cf0952122e2df805ed8f4cbfb202
+2	"two@example.test"	h2:ade812c6b2a7ce258d27b8fc7f78f1166d1cc9bc630f0dd3d742b317d5d6906f	h3:07b8c99c9236bbeadc1a6fcc3db9f3c946cc8a0033b06894f559a03bff3a91e1
+3	"three@example.test"	h2:6b6402e0bb29b29f3cdb7e687c5f9d6387bf655c874d3e412819362e30a03344	h3:c642b0a21ad37327e34173a2d32ae37cd2e8c3314fb976f64c26b5d335a06edd

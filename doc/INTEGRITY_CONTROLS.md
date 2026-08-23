@@ -1,500 +1,331 @@
-# Integrity controls
+# BagIt and Mailbag interoperability
 
 ## Status
 
-This document specifies the durable integrity sidecar format for canonical
-MBOX files. The program is under development; only this format is supported.
-`requirements.md`, `implementation.md`, the writer, recovery path, standalone
-verifier, and substantive tests use this format.
+The canonical mailarchiver directory is a native
+[BagIt 1.0](https://www.rfc-editor.org/rfc/rfc8493.html) bag conforming to the
+[Mailbag 1.0](https://archives.albany.edu/mailbag/spec/) profile. The archive is
+appendable working storage, so its manifests describe the last published
+checkpoint rather than promising that the directory is immutable.
 
-## Goals
+This program is under development. Only the layout and integrity formats in
+this document are supported; there is no legacy root-level MBOX layout or
+sidecar migration mode.
 
-Each canonical MBOX needs a self-describing integrity sidecar that can:
+BagIt and mailarchiver provide complementary integrity layers:
 
-* identify the sidecar format before interpreting any digest;
-* define each hash standard once at the top of the file;
-* give each defined standard a short code such as `h1`;
-* tag every stored digest with its defining code;
-* carry multiple hash standards and digest algorithms concurrently;
-* verify the complete MBOX byte stream and every ordered message;
-* retain enough information to recover original RFC 5322 bytes where MBOX
-  quoting is ambiguous;
-* support streaming generation and verification with the Python standard
-  library;
-* remain deterministic when regenerated from unchanged canonical inputs; and
-* evolve without changing the meaning of an existing digest.
+* BagIt SHA-256 manifests let any conforming implementation verify complete
+  payload and tag files without understanding email.
+* Mailbag metadata lets email-preservation tools enumerate messages and relate
+  them to their MBOX containers.
+* Mailarchiver integrity tags verify each recovered RFC 5322 message and its
+  versioned semantic digest, including MBOX quoting recovery that BagIt does
+  not attempt.
 
-The sidecar detects accidental corruption and inconsistent publication. It is
-not an authenticated signature: an attacker able to replace both the MBOX and
-the sidecar can manufacture matching digests. Authenticity would require a
-separate signature rooted in a key or independently stored digest.
+The installed `verify_mail_archive.py` implements all three layers using only
+the Python standard library and without consulting SQLite.
 
-## Terminology
-
-These terms are distinct:
-
-* A **digest algorithm** is a cryptographic primitive such as SHA-256 or
-  SHA-512.
-* A **hash standard** defines the scope, source-byte recovery, selected
-  fields, canonicalization, framing, digest algorithm, and output encoding.
-* A **hash-standard version** fixes those rules for the lifetime of the
-  standard.
-* A **hash code** is a short file-local alias such as `h1` for one complete
-  versioned hash-standard declaration.
-* A **format version** defines the control records and TSV grammar.
-* A **manifest generation** describes one exact byte generation of one MBOX.
-
-SHA-256 itself does not have a mailarchiver version. A complete declaration
-combines a versioned input standard with a digest algorithm. For example, one
-code can mean semantic standard version 1 with SHA-256, while another means
-the same semantic input with SHA-512.
-
-Once declared, the meaning of a hash-standard name and version is immutable.
-Any change to recovery, selection, canonicalization, ordering, framing,
-algorithm, or encoding requires a different declaration and code.
-
-## Filename
-
-The sidecar filename is:
+## Native directory layout
 
 ```text
-NAME.mbox.integrity
+archive/
+├── bagit.txt
+├── bag-info.txt
+├── mailbag.csv                 # or numbered mailbag-N.csv files
+├── manifest-sha256.txt
+├── tagmanifest-sha256.txt
+├── verify_mail_archive.py
+├── integrity/
+│   ├── 2024-Archive1.mbox.integrity
+│   ├── 2024-Sent1.mbox.integrity
+│   └── INFECTED1.mbox.integrity
+├── data/
+│   └── mbox/
+│       ├── 2024-Archive1.mbox
+│       ├── 2024-Sent1.mbox
+│       └── INFECTED1.mbox
+├── archive.sqlite3
+└── search.sqlite3
 ```
 
-For example:
+`data/mbox/` is the BagIt payload and the Mailbag MBOX representation. It
+contains the canonical byte-preserving mboxrd files and no mailarchiver
+integrity metadata. Additional Mailbag representations are not part of the
+current native format.
+
+`integrity/` is a BagIt tag directory. Its files describe the payload but are
+not themselves canonical email. This placement lets ordinary BagIt tools hash
+the declarations through the tag manifest without presenting them to Mailbag
+tools as another email representation.
+
+`archive.sqlite3` and `search.sqlite3` are operational tag files. The catalog
+is authoritative metadata and the search database is disposable, but neither
+is listed in `tagmanifest-sha256.txt`: they can change independently of a
+preservation checkpoint, and SQLite may use transient journal files while
+open. Their internal consistency is outside BagIt fixity validation. All
+canonical messages remain recoverable and independently verifiable without
+them.
+
+## BagIt declaration and manifests
+
+`bagit.txt` is exactly:
 
 ```text
-2024-Archive1.mbox
-2024-Archive1.mbox.integrity
+BagIt-Version: 1.0
+Tag-File-Character-Encoding: UTF-8
 ```
 
-The file is not named `.jsonl` because only its control section is JSON Lines.
-The message section is TSV. The complete MBOX filename remains in the sidecar
-name so missing and orphan sidecars can be found without parsing their
-contents.
+It is UTF-8 without a byte-order mark and uses LF line endings.
 
-## Hybrid encoding
-
-The sidecar deliberately uses two encodings:
-
-1. JSON Lines at the top for format identification, hash-standard
-   declarations, MBOX metadata, and the message-table transition; and
-2. TSV for the large, dense, homogeneous list of per-message hashes.
-
-JSON makes the small control section explicit and extensible. TSV avoids
-repeating JSON object keys and descriptions for every message. Both sections
-are streamable and require only Python's standard library.
-
-Each hash-standard declaration assigns a short code:
+`manifest-sha256.txt` lists every regular payload file exactly once. Entries
+use lowercase SHA-256, two spaces, a path relative to the bag root, and LF:
 
 ```text
-h1
-h2
-h3
+64_LOWERCASE_HEX  data/mbox/2024-Archive1.mbox
 ```
 
-Every digest outside its declaration is represented as:
+The slash is the path separator. Percent, CR, and LF in pathnames use the
+BagIt `%25`, `%0D`, and `%0A` encodings. Mailarchiver-generated payload names
+do not contain those characters, but the validator implements the BagIt rule.
+Absolute paths, `..`, symlinks, missing files, duplicate entries, unlisted
+payload files, and non-payload paths are errors.
+
+`tagmanifest-sha256.txt` is generated last. It uses the same grammar and
+hashes:
+
+* `bagit.txt`;
+* `bag-info.txt`;
+* `manifest-sha256.txt`;
+* every current `mailbag.csv` or `mailbag-N.csv` tag;
+* every `integrity/*.mbox.integrity` tag; and
+* `verify_mail_archive.py` when it is installed.
+
+The tag manifest never lists itself or a `data/` payload. The SQLite files and
+transient publication journal are deliberately outside this list.
+
+SHA-256 is the only supported BagIt checksum algorithm. BagIt permits adding a
+second manifest algorithm later, but mailarchiver must implement and document
+that algorithm before using it. The validator fails on an additional manifest
+rather than reporting success after silently skipping its hashes.
+
+## Mailbag metadata
+
+### `bag-info.txt`
+
+Every checkpoint writes the required Mailbag fields:
 
 ```text
-CODE:LOWERCASE_HEX_DIGEST
+Bag-Type: Mailbag
+Mailbag-Source: mbox
+Mailbag-Specification-Version: 1.0
+Original-Included: False
+Bagging-Timestamp: RFC3339_TIMESTAMP
+Bagging-Date: YYYY-MM-DD
+External-Identifier: STABLE_IDENTIFIER
+Mailbag-Agent: mailarchiver
+Mailbag-Agent-Version: VERSION
+Payload-Oxum: BYTE_COUNT.FILE_COUNT
+MBOX-Format-Details: mboxrd
+MBOX-Agent: Python mailbox
 ```
 
-For example:
+The external identifier is created once and retained across checkpoints.
+`Bagging-Timestamp`, `Bagging-Date`, and `Payload-Oxum` describe the current
+checkpoint. `Original-Included` is `False` because the payload is a normalized,
+deduplicated archive assembled from heterogeneous sources; it is not a claim
+that every source container was copied unchanged. The original RFC 5322 bytes
+available from each source are nevertheless preserved inside the canonical
+MBOX representation and checked per message.
+
+### `mailbag.csv`
+
+The CSV is UTF-8 without a byte-order mark and uses RFC 4180 CRLF records. It
+has the seven required Mailbag columns in their required order:
 
 ```text
-h1:5d41402abc4b...
-h2:a91d...
-h3:bbc7...
+Error,Mailbag-Message-ID,Message-ID,Original-File,Message-Path,Derivatives-Path,Attachments
 ```
 
-The code, not column position or digest length, determines the hash-standard
-version, digest algorithm, scope, and canonicalization. Multiple digest types
-can therefore occur in one sidecar and on one TSV message line.
+There is one row per canonical message. `Original-File` is the MBOX basename,
+relative to `data/mbox/`. `Message-Path` and `Derivatives-Path` are empty
+because the current normalized MBOX representation does not claim to preserve
+one source account's folder arrangement and has no derivative representation.
+`Attachments` is the number of MIME parts treated as attachments. An absent
+Message-ID is an empty CSV field.
 
-## File sequence
+The case-insensitively unique Mailbag Message ID is:
+
+```text
+m- + first_32_hex(SHA256(UTF8(normalized-message-id) || NUL || ASCII(raw-sha256)))
+```
+
+The composite input distinguishes identical RFC 5322 bytes retained under
+different Message-IDs, while the 34-character output remains within Mailbag's
+recommended 36-character limit. Generation fails rather than publishing a
+case-folded collision.
+
+At 100,000 messages or fewer the tag is `mailbag.csv`. Larger archives use
+`mailbag-N.csv`, with at most 100,000 rows per file, contiguous numbering, and
+enough zero padding for the highest part number. Only the first split file has
+the header row, as required by Mailbag 1.0.
+
+## Mailarchiver per-message integrity tags
+
+Each `data/mbox/NAME.mbox` has exactly one corresponding tag:
+
+```text
+integrity/NAME.mbox.integrity
+```
+
+The tag uses a compact hybrid format: deterministic JSON Lines declarations
+followed by a dense TSV message table. It remains an extension to Mailbag, not
+a replacement for the BagIt payload manifest.
 
 The UTF-8 file contains, in order:
 
-1. exactly one `integrity-manifest` JSON record;
-2. one `hash-standard` JSON record for each code;
-3. exactly one `mbox` JSON record;
-4. exactly one `message-table` JSON record;
-5. exactly one TSV header line; and
-6. one TSV data line for each MBOX message, in MBOX order.
+1. one `integrity-manifest` JSON record;
+2. consecutive `hash-standard` JSON records assigning local codes `h1`, `h2`,
+   and `h3`;
+3. one `mbox` JSON record;
+4. one `message-table` JSON record;
+5. the literal TSV header `ordinal<TAB>message-id-json<TAB>hashes...`; and
+6. one TSV row per MBOX message in byte order.
 
-The `message-table` record is the final JSON record and changes the grammar to
-TSV. All remaining lines use the declared TSV grammar through end of file.
-Version 1 does not permit blank lines, comments, a byte-order mark, or records
-after the TSV table.
-
-## Structural example
-
-Actual JSON records occupy one compact physical line each:
+Every digest is tagged `CODE:LOWERCASE_HEX`. A typical control section is:
 
 ```json
-{"format_id":"tag:simson.net,2026:mailarchiver/integrity","format_version":1,"manifest_id":"h1:5d41402abc4b...","type":"integrity-manifest"}
+{"format_id":"tag:simson.net,2026:mailarchiver/integrity","format_version":1,"manifest_id":"h1:...","type":"integrity-manifest"}
 {"canonicalization":{"method":"none"},"code":"h1","digest_algorithm":"sha256","hash_standard":"mbox","hash_version":1,"id":"tag:simson.net,2026:mailarchiver/hash/mbox/v1/sha256","input":"complete-mbox-file","scope":"mbox","type":"hash-standard"}
 {"canonicalization":{"method":"none"},"code":"h2","digest_algorithm":"sha256","hash_standard":"raw","hash_version":1,"id":"tag:simson.net,2026:mailarchiver/hash/raw/v1/sha256","input":"recovered-rfc5322-message","scope":"message","type":"hash-standard"}
-{"canonicalization":{"body":{"length":"entire","method":"dkim-simple"},"domain_separator":"tag:simson.net,2026:mailarchiver/hash/semantic/v1\u0000","headers":{"method":"dkim-relaxed","occurrences":"all","order":["from","sender","reply-to","to","cc","bcc","delivered-to","date","message-id","subject","mime-version","content-type","content-transfer-encoding","content-disposition"],"repeated_field_order":"bottom-to-top"},"line_endings":"crlf-from-crlf-lf-or-cr"},"code":"h3","digest_algorithm":"sha256","hash_standard":"semantic","hash_version":1,"id":"tag:simson.net,2026:mailarchiver/hash/semantic/v1/sha256","input":"recovered-rfc5322-message","scope":"message","type":"hash-standard"}
-{"code":"h4","digest_algorithm":"sha512","hash_standard":"semantic","hash_version":1,"id":"tag:simson.net,2026:mailarchiver/hash/semantic/v1/sha512","same_input_as":"h3","scope":"message","type":"hash-standard"}
-{"bytes":18293473,"hashes":["h1:5d41402abc4b..."],"messages":2,"name":"2024-Archive1.mbox","type":"mbox"}
+{"bytes":1234,"hashes":["h1:..."],"messages":2,"name":"2024-Archive1.mbox","type":"mbox"}
 {"columns":["ordinal","message-id-json","hashes..."],"encoding":"tsv","type":"message-table"}
 ```
 
-`h3` contains the complete semantic-input definition. `h4` explicitly reuses
-those input bytes with a different digest algorithm.
+`h3` is also declared before the MBOX record and contains the complete semantic
+version 1 canonicalization object. JSON is compact, key-sorted, LF-terminated,
+and contains no creation time or host path. Regeneration from an unchanged
+MBOX produces identical integrity-tag bytes.
 
-The next physical line is the literal TSV header, followed by TSV data:
-
-```text
-ordinal<TAB>message-id-json<TAB>hashes...
-1<TAB>"first@example.net"<TAB>h2:a91d...<TAB>h3:bbc7...<TAB>h4:c482...
-2<TAB>"second@example.net"<TAB>h2:e320...<TAB>h3:194c...<TAB>h4:0a52...
-```
-
-`<TAB>` represents one ASCII tab byte in this displayed example.
-
-## Manifest record
-
-The first line has these required fields:
-
-* `type` is `integrity-manifest`.
-* `format_id` is the permanent global format discriminator.
-* `format_version` is the control and table grammar version.
-* `manifest_id` identifies the exact MBOX generation.
-
-Version 1 derives `manifest_id` from the first declared MBOX-scope hash:
+TSV rows are one-based and contiguous:
 
 ```text
-CODE:LOWERCASE_HEX_DIGEST
+1<TAB>"first@example.test"<TAB>h2:...<TAB>h3:...
+2<TAB>null<TAB>h2:...<TAB>h3:...
 ```
 
-The required primary MBOX declaration is SHA-256 over the complete MBOX. Its
-code is normally `h1`. This identifier is deterministic and recoverable from
-the MBOX; a random UUID would not be.
+`message-id-json` is a JSON string scalar or `null`; it is diagnostic and is
+never substituted for bytes when verifying a digest.
 
-## Hash-standard records
+### `h1`: complete MBOX SHA-256
 
-Each declaration has:
+`h1` hashes every byte of the MBOX, including separator lines, quoting, record
+terminators, and line endings. The digest equals the entry for that MBOX in
+`manifest-sha256.txt`. This intentional duplication binds the richer
+mailarchiver declaration to standard BagIt fixity and lets validators detect a
+disagreement between the layers.
 
-* a unique file-local `code` matching `h[1-9][0-9]*`;
-* an immutable global `id`;
-* a `hash_standard` name;
-* an integer `hash_version`;
-* a lowercase `digest_algorithm` token;
-* a scope of `mbox` or `message`;
-* an input definition; and
-* complete machine-readable canonicalization rules or `same_input_as`.
+### `h2`: recovered raw-message SHA-256
 
-Codes must be declared consecutively as `h1`, `h2`, and so on. They are local
-aliases, not permanent global identifiers. The global `id` provides permanent
-identification when a declaration is copied elsewhere.
+`h2` hashes the recovered original RFC 5322 bytes, excluding the MBOX `From `
+separator and storage quoting. No header, body, line-ending, MIME, whitespace,
+or character-set canonicalization is applied.
 
-Supported version 1 algorithm tokens are the lowercase `hashlib` names
-`sha256` and `sha512`. A digest following the code is lowercase hexadecimal of
-the exact length required by that declaration.
+Python's MBOX writer cannot distinguish storage quoting from an original
+literal `>From ` body line. The validator enumerates the bounded possible
+interpretations and accepts only a candidate matching `h2`. A zero-byte
+message similarly maps back from the one separator newline required by MBOX
+only when its digest is SHA-256 of empty bytes.
 
-Two declarations may share the same hash-standard name and version while
-using different digest algorithms. The first contains the complete input and
-canonicalization definition. A later declaration may use `same_input_as` to
-name that earlier code instead of repeating the definition. It must have the
-same scope, hash-standard name, and hash version. References must point
-backward and may not form chains. A generator should feed the shared bytes to
-all requested digest algorithms in one pass.
+### `h3`: semantic-message version 1 SHA-256
 
-## MBOX record
+`h3` is a conservative, delivery-aware identity derived from RFC 6376 DKIM
+canonicalization rules. It does not use or verify a message's DKIM signature.
+Its input begins with a domain separator, then DKIM-relaxed selected headers,
+one CRLF, and the complete DKIM-simple encoded MIME body.
 
-The MBOX record binds the sidecar to a filename, byte length, message count,
-and every declared MBOX-scope hash:
-
-```json
-{"bytes":18293473,"hashes":["h1:5d41402abc4b..."],"messages":2,"name":"2024-Archive1.mbox","type":"mbox"}
-```
-
-Every declared MBOX-scope code must occur exactly once in `hashes` in numeric
-code order. Message-scope codes must not occur there. Byte length and message
-count are integrity assertions, not hints.
-
-## TSV declaration and header
-
-The `message-table` record declares three logical columns:
-
-```json
-{"columns":["ordinal","message-id-json","hashes..."],"encoding":"tsv","type":"message-table"}
-```
-
-The literal TSV header immediately following it must be exactly:
+Headers are selected in this order, with repeated fields processed from the
+physical bottom upward:
 
 ```text
-ordinal<TAB>message-id-json<TAB>hashes...
-```
-
-`hashes...` means one TSV field for every declared message-scope hash code.
-The declaration and literal header are both required: the JSON record marks
-the grammar transition, while the TSV header makes the table independently
-intelligible.
-
-## TSV message records
-
-`ordinal` is a one-based decimal integer. It is contiguous and strictly
-increasing.
-
-`message-id-json` is the normalized Message-ID encoded as one JSON string
-scalar, or the literal JSON token `null` when no Message-ID exists. JSON string
-escaping prevents a malformed identifier containing a tab, newline, quote, or
-backslash from changing the TSV structure. The field is diagnostic metadata;
-the verifier must not use it in place of bytes selected by a hash standard.
-
-Every remaining field is one `CODE:DIGEST` value. Each declared message-scope
-code must occur exactly once, in numeric code order. MBOX-scope codes,
-undeclared codes, duplicate codes, missing codes, empty fields, extra fields,
-uppercase hex, and whitespace around a field are invalid.
-
-The table is dense: every message has every declared message-scope hash.
-Adding a hash standard or digest algorithm requires regenerating the sidecar
-with its new code populated for every applicable message.
-
-Tagging every digest makes each value self-identifying even if a line is
-examined without the TSV header. It also prevents a reader from silently
-assigning a valid-looking digest to the wrong standard because columns were
-reordered.
-
-## Initial hash standards
-
-### MBOX version 1
-
-The input is every byte of the named MBOX file, including MBOX separators,
-quoting, record terminators, and line endings. It is the primary test that the
-canonical container has not changed.
-
-The required declaration uses SHA-256 and is normally assigned `h1`. Another
-code may define SHA-512 over the identical MBOX byte stream.
-
-### Raw message version 1
-
-The input is the recovered original RFC 5322 message bytes. The MBOX `From `
-separator and MBOX storage quoting are not part of the message. No header,
-body, line-ending, MIME, whitespace, or character-set canonicalization is
-applied.
-
-The exact recovery procedure is part of this standard. Mailarchiver must
-consider the bounded interpretations of ambiguous `>From ` lines and select
-only a candidate whose declared raw-message digests match. A sidecar generator
-must not replace the original digest with a hash of an arbitrary MBOX-reader
-interpretation.
-
-Raw-message hashes support byte-preserving retrieval, verification,
-publication recovery, and forensic comparison. They are not semantic
-deduplication hashes. The required declaration uses SHA-256 and is normally
-assigned `h2`.
-
-### Semantic message version 1
-
-Semantic version 1 provides a conservative, delivery-aware identity derived
-from DKIM canonicalization rules. Its input is the RFC 5322 candidate selected
-by the raw-message hash. References to DKIM mean the canonicalization
-algorithms in RFC 6376, not the use or verification of a message's
-`DKIM-Signature` field.
-
-The canonical byte stream is:
-
-```text
-UTF8("tag:simson.net,2026:mailarchiver/hash/semantic/v1")
-NUL
-canonical selected header fields
-CRLF
-DKIM-simple canonical body
-```
-
-The domain separator prevents a digest computed for another application or
-profile from being mistaken for semantic version 1.
-
-Before header scanning, line endings are converted to DKIM's required CRLF
-network-normal representation. A CR followed by LF is one line ending; a bare
-CR or bare LF is also one line ending. Every recognized line ending is emitted
-as CRLF, and all other octets remain unchanged. This conversion never changes
-canonical MBOX bytes or raw-message hashes.
-
-Headers are visited in this fixed order:
-
-```text
-From
-Sender
-Reply-To
-To
-Cc
-Bcc
-Delivered-To
-Date
-Message-ID
-Subject
-MIME-Version
-Content-Type
-Content-Transfer-Encoding
+From, Sender, Reply-To, To, Cc, Bcc, Delivered-To, Date, Message-ID,
+Subject, MIME-Version, Content-Type, Content-Transfer-Encoding,
 Content-Disposition
 ```
 
-For each name, all occurrences are selected and emitted from the physical
-bottom of the header block to the top, matching DKIM repeated-field selection.
-Each selected field is canonicalized using DKIM relaxed header
-canonicalization:
+`Delivered-To` intentionally distinguishes deliveries. Mutable local and
+transport annotations such as `Status`, `X-Status`, `Received`, `Return-Path`,
+`Authentication-Results`, and `DKIM-Signature` are excluded. The entire MIME
+body, including attachment encodings and nested MIME headers, is included.
+`h2` remains authoritative for exact bytes because DKIM-simple body
+canonicalization normalizes surplus terminal empty lines.
 
-* lowercase the field name;
-* unfold continuation lines;
-* reduce each sequence of space or tab to one space;
-* remove trailing whitespace from the unfolded value; and
-* remove whitespace adjacent to the colon.
+The declaration may add another digest algorithm through a new `hN` code and
+`same_input_as`, but existing codes and meanings never change. Format version,
+hash-standard version, and digest algorithm are independent.
 
-Header values are not decoded, address-normalized, MIME-decoded, reordered, or
-case-folded. An empty field emits its canonical field name, colon, and CRLF. An
-absent field emits no bytes.
+## Checkpoint publication
 
-After the selected fields, one CRLF separates the header stream from the body.
-The complete encoded MIME body, including attachments and nested MIME part
-headers, is canonicalized with DKIM simple body canonicalization. It removes
-surplus empty lines at the end and ensures one final CRLF but makes no other
-body change. DKIM's optional `l=` body-length limit is prohibited.
+During an ingest, the bag may temporarily fail validation because an MBOX has
+been appended while its manifests still describe the preceding checkpoint.
+No command may describe that state as valid.
 
-`Delivered-To` is deliberately delivery-sensitive. A sent copy without it and
-a received copy with it remain distinct. Multiple occurrences retain their
-delivery sequence. If a source strips `Delivered-To`, deduplication may retain
-an additional copy; this safe false negative is preferable to collapsing
-deliveries without evidence.
+A successful completion, controlled interruption, or recovery publishes in
+this order:
 
-Local state and transport annotations are deliberately excluded, including:
+1. flush and synchronize every changed MBOX;
+2. atomically replace each complete `.mbox.integrity` tag after rereading and
+   checking every catalogued message;
+3. atomically replace the Mailbag CSV tag or split tags;
+4. atomically replace `manifest-sha256.txt`, reusing the already computed MBOX
+   `h1` values;
+5. atomically replace `bag-info.txt`; and
+6. compute and atomically replace `tagmanifest-sha256.txt` last.
 
-* `Status` and `X-Status`;
-* `Received` and `Return-Path`;
-* `Authentication-Results` and similar verifier annotations; and
-* `DKIM-Signature` and other signatures.
+Publishing the tag manifest last makes it the checkpoint boundary. A crash
+before that step leaves mismatched fixity rather than a false valid result.
+Recovery resolves the pending MBOX/catalog journal first and then regenerates
+the complete checkpoint.
 
-Raw-message hashes remain authoritative for byte integrity because even DKIM
-simple body canonicalization treats differing terminal empty lines as
-equivalent. SHA-256 and SHA-512 declarations may both cover the identical
-semantic version 1 byte stream, using separate codes.
+## Validation contract
 
-## Malformed input
+The standalone validator takes the bag directory as its only optional
+argument. With no argument, an installed copy validates its containing
+directory:
 
-Integrity generation must not discard a message because selected metadata is
-malformed. Every retained message receives every declared message-scope hash.
-Semantic version 1 uses a byte-oriented RFC 5322 header scan:
-
-* the first empty line ends the header block;
-* a recognizable field begins with a field name and colon;
-* a line beginning with space or tab continues the preceding recognizable
-  field;
-* unrecognized header lines are omitted from the selected-header stream but
-  remain protected by raw-message hashes; and
-* if no header/body separator exists, the complete input is the header block
-  and the body is empty.
-
-These rules keep semantic hashing independent of Unicode decoding and display
-parsing.
-
-## Deterministic serialization
-
-Version 1 requires:
-
-* UTF-8 without a byte-order mark;
-* compact JSON control records terminated by LF;
-* lexicographically sorted JSON object keys at every nesting level;
-* JSON separators `,` and `:` without optional surrounding whitespace;
-* hash codes declared consecutively in numeric order;
-* one literal ASCII tab between TSV fields and LF after every TSV line;
-* lowercase hexadecimal digest values;
-* messages in canonical MBOX order; and
-* no creation time, generator version, host path, or other volatile value.
-
-Regenerating the sidecar from unchanged canonical inputs and declarations must
-reproduce identical bytes.
-
-## Validation behavior
-
-A verifier reports separate results for:
-
-1. control structure and deterministic encoding;
-2. supported, complete, and internally consistent hash-standard declarations;
-3. MBOX filename, byte length, count, and every MBOX-scope hash;
-4. the message-table declaration and literal TSV header;
-5. ordered raw-message recovery and every declared raw digest; and
-6. every declared semantic digest.
-
-An unknown format version cannot be verified. A known format containing an
-unknown required hash standard may be checked only partially; the verifier
-must report partial verification and return nonzero. It must never print an
-unqualified success while any declared digest remains unchecked.
-
-Malformed JSON, duplicate JSON keys, nonconsecutive codes, inconsistent
-standard declarations, missing or duplicate TSV codes, noncontiguous
-ordinals, wrong digest lengths, count mismatches, unsupported algorithms, and
-orphan sidecars are errors.
-
-## Evolution
-
-Evolution follows these rules:
-
-* Never modify the meaning of an existing format ID and version.
-* Never modify the meaning of an existing hash-standard name and version.
-* A canonicalization change creates a new standard version.
-* A digest-algorithm change creates another declaration and code over the
-  same standard version.
-* Retain existing declarations and digests when adding new ones so results
-  can be compared directly.
-* Do not reuse a global hash-standard ID for different rules.
-* Keep raw byte-integrity hashes when semantic standards are added.
-
-One sidecar can therefore declare codes for all of these concurrently:
-
-```text
-MBOX version 1 with SHA-256
-raw message version 1 with SHA-256
-raw message version 1 with SHA-512
-semantic message version 1 with SHA-256
-semantic message version 1 with SHA-512
-semantic message version 2 with SHA-256
+```console
+python3 verify_mail_archive.py /path/to/archive
 ```
 
-Every TSV value remains compact and self-identifying as `hN:digest`.
+It is strictly read-only. It validates:
 
-## Publication and recovery
+* the BagIt 1.0 declaration and safe manifest paths;
+* completeness and SHA-256 of every payload-manifest entry;
+* completeness and SHA-256 of every required tag-manifest entry;
+* required Mailbag metadata, timestamps, payload oxum, CSV grammar, row count,
+  MBOX references, attachment-count syntax, and case-insensitive identifier
+  uniqueness;
+* the one-to-one relationship among MBOX files and integrity tags;
+* deterministic integrity declarations, MBOX byte length/count, `h1`, every
+  recovered-message `h2`, and every semantic `h3`; and
+* orphan, missing, malformed, unsupported, duplicate, out-of-order, or
+  mismatched declarations.
 
-The sidecar is durable archive content adjacent to its MBOX. It must be
-written to a temporary sibling, flushed, and atomically replaced only after
-the complete MBOX and every message have been read successfully. Publication
-must not expose a sidecar that claims a partially scanned generation.
+Unknown required standards or algorithms cause a nonzero result. A validator
+must never report unqualified success after checking only the BagIt layer or
+only some declared message hashes.
 
-The content-derived manifest ID, complete-file hashes, byte length, and
-message count bind the sidecar to one MBOX generation. If a process stops
-between MBOX and sidecar publication, the existing sidecar fails against the
-new MBOX rather than silently validating it. Publication recovery must refresh
-the sidecar after resolving any pending append.
+The checked-in `tests/data/three-message-mailbag/` fixture contains three
+messages, including a MIME attachment. It is a complete database-independent
+example. `make fixture-bagit` regenerates it, and `make test-bagit` verifies the
+fixture plus whole-payload, tag-file, raw-message, and semantic corruption
+cases.
 
-The installed verifier remains dependency-free. JSON control records, TSV,
-SHA-256, SHA-512, RFC 5322 header scanning, DKIM canonicalization, and MBOX
-streaming can all be implemented with the Python standard library and compact
-local code.
+## Security and authenticity
 
-## Required implementation validation
+These hashes detect accidental corruption and inconsistent publication. They
+do not authenticate an archive against an attacker who can replace both data
+and manifests. Authenticity requires a separately rooted signature or digest.
 
-Implementation is incomplete until substantive tests demonstrate:
-
-* deterministic regeneration;
-* whole-MBOX corruption detection;
-* per-message body, stable-header, and attachment corruption detection;
-* equivalence under permitted DKIM header refolding and terminal-body-line
-  changes;
-* inequality when `Delivered-To`, another selected header, or body content
-  changes;
-* equivalence when only `Status`, `X-Status`, or excluded trace headers change;
-* multiple and missing selected headers, including ordered `Delivered-To`;
-* malformed headers, invalid encodings, missing header/body separators, and
-  mixed line endings;
-* MBOX `From ` quoting recovery using raw-message hashes;
-* multiple digest algorithms for one hash-standard version;
-* simultaneous verification of multiple hash-standard versions;
-* rejection of unknown, missing, duplicate, or out-of-order hash codes;
-* interrupted atomic publication and recovery; and
-* exclusive use of the required `.mbox.integrity` filename.
-
-The tests must verify the stated byte and semantic behavior, not merely that a
-sidecar is emitted or parsed.
+The validator rejects absolute paths, traversal, unsafe manifest escapes, and
+symlinks rather than following manifest entries outside the bag. It never
+opens network resources or executes payload content.

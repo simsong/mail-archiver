@@ -1,0 +1,12 @@
+Bag-Type: Mailbag
+Mailbag-Source: mbox
+Mailbag-Specification-Version: 1.0
+Original-Included: False
+Bagging-Timestamp: 2026-08-22T12:00:00+00:00
+Bagging-Date: 2026-08-22
+External-Identifier: mailarchiver-three-message-test-fixture
+Mailbag-Agent: mailarchiver
+Mailbag-Agent-Version: 0.0.0
+Payload-Oxum: 1023.1
+MBOX-Format-Details: mboxrd
+MBOX-Agent: Python mailbox

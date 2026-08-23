@@ -2,20 +2,28 @@
 
 ## Purpose
 
-Create and maintain a cleartext, personal, long-lived archive of all of
-user email.  The archive is canonical; all databases and user
-interfaces are derived from it and may be recreated.
+Create and maintain a cleartext, personal, long-lived archive of all user
+email. The archive is canonical; all databases and user interfaces are derived
+from it and may be recreated. It must support unified search across decades of
+mail, non-destructive redacted derivatives, and reproducible research reports
+from structured metadata.
 
-The system must ingest the existing local archive, Gmail, IMAP accounts, and
-Apple Mail message files.  It must be safe to rerun an ingest operation on
-the same source without duplicating or rescanning messages already archived.
+The system must harvest backup drives and active sources, including Outlook
+`.pst` and `.ost`, Eudora backups, working IMAP client-cache directories, MBOX,
+EML, Maildir, Apple Mail, Gmail exports, and live read-only IMAP accounts. It
+must be safe to rerun an ingest operation on the same source without
+duplicating or rescanning messages already archived.
 
 ## Canonical archive layout
 
-All deliverables reside in one archive directory.
+All deliverables reside in one archive directory. That directory is a native
+BagIt 1.0 bag conforming to Mailbag 1.0. It contains `bagit.txt`,
+`bag-info.txt`, `mailbag.csv` or its required numbered parts,
+`manifest-sha256.txt`, `tagmanifest-sha256.txt`, a top-level `integrity/` tag
+directory, and a `data/mbox/` payload directory.
 
-* Mail is stored only in standard MBOX files, using byte-preserving mboxrd
-  quoting.  Do not retain a per-message EML corpus.
+* Mail is stored only under `data/mbox/` in standard MBOX files, using
+  byte-preserving mboxrd quoting. Do not retain a per-message EML corpus.
 * Normal mail is partitioned by resolved message year and category:
   `{YEAR}-Sent1.mbox` and `{YEAR}-Archive1.mbox`.
 * A file rolls over before it reaches 3.75 GiB.  Later parts are named
@@ -36,12 +44,22 @@ All deliverables reside in one archive directory.
 * `X-Apple-Auto-Saved` messages are excluded entirely.  Their source and
   exclusion reason are retained in the primary database, but no MBOX copy is
   created.
-* Each finished MBOX has an adjacent `.mbox.integrity` file in the versioned
-  hybrid format specified by [INTEGRITY_CONTROLS.md](INTEGRITY_CONTROLS.md).
+* Each finished `data/mbox/NAME.mbox` has one
+  `integrity/NAME.mbox.integrity` BagIt tag in the versioned hybrid format
+  specified by [INTEGRITY_CONTROLS.md](INTEGRITY_CONTROLS.md).
   Its JSON control records declare `h1` as SHA-256 over the complete MBOX,
   `h2` as SHA-256 over each recovered original RFC 5322 message, and `h3` as
   SHA-256 over semantic-message standard version 1. Its TSV region records
   ordered message identifiers and tagged `h2:` and `h3:` digests.
+* `manifest-sha256.txt` lists every payload file exactly once. Its MBOX digest
+  equals that file's `h1` digest. `tagmanifest-sha256.txt` hashes the BagIt and
+  Mailbag metadata, every integrity tag, the payload manifest, and the
+  installed validator; it is published last.
+* `mailbag.csv` has one row per canonical message and uses a stable,
+  case-insensitively unique Mailbag Message ID derived from the normalized
+  Message-ID and raw SHA-256. It records the containing MBOX and MIME attachment
+  count. Archives over 100,000 messages use the Mailbag-required numbered CSV
+  parts.
 * A zero-byte source message retains the SHA-256 identity of empty bytes. Direct
   retrieval removes only the single separator newline necessarily introduced
   by standard MBOX encoding, and only when that exact empty digest is expected.
@@ -49,6 +67,10 @@ All deliverables reside in one archive directory.
   source `From ` line from an original literal `>From ` line, direct retrieval
   considers the bounded possible interpretations and accepts only the one whose
   SHA-256 matches the catalogued original bytes.
+
+`archive.sqlite3` and the disposable `search.sqlite3` are operational BagIt
+tag files but are deliberately not listed in the tag manifest; their live
+SQLite state is outside the portable preservation checkpoint.
 
 The archive lives on the encrypted laptop filesystem.  BorgBackup and
 Backblaze provide independent backup; archive-internal encryption is not a
@@ -106,14 +128,15 @@ requirement.
   that wait and shows its increasing startup elapsed time instead of a stale
   source-file status.
 * Control-C is a graceful stop: close scanner and MBOX resources, commit
-  completed messages and observations, refresh integrity files, report interruption,
+  completed messages and observations, publish a complete BagIt/Mailbag
+  checkpoint, report interruption,
   print the standard archive report for the completed partial run, and return
   exit status 130 without a traceback.  An `ENOSPC` MBOX append
   must be rolled back to the prior file size where possible, reported, and
   stopped without silently treating the message as archived.
 * Every ingest run records its completion time, result, and failure detail.
   An unexpected parser failure drains earlier queued messages, closes
-  resources, refreshes integrity files for committed MBOX changes, and leaves a
+  resources, refreshes the BagIt/Mailbag checkpoint for committed MBOX changes, and leaves a
   rerunnable error observation containing the source offset and raw SHA-256.
 * Before each MBOX append, ingest durably records the target, prior length,
   message identity, and whether the target already existed. Catalog changes
@@ -291,6 +314,44 @@ the command fails before reading or writing an archive.
 * IMAP ingest supports TLS and authenticated account configuration, records
   account/folder/UID provenance, and retrieves RFC 5322 bytes without marking
   messages read or modifying the remote mailbox.
+* Outlook `.pst` and `.ost` ingest does not require Outlook to modify or export
+  the source. The adapter records the parser/converter and version, enumerates
+  every encountered store item, preserves folder and item identifiers as
+  provenance, and reports corrupt, deleted, partial, or unsupported records
+  rather than silently omitting them.
+* Eudora ingest recognizes mailbox files together with their table-of-contents,
+  attachment, and embedded-content conventions. It records which companion
+  files were present and never treats an absent or stale index as proof that a
+  message or attachment does not exist.
+* Working IMAP client-cache ingest is an offline, read-only source distinct from
+  live IMAP. It recognizes supported cache/profile layouts, records account and
+  folder context when recoverable, and explicitly reports placeholders,
+  evicted bodies, partial downloads, and detached parts. It does not contact a
+  server unless the user separately configures and authorizes live IMAP ingest.
+* Every source adapter emits original RFC 5322 bytes where the source contains
+  them. When a proprietary store requires reconstruction or conversion, the
+  observation records that fact and the responsible tool/version; reconstructed
+  output is never represented as byte-identical to a source RFC 5322 record.
+
+## Redaction and research derivatives
+
+* Redaction never edits canonical MBOX files. A redacted export identifies its
+  source message hashes, policy and policy version, selected fields or byte
+  ranges, reasons, operator, and creation time. Verification distinguishes an
+  authorized transformation from corruption while preventing removed content
+  from remaining in the public derivative or its ordinary indexes.
+* Redaction policies can address headers, addresses, body passages, MIME parts,
+  attachments, and derived entities. Decisions can be reviewed before export;
+  access to the canonical-to-derivative audit mapping is controlled separately
+  from access to the redacted corpus.
+* The structured research database is derived and reproducible. It supports at
+  least correspondents and aliases, dates, threads, message and attachment
+  relationships, source provenance, and parse defects. Future entity and topic
+  extraction records the extractor and version so reports can be reproduced or
+  recomputed without changing canonical mail.
+* Research reports state their corpus selection, exclusion/redaction policy,
+  data and extractor versions, and known incompleteness. Derived facts never
+  replace original headers or message bytes.
 
 ## Sorting, validation, and recovery
 
@@ -300,15 +361,16 @@ the command fails before reading or writing an archive.
   prior file as a backup.
 * The replacement and backup are parsed end-to-end.  Their unordered sets of
   `(Message-ID, SHA-256)` must match exactly before the backup is deleted.
-* The MBOX byte hash, integrity files, locations, and metadata database updates are
-  published transactionally.  Interrupted runs leave either the old verified
-  archive or a recoverable temporary/backup pair; they never publish a partial
-  archive as valid.
+* The MBOX byte hash, integrity tags, Mailbag CSV, payload manifest, tag
+  manifest, locations, and metadata database updates are published in the
+  documented checkpoint order. Interrupted runs leave either the preceding
+  verified checkpoint or a detectably invalid, recoverable partial update;
+  they never report a partial archive as valid.
 * Ingest installs `verify_mail_archive.py` in the archive. This single-file,
-  standard-library-only tool is strictly read-only: it parses only the current
-  `.mbox.integrity` format and verifies every declared complete-MBOX, raw-message,
-  and semantic-message digest without consulting SQLite. It exits nonzero after
-  reporting any mismatch.
+  standard-library-only tool is strictly read-only: it verifies BagIt payload
+  and tag manifests, required Mailbag structure, and every declared
+  complete-MBOX, raw-message, and semantic-message digest without consulting
+  SQLite. It exits nonzero after reporting any mismatch.
 * A future integrated `verify` command is strictly read-only: it reparses every canonical MBOX,
   checks integrity files, offsets, and database rows, and reports duplicate-policy
   violations.
@@ -327,4 +389,11 @@ No source mailbox is modified by this program.
 The current catalog schema is created only for a fresh archive and is versioned.
 An unversioned or incompatible catalog is rejected. A fresh catalog is also
 refused beside existing canonical MBOX or `.mbox.integrity` output because that
-would defeat deduplication.
+would defeat deduplication. Those outputs are detected in `data/mbox/` and
+`integrity/`; unsupported root-level legacy output is never imported.
+
+The live appendable archive itself is the Mailbag interchange and preservation
+package. A redacted or otherwise restricted release is a separate BagIt bag
+with its own payload, manifests, Mailbag identifiers, and audit mapping. PDF
+and WARC representations remain opt-in, sandboxed publication derivatives and
+must not make remote requests without explicit authorization.
