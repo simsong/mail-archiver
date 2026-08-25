@@ -48,7 +48,7 @@ from .sources import (
     source_files,
     source_messages,
 )
-from .standalone_verify import install_archive_verifier
+from .standalone_verify import install_archive_verifier, semantic_bytes
 
 DEFAULT_REPORT_TOP = 10
 PROGRESS_REFRESH_SECONDS = 0.25
@@ -229,6 +229,8 @@ def ingest(args: argparse.Namespace) -> None:
     catalog.commit()
     boxes: dict[Path, mailbox.mbox] = {}
     prior_dates: dict[Path, datetime] = {}
+    source_file_pks: dict[Path, int] = {}
+    pending_duplicate_observations: dict[tuple[str, str], list[int]] = {}
     pending_identities: set[tuple[str, str]] = set()
     progress = ProgressReporter()
     succeeded = False
@@ -237,31 +239,60 @@ def ingest(args: argparse.Namespace) -> None:
     failure_detail: str | None = None
     progress.start()
 
-    def observe(source: SourceMessage, disposition: str, detail: str, sha256: str, message_pk: int | None = None) -> None:
+    def source_volume_pk(source: SourceFile) -> int:
+        now = datetime.now(timezone.utc).isoformat()
         catalog.execute(
-            "INSERT INTO observations(run_pk, message_pk, source_path, source_offset, source_sha256, disposition, detail) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (run_pk, message_pk, str(source.path), source.source_offset, sha256, disposition, detail),
+            "INSERT INTO source_volumes(identity_json, metadata_json, first_observed_at, last_observed_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(identity_json) DO UPDATE SET metadata_json = excluded.metadata_json, last_observed_at = excluded.last_observed_at",
+            (source.volume.identity_json, source.volume.metadata_json, now, now),
         )
+        row = catalog.execute(
+            "SELECT source_volume_pk FROM source_volumes WHERE identity_json = ?", (source.volume.identity_json,)
+        ).fetchone()
+        assert row is not None
+        return int(row[0])
+
+    def register_source_file(source: SourceFile) -> None:
+        volume_pk = source_volume_pk(source)
+        row = catalog.execute(
+            "INSERT INTO source_files(source_volume_pk, source_path, path_kind, source_kind, modified_at_ns, byte_length) "
+            "VALUES (?, ?, 'file', ?, ?, ?) ON CONFLICT(source_volume_pk, source_path) DO UPDATE SET "
+            "source_kind = excluded.source_kind, modified_at_ns = excluded.modified_at_ns, byte_length = excluded.byte_length "
+            "RETURNING source_file_pk",
+            (volume_pk, source.source_path, source.kind, source.modified_at_ns, source.byte_length),
+        ).fetchone()
+        assert row is not None
+        source_file_pks[source.path] = int(row[0])
+
+    def observe(source: SourceMessage, disposition: str, detail: str, sha256: str, message_pk: int | None = None) -> int:
+        source_file_pk = source_file_pks[source.path]
+        cursor = catalog.execute(
+            "INSERT INTO observations(run_pk, message_pk, source_file_pk, source_offset, raw_sha256, semantic_sha256, disposition, detail) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_pk, message_pk, source_file_pk, source.source_offset, sha256,
+             hashlib.sha256(semantic_bytes(source.raw)).hexdigest(), disposition, detail),
+        )
+        return int(cursor.lastrowid)
 
     def checkpoint(source: SourceFile, sha256: str) -> None:
         current = source.path.stat()
         if current.st_size != source.byte_length or current.st_mtime_ns != source.modified_at_ns:
             raise RuntimeError(f"source changed during ingest: {source.path}")
         catalog.execute(
-            "INSERT INTO source_files(source_path, modified_at_ns, byte_length, sha256, checked_at, completed_run) "
-            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source_path) DO UPDATE SET "
-            "modified_at_ns = excluded.modified_at_ns, byte_length = excluded.byte_length, sha256 = excluded.sha256, "
-            "checked_at = excluded.checked_at, completed_run = excluded.completed_run",
-            (str(source.path), source.modified_at_ns, source.byte_length, sha256, datetime.now(timezone.utc).isoformat(), run_pk),
+            "UPDATE source_files SET modified_at_ns = ?, byte_length = ?, sha256 = ?, checked_at = ?, completed_run = ? "
+            "WHERE source_file_pk = ?",
+            (source.modified_at_ns, source.byte_length, sha256, datetime.now(timezone.utc).isoformat(), run_pk,
+             source_file_pks[source.path]),
         )
         catalog.commit()
         progress.record_file_complete()
 
     def plan_source(source: SourceFile) -> SourcePlan:
         progress.record_file(source.path, 0, source.byte_length)
+        volume_pk = source_volume_pk(source)
         prior = catalog.execute(
-            "SELECT byte_length, sha256 FROM source_files WHERE source_path = ?", (str(source.path),)
+            "SELECT byte_length, sha256 FROM source_files WHERE source_volume_pk = ? AND source_path = ?",
+            (volume_pk, source.source_path),
         ).fetchone()
         report_hash = lambda done, _total: progress.record_file(source.path, done, source.byte_length)
         if prior is None:
@@ -278,7 +309,7 @@ def ingest(args: argparse.Namespace) -> None:
             return SourcePlan(source=source, sha256=hashes.sha256, start_offset=start_offset)
         return SourcePlan(source=source, sha256=sha256_file(source.path, progress=report_hash))
 
-    def archive_scanned(candidate: PendingScan, infected: bool) -> None:
+    def archive_scanned(candidate: PendingScan, infected: bool) -> int:
         raw, parsed = candidate.source.raw, candidate.parsed
         category = "INFECTED" if infected else ("Sent" if any(token in parsed.sender.lower() for token in owners) else "Archive")
         destination = mbox_path(archive, mailbox_name(parsed, category))
@@ -332,6 +363,7 @@ def ingest(args: argparse.Namespace) -> None:
         progress.record_disposition("archived")
         if category == "INFECTED":
             progress.record_disposition("infected")
+        return int(message_pk)
 
     try:
         scanner: ClamScanner | None = None
@@ -341,6 +373,8 @@ def ingest(args: argparse.Namespace) -> None:
                 for source_file in source_files(Path(root)):
                     progress.set_phase("checking sources")
                     plan = plan_source(source_file)
+                    register_source_file(source_file)
+                    catalog.commit()
                     if plan.skip:
                         assert plan.sha256 is not None
                         checkpoint(source_file, plan.sha256)
@@ -356,15 +390,22 @@ def ingest(args: argparse.Namespace) -> None:
                     def drain_pending() -> None:
                         while pending:
                             completed, future = pending.popleft()
-                            archive_scanned(completed, future.result())
-                            pending_identities.remove((completed.parsed.message_id, completed.parsed.sha256))
+                            identity = (completed.parsed.message_id, completed.parsed.sha256)
+                            message_pk = archive_scanned(completed, future.result())
+                            catalog.executemany(
+                                "UPDATE observations SET message_pk = ? WHERE observation_pk = ?",
+                                ((message_pk, observation_pk) for observation_pk in pending_duplicate_observations.pop(identity, [])),
+                            )
+                            catalog.commit()
+                            pending_identities.remove(identity)
 
                     path = plan.source.path
                     if plan.start_offset:
                         prior = catalog.execute(
                             "SELECT messages.date_utc FROM observations JOIN messages USING (message_pk) "
-                            "WHERE source_path = ? AND source_offset < ? ORDER BY source_offset DESC LIMIT 1",
-                            (str(path), plan.start_offset),
+                            "JOIN source_files USING (source_file_pk) WHERE source_file_pk = ? AND source_offset < ? "
+                            "ORDER BY source_offset DESC LIMIT 1",
+                            (source_file_pks[path], plan.start_offset),
                         ).fetchone()
                         if prior is not None:
                             prior_dates[path] = datetime.fromisoformat(prior[0])
@@ -398,7 +439,9 @@ def ingest(args: argparse.Namespace) -> None:
                                     "INSERT OR IGNORE INTO metadata_defects(message_pk, field, detail) VALUES (?, ?, ?)",
                                     ((message_pk, defect.field, defect.detail) for defect in parsed.defects),
                                 )
-                            observe(source, "duplicate", detail, parsed.sha256, message_pk)
+                            observation_pk = observe(source, "duplicate", detail, parsed.sha256, message_pk)
+                            if message_pk is None:
+                                pending_duplicate_observations.setdefault(identity, []).append(observation_pk)
                             catalog.commit()
                             progress.record_disposition("duplicate")
                             continue
@@ -407,8 +450,14 @@ def ingest(args: argparse.Namespace) -> None:
                         pending.append((candidate, workers.submit(scanner.infected, raw)))
                         if len(pending) >= args.workers * 2:
                             completed, future = pending.popleft()
-                            archive_scanned(completed, future.result())
-                            pending_identities.remove((completed.parsed.message_id, completed.parsed.sha256))
+                            identity = (completed.parsed.message_id, completed.parsed.sha256)
+                            message_pk = archive_scanned(completed, future.result())
+                            catalog.executemany(
+                                "UPDATE observations SET message_pk = ? WHERE observation_pk = ?",
+                                ((message_pk, observation_pk) for observation_pk in pending_duplicate_observations.pop(identity, [])),
+                            )
+                            catalog.commit()
+                            pending_identities.remove(identity)
                     drain_pending()
                     progress.set_phase("checking sources")
                     source_sha256 = plan.sha256 or sha256_file(
@@ -475,7 +524,7 @@ def ingest(args: argparse.Namespace) -> None:
 def review(args: argparse.Namespace) -> None:
     catalog = sqlite3.connect(Path(args.archive) / "archive.sqlite3")
     try:
-        query = "SELECT disposition, detail, source_path FROM observations"
+        query = "SELECT observations.disposition, observations.detail, source_files.source_path FROM observations JOIN source_files USING (source_file_pk)"
         parameters: tuple[int, ...] = () if args.run is None else (args.run,)
         if args.run is not None:
             query += " WHERE run_pk = ?"

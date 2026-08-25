@@ -2,26 +2,34 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def create_catalog(path: Path) -> sqlite3.Connection:
     database = sqlite3.connect(path)
+    database.execute("PRAGMA foreign_keys = ON")
     tables = {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     if tables and "schema_info" not in tables:
         database.close()
         raise RuntimeError("unsupported unversioned archive database; use a new empty archive directory")
-    if "schema_info" in tables:
-        version = database.execute("SELECT version FROM schema_info").fetchone()
-        if version != (SCHEMA_VERSION,):
-            database.close()
-            raise RuntimeError(f"unsupported archive database schema {version}; expected {SCHEMA_VERSION}")
+    version = database.execute("SELECT version FROM schema_info").fetchone() if "schema_info" in tables else None
+    if version == (1,):
+        _migrate_v1(database)
+    elif version is not None and version != (SCHEMA_VERSION,):
+        database.close()
+        raise RuntimeError(f"unsupported archive database schema {version}; expected {SCHEMA_VERSION}")
+    _create_schema(database)
+    return database
+
+
+def _create_schema(database: sqlite3.Connection) -> None:
     database.executescript(
         f"""
-        PRAGMA foreign_keys = ON;
         CREATE TABLE IF NOT EXISTS schema_info (version INTEGER NOT NULL);
         INSERT INTO schema_info(version) SELECT {SCHEMA_VERSION} WHERE NOT EXISTS (SELECT 1 FROM schema_info);
         CREATE TABLE IF NOT EXISTS ingest_runs (
@@ -37,19 +45,31 @@ def create_catalog(path: Path) -> sqlite3.Connection:
             subject TEXT NOT NULL, date_utc TEXT NOT NULL, date_source TEXT NOT NULL,
             category TEXT NOT NULL, UNIQUE(message_id_normalized, sha256)
         );
-        CREATE TABLE IF NOT EXISTS observations (
-            observation_pk INTEGER PRIMARY KEY, run_pk INTEGER NOT NULL REFERENCES ingest_runs(run_pk),
-            message_pk INTEGER REFERENCES messages(message_pk), source_path TEXT NOT NULL,
-            source_offset INTEGER NOT NULL DEFAULT 0, source_sha256 TEXT NOT NULL DEFAULT '',
-            disposition TEXT NOT NULL, detail TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS source_volumes (
+            source_volume_pk INTEGER PRIMARY KEY,
+            identity_json TEXT NOT NULL UNIQUE,
+            metadata_json TEXT NOT NULL,
+            first_observed_at TEXT NOT NULL,
+            last_observed_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS source_files (
-            source_path TEXT PRIMARY KEY,
-            modified_at_ns INTEGER NOT NULL,
-            byte_length INTEGER NOT NULL,
-            sha256 TEXT NOT NULL,
-            checked_at TEXT NOT NULL,
-            completed_run INTEGER NOT NULL REFERENCES ingest_runs(run_pk)
+            source_file_pk INTEGER PRIMARY KEY,
+            source_volume_pk INTEGER NOT NULL REFERENCES source_volumes(source_volume_pk),
+            source_path TEXT NOT NULL,
+            path_kind TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            modified_at_ns INTEGER,
+            byte_length INTEGER,
+            sha256 TEXT,
+            checked_at TEXT,
+            completed_run INTEGER REFERENCES ingest_runs(run_pk),
+            UNIQUE(source_volume_pk, source_path)
+        );
+        CREATE TABLE IF NOT EXISTS observations (
+            observation_pk INTEGER PRIMARY KEY, run_pk INTEGER NOT NULL REFERENCES ingest_runs(run_pk),
+            message_pk INTEGER REFERENCES messages(message_pk), source_file_pk INTEGER NOT NULL REFERENCES source_files(source_file_pk),
+            source_offset INTEGER NOT NULL DEFAULT 0, raw_sha256 TEXT NOT NULL DEFAULT '', semantic_sha256 TEXT,
+            disposition TEXT NOT NULL, detail TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS metadata_defects (
             message_pk INTEGER NOT NULL REFERENCES messages(message_pk),
@@ -75,16 +95,83 @@ def create_catalog(path: Path) -> sqlite3.Connection:
             byte_offset INTEGER NOT NULL,
             byte_length INTEGER NOT NULL
         );
-        """
-    )
-    database.executescript(
-        """
         CREATE INDEX IF NOT EXISTS messages_sender_address_pk ON messages(sender_address_pk);
         CREATE INDEX IF NOT EXISTS recipients_address_pk ON recipients(address_pk);
         CREATE INDEX IF NOT EXISTS locations_generation_pk ON locations(generation_pk);
+        CREATE INDEX IF NOT EXISTS source_files_volume_path ON source_files(source_volume_pk, source_path);
+        CREATE INDEX IF NOT EXISTS observations_message_pk ON observations(message_pk);
+        CREATE INDEX IF NOT EXISTS observations_raw_sha256 ON observations(raw_sha256);
+        CREATE INDEX IF NOT EXISTS observations_semantic_sha256 ON observations(semantic_sha256);
         """
     )
-    return database
+
+
+def _migrate_v1(database: sqlite3.Connection) -> None:
+    """Preserve legacy source paths while replacing path strings with normalized relations."""
+    old_files = list(database.execute(
+        "SELECT source_path, modified_at_ns, byte_length, sha256, checked_at, completed_run FROM source_files"
+    ))
+    old_observations = list(database.execute(
+        "SELECT observation_pk, run_pk, message_pk, source_path, source_offset, source_sha256, disposition, detail FROM observations"
+    ))
+    database.commit()
+    database.execute("PRAGMA foreign_keys = OFF")
+    try:
+        database.execute("BEGIN")
+        database.execute("ALTER TABLE source_files RENAME TO source_files_v1")
+        database.execute("ALTER TABLE observations RENAME TO observations_v1")
+        _create_schema(database)
+        source_file_pks: dict[str, int] = {}
+        file_rows = {str(row[0]): row[1:] for row in old_files}
+        paths = sorted({str(row[0]) for row in old_files} | {str(row[3]) for row in old_observations})
+        for source_path in paths:
+            volume_pk, relative = _legacy_volume(database, source_path)
+            values = file_rows.get(source_path, (None, None, None, None, None))
+            cursor = database.execute(
+                "INSERT INTO source_files(source_volume_pk, source_path, path_kind, source_kind, modified_at_ns, byte_length, sha256, checked_at, completed_run) "
+                "VALUES (?, ?, 'file', 'legacy', ?, ?, ?, ?, ?)",
+                (volume_pk, relative, *values),
+            )
+            source_file_pks[source_path] = int(cursor.lastrowid)
+        database.executemany(
+            "INSERT INTO observations(observation_pk, run_pk, message_pk, source_file_pk, source_offset, raw_sha256, semantic_sha256, disposition, detail) "
+            "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+            (
+                (row[0], row[1], row[2], source_file_pks[str(row[3])], row[4], row[5], row[6], row[7])
+                for row in old_observations
+            ),
+        )
+        database.execute("DROP TABLE observations_v1")
+        database.execute("DROP TABLE source_files_v1")
+        database.execute("UPDATE schema_info SET version = ?", (SCHEMA_VERSION,))
+        database.commit()
+    except BaseException:
+        database.rollback()
+        raise
+    finally:
+        database.execute("PRAGMA foreign_keys = ON")
+
+
+def _legacy_volume(database: sqlite3.Connection, source_path: str) -> tuple[int, str]:
+    path = Path(source_path)
+    parts = path.parts
+    mount = Path(*parts[:3]) if len(parts) >= 3 and parts[1] == "Volumes" else Path(path.anchor or "/")
+    relative = path.relative_to(mount).as_posix() if path.is_absolute() else source_path
+    identity = _json({"kind": "legacy-local-volume", "mount_path": str(mount)})
+    metadata = _json({"format": "mailarchiver/source-volume/v1", "kind": "legacy-local-volume", "current_mount_path": str(mount)})
+    now = datetime.now(timezone.utc).isoformat()
+    database.execute(
+        "INSERT INTO source_volumes(identity_json, metadata_json, first_observed_at, last_observed_at) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(identity_json) DO NOTHING",
+        (identity, metadata, now, now),
+    )
+    row = database.execute("SELECT source_volume_pk FROM source_volumes WHERE identity_json = ?", (identity,)).fetchone()
+    assert row is not None
+    return int(row[0]), relative
+
+
+def _json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
 def create_search(path: Path) -> sqlite3.Connection:

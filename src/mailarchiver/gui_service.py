@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import sqlite3
@@ -80,6 +81,14 @@ class AttachmentInfo(BaseModel):
     risky: bool = False
 
 
+class SourceLocation(BaseModel):
+    volume: str
+    path: str
+    offset: int
+    raw_sha256: str
+    semantic_sha256: str | None
+
+
 class MessageView(BaseModel):
     message_pk: int
     subject: str
@@ -87,6 +96,8 @@ class MessageView(BaseModel):
     body_parts: list[BodyPart]
     preferred_part_id: int
     attachments: list[AttachmentInfo]
+    archive_path: str | None
+    source_locations: list[SourceLocation]
 
 
 class PartContent(BaseModel):
@@ -188,6 +199,7 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
     body_parts.append(BodyPart(part_id=RAW_PART_ID, content_type="message/rfc822", label="Raw Source"))
     html_part = next((part.part_id for part in body_parts if part.content_type == "text/html"), None)
     text_part = next((part.part_id for part in body_parts if part.content_type == "text/plain"), RAW_PART_ID)
+    archive_path, source_locations = message_locations(archive, message_pk)
     return MessageView(
         message_pk=message_pk,
         subject=decoded_header(str(message.get("Subject", "(no subject)"))),
@@ -195,7 +207,48 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
         body_parts=body_parts,
         preferred_part_id=html_part if html_part is not None else text_part,
         attachments=attachments,
+        archive_path=archive_path,
+        source_locations=source_locations,
     )
+
+
+def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[SourceLocation]]:
+    """Return source discoveries and the canonical archive mailbox location."""
+    database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
+    try:
+        archive_row = database.execute(
+            "SELECT 'data/mbox/' || mbox_generations.filename || ':' || locations.byte_offset "
+            "FROM locations JOIN mbox_generations USING (generation_pk) WHERE locations.message_pk = ?",
+            (message_pk,),
+        ).fetchone()
+        rows = database.execute(
+            "SELECT source_volumes.metadata_json, source_files.source_path, observations.source_offset, "
+            "observations.raw_sha256, observations.semantic_sha256 FROM observations "
+            "JOIN source_files USING (source_file_pk) JOIN source_volumes USING (source_volume_pk) "
+            "WHERE observations.message_pk = ? ORDER BY observations.observation_pk",
+            (message_pk,),
+        )
+        return (
+            None if archive_row is None else str(archive_row[0]),
+            [
+                SourceLocation(
+                    volume=_volume_label(metadata_json), path=source_path, offset=source_offset,
+                    raw_sha256=raw_sha256, semantic_sha256=semantic_sha256,
+                )
+                for metadata_json, source_path, source_offset, raw_sha256, semantic_sha256 in rows
+            ],
+        )
+    finally:
+        database.close()
+
+
+def _volume_label(metadata_json: str) -> str:
+    metadata = json.loads(metadata_json)
+    if not isinstance(metadata, dict):
+        return "Unknown source volume"
+    label = metadata.get("volume_label")
+    mount_path = metadata.get("current_mount_path")
+    return str(label or mount_path or "Unknown source volume")
 
 
 def render_part(archive: Path, message_pk: int, part_id: int, allow_remote: bool = False) -> PartContent:

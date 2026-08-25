@@ -1,4 +1,4 @@
-.PHONY: check fixture-bagit gui gui-smoke pylint run search summary-smoke test test-bagit test-gui test-mailsearch test-headers verify install-mac install-linux install-tika
+.PHONY: check fixture-bagit gui gui-smoke pylint run search summary-smoke test test-bagit test-gui test-mailsearch test-headers test-provenance verify install-mac install-linux install-tika
 
 TIKA_VERSION ?= 3.3.2
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
@@ -44,6 +44,9 @@ test-mailsearch:
 
 test-gui:
 	uv run pytest -q tests/test_gui_service.py
+
+test-provenance:
+	uv run pytest -q tests/test_catalog.py tests/test_sources.py
 
 test-headers:
 	uv run pytest -q tests/test_message.py tests/test_search.py
