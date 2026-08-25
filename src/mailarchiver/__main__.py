@@ -230,6 +230,7 @@ def ingest(args: argparse.Namespace) -> None:
     boxes: dict[Path, mailbox.mbox] = {}
     prior_dates: dict[Path, datetime] = {}
     source_file_pks: dict[Path, int] = {}
+    source_volume_pks: dict[str, int] = {}
     pending_duplicate_observations: dict[tuple[str, str], list[int]] = {}
     pending_identities: set[tuple[str, str]] = set()
     progress = ProgressReporter()
@@ -240,6 +241,9 @@ def ingest(args: argparse.Namespace) -> None:
     progress.start()
 
     def source_volume_pk(source: SourceFile) -> int:
+        cached = source_volume_pks.get(source.volume.identity_json)
+        if cached is not None:
+            return cached
         now = datetime.now(timezone.utc).isoformat()
         catalog.execute(
             "INSERT INTO source_volumes(identity_json, metadata_json, first_observed_at, last_observed_at) VALUES (?, ?, ?, ?) "
@@ -250,7 +254,9 @@ def ingest(args: argparse.Namespace) -> None:
             "SELECT source_volume_pk FROM source_volumes WHERE identity_json = ?", (source.volume.identity_json,)
         ).fetchone()
         assert row is not None
-        return int(row[0])
+        volume_pk = int(row[0])
+        source_volume_pks[source.volume.identity_json] = volume_pk
+        return volume_pk
 
     def register_source_file(source: SourceFile) -> None:
         volume_pk = source_volume_pk(source)

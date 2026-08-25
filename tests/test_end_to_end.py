@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import mailbox
 import os
 import signal
@@ -15,6 +16,7 @@ from shutil import copy, copytree
 import pytest
 
 from mailarchiver.layout import mbox_directory
+from mailarchiver.source_volume import METADATA_CURRENT_MOUNT_PATH
 from mailarchiver.standalone_verify import semantic_bytes
 
 
@@ -75,6 +77,22 @@ def assert_success(result: subprocess.CompletedProcess[str]) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def catalog_source_path(catalog: sqlite3.Connection, path: Path) -> str:
+    """Return the recorded volume-relative path that reconstructs *path*."""
+    resolved = path.resolve()
+    matches = []
+    for source_path, metadata_json in catalog.execute(
+        "SELECT source_files.source_path, source_volumes.metadata_json FROM source_files "
+        "JOIN source_volumes USING (source_volume_pk)"
+    ):
+        metadata = json.loads(metadata_json)
+        mount_path = Path(metadata[METADATA_CURRENT_MOUNT_PATH])
+        if (mount_path / source_path).resolve() == resolved:
+            matches.append(source_path)
+    assert len(matches) == 1
+    return str(matches[0])
+
+
 def test_ingest_routes_preserves_and_indexes_messages(
     source_mail: tuple[Path, dict[str, bytes]], tmp_path: Path
 ) -> None:
@@ -132,7 +150,7 @@ def test_ingest_routes_preserves_and_indexes_messages(
         for path in source.rglob("*"):
             if path.is_file():
                 stat = path.stat()
-                assert fingerprints[path.resolve().relative_to(source.anchor).as_posix()] == (
+                assert fingerprints[catalog_source_path(catalog, path)] == (
                     stat.st_mtime_ns,
                     stat.st_size,
                     hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -250,7 +268,7 @@ def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, d
         assert catalog.execute("SELECT count(*) FROM source_files WHERE completed_run = 2").fetchone() == (4,)
         assert catalog.execute(
             "SELECT modified_at_ns FROM source_files WHERE source_path = ?",
-            (touched.resolve().relative_to(touched.anchor).as_posix(),),
+            (catalog_source_path(catalog, touched),),
         ).fetchone() == (touched.stat().st_mtime_ns,)
     finally:
         catalog.close()
@@ -477,7 +495,7 @@ def test_parser_failure_records_source_identity_and_failed_run(tmp_path: Path) -
             "SELECT source_files.source_path, source_offset, raw_sha256, disposition, detail FROM observations "
             "JOIN source_files USING (source_file_pk)"
         ).fetchone() == (
-            source.resolve().relative_to(source.anchor).as_posix(), 0, digest, "error",
+            catalog_source_path(catalog, source), 0, digest, "error",
             f"ValueError: no date or year path fallback for {source}",
         )
     finally:
