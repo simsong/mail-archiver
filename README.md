@@ -325,6 +325,9 @@ small platform adapters and testing before Windows is supported.
 
 ## Test
 
+The full test architecture and its explicit browser/Cocoa coverage boundary are
+documented in [`doc/END_TO_END_TESTING.md`](doc/END_TO_END_TESTING.md).
+
 The ordinary suite uses static MBOX and `.emlx` fixtures. Antivirus tests build
 the EICAR signature from fragments only inside a pytest temporary directory,
 ingest it with the real on-demand ClamAV daemon, and immediately delete the

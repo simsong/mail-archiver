@@ -575,6 +575,10 @@ provenance reports can declare how they were produced.
 
 ## Validation and tests
 
+[`END_TO_END_TESTING.md`](END_TO_END_TESTING.md) defines the archive-lifecycle,
+browser-acceptance, native-WKWebView, and optional XCUITest layers, including
+which layer owns macOS menu-bar verification.
+
 Tests use small, hand-authored MBOX and EMLX fixtures covering mboxrd quoting,
 bad dates, missing IDs, same-ID/different-content messages, autosaves,
 duplicate source trees, interruption recovery, and infected routing. The EICAR
