@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import os
 import mailbox
 import queue
@@ -44,12 +45,14 @@ from .search import QUARANTINE_MAILBOX, SEARCH_CATEGORIES, index_message, index_
 from .sources import (
     IncompleteAppleMailMessageError,
     SourceFile,
+    SourceInventory,
     SourceMessage,
     SourcePlan,
     has_mbox_append_boundary,
     sha256_file,
     sha256_file_with_prefix,
     source_files,
+    source_inventory,
     source_messages,
 )
 from .standalone_verify import install_archive_verifier, semantic_bytes
@@ -57,6 +60,9 @@ from .standalone_verify import install_archive_verifier, semantic_bytes
 DEFAULT_REPORT_TOP = 10
 PROGRESS_REFRESH_SECONDS = 0.25
 CLAMAV_START_PHASE = "waiting for ClamAV startup"
+DISCOVERY_PHASE = "discovering sources"
+TOP_LINE_STYLE = "\x1b[37;44m"
+ANSI_RESET = "\x1b[0m"
 WorkerItem = TypeVar("WorkerItem")
 
 
@@ -134,10 +140,69 @@ class ProgressState(BaseModel):
     latest_date: datetime | None = None
     current_year: int | None = None
     current_year_messages: int = 0
+    source_files_total: int = 0
+    source_bytes_completed: int = 0
+    source_bytes_total: int = 0
+    inventory_complete: bool = False
+    byte_progress_started_monotonic: float | None = None
     peak_active_files: int = 0
     workers: list[WorkerProgress] = Field(default_factory=list)
     counts: IngestCounts = Field(default_factory=IngestCounts)
     years: list[YearProgress] = Field(default_factory=list)
+
+
+class OverallProgress(BaseModel):
+    bytes_done: int
+    bytes_total: int
+    percent: float
+    eta: str
+
+
+def formatted_bytes(value: int) -> str:
+    amount = float(value)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024 or unit == "TiB":
+            return f"{int(amount)} B" if unit == "B" else f"{amount:.1f} {unit}"
+        amount /= 1024
+    raise AssertionError("unreachable")
+
+
+def formatted_duration(seconds: float) -> str:
+    remaining = max(0, math.ceil(seconds))
+    hours, remaining = divmod(remaining, 3600)
+    minutes, seconds = divmod(remaining, 60)
+    fields = ([f"{hours}h"] if hours else []) + ([f"{minutes}m"] if hours or minutes else []) + [f"{seconds}s"]
+    return " ".join(fields)
+
+
+def overall_progress(state: ProgressState, now: float) -> OverallProgress:
+    active_bytes = sum(min(worker.bytes_done, worker.bytes_total) for worker in state.workers)
+    done = min(state.source_bytes_completed + active_bytes, state.source_bytes_total)
+    total = state.source_bytes_total
+    percent = 0.0 if not state.inventory_complete else 100.0 if total == 0 else 100 * done / total
+    if not state.inventory_complete:
+        eta = "calculating"
+    elif total == 0:
+        eta = "0s" if state.files_processed >= state.source_files_total else "finalizing"
+    elif done == 0 or state.byte_progress_started_monotonic is None:
+        eta = "calculating"
+    elif done >= total:
+        eta = "0s" if state.files_processed >= state.source_files_total else "finalizing"
+    else:
+        elapsed = max(now - state.byte_progress_started_monotonic, 0.001)
+        eta = formatted_duration((total - done) * elapsed / done)
+    return OverallProgress(bytes_done=done, bytes_total=total, percent=percent, eta=eta)
+
+
+def overall_line(state: ProgressState, now: float) -> str:
+    if not state.inventory_complete:
+        return f"Overall: discovering  {state.source_files_total:,} files  {formatted_bytes(state.source_bytes_total)} found"
+    progress = overall_progress(state, now)
+    return (
+        f"Overall: {progress.percent:5.1f}%  {formatted_bytes(progress.bytes_done)} / "
+        f"{formatted_bytes(progress.bytes_total)}  Files {state.files_processed:,} / "
+        f"{state.source_files_total:,}  ETA {progress.eta}"
+    )
 
 
 class ProgressReporter:
@@ -157,6 +222,7 @@ class ProgressReporter:
         self.base_phase = "started"
         self.phase = "started"
         self.phase_started_monotonic = self.state.started_monotonic
+        self.last_display_monotonic = self.state.started_monotonic
 
     def start(self) -> None:
         self.display(self.phase)
@@ -192,8 +258,30 @@ class ProgressReporter:
     ) -> None:
         self._send(phase, path, bytes_done, bytes_total)
 
-    def record_file_complete(self, path: Path) -> None:
-        self._send("idle", path, 0, 0, file_complete=True)
+    def record_inventory(self, file_count: int, byte_count: int) -> None:
+        self._assert_driver_thread()
+        self.state.source_files_total = file_count
+        self.state.source_bytes_total = byte_count
+        now = time.monotonic()
+        if now - self.last_display_monotonic >= PROGRESS_REFRESH_SECONDS:
+            self.display(DISCOVERY_PHASE)
+
+    def finish_inventory(self, inventory: SourceInventory) -> None:
+        self._assert_driver_thread()
+        self.state.source_files_total = inventory.file_count
+        self.state.source_bytes_total = inventory.byte_count
+        self.state.inventory_complete = True
+        self.display(DISCOVERY_PHASE)
+
+    def completed_inventory(self) -> SourceInventory:
+        self._drain_updates()
+        return SourceInventory(
+            file_count=self.state.files_processed,
+            byte_count=self.state.source_bytes_completed,
+        )
+
+    def record_file_complete(self, path: Path, byte_count: int) -> None:
+        self._send("idle", path, byte_count, byte_count, file_complete=True)
 
     def record_file_inactive(self, path: Path) -> None:
         self._send("idle", path, 0, 0)
@@ -243,18 +331,32 @@ class ProgressReporter:
             except queue.Empty:
                 break
             worker = self.state.workers[update.worker - 1]
-            if update.phase is not None:
-                worker.phase = update.phase
-            if update.path is not None:
-                worker.path = update.path
-            if update.bytes_done is not None:
-                worker.bytes_done = update.bytes_done
-            if update.bytes_total is not None:
-                worker.bytes_total = update.bytes_total
-            if update.message_date is not None:
-                self._record_message(update.message_date)
             if update.file_complete:
                 self.state.files_processed += 1
+                self.state.source_bytes_completed += update.bytes_total or 0
+                worker.phase = "idle"
+                worker.path = None
+                worker.bytes_done = 0
+                worker.bytes_total = 0
+            elif update.phase == "idle":
+                worker.phase = "idle"
+                worker.path = None
+                worker.bytes_done = 0
+                worker.bytes_total = 0
+            else:
+                if update.phase is not None:
+                    worker.phase = update.phase
+                if update.path is not None and update.path != worker.path:
+                    worker.path = update.path
+                    worker.bytes_done = 0
+                if update.bytes_done is not None:
+                    worker.bytes_done = max(worker.bytes_done, update.bytes_done)
+                if update.bytes_total is not None:
+                    worker.bytes_total = update.bytes_total
+                if worker.bytes_done > 0 and self.state.byte_progress_started_monotonic is None:
+                    self.state.byte_progress_started_monotonic = time.monotonic()
+            if update.message_date is not None:
+                self._record_message(update.message_date)
             if update.disposition == "archived":
                 self.state.counts.archived += 1
             elif update.disposition == "duplicate":
@@ -310,20 +412,25 @@ class ProgressReporter:
 
     def display(self, label: str | None) -> None:
         self._drain_updates()
+        now = time.monotonic()
+        self.last_display_monotonic = now
         display_label = label or self._worker_phase()
         if display_label != self.phase:
             self.phase = display_label
-            self.phase_started_monotonic = time.monotonic()
+            self.phase_started_monotonic = now
         state = self.state.model_copy(deep=True)
-        elapsed = max(time.monotonic() - state.started_monotonic, 0.001)
-        phase_elapsed = max(time.monotonic() - self.phase_started_monotonic, 0.0)
+        elapsed = max(now - state.started_monotonic, 0.001)
+        phase_elapsed = max(now - self.phase_started_monotonic, 0.0)
+        overall = overall_progress(state, now)
         dates = "none" if state.earliest_date is None else f"{state.earliest_date.date()}..{state.latest_date.date()}"
         year = "none" if state.current_year is None else str(state.current_year)
         if display_label == CLAMAV_START_PHASE:
             display_label = f"{CLAMAV_START_PHASE}: {phase_elapsed:.1f}s"
         active = sum(worker.phase != "idle" for worker in state.workers)
         if self.tty:
+            top_line = self._fit(overall_line(state, now), self.terminal_columns).ljust(self.terminal_columns)
             lines = [
+                f"{TOP_LINE_STYLE}{top_line}{ANSI_RESET}",
                 f"mailarchiver ingest  [{display_label}]",
                 f"Processed: {state.processed:,} messages in {state.files_processed:,} files  "
                 f"Rate: {state.processed / elapsed:.2f} messages/s  Elapsed: {elapsed:.0f}s",
@@ -332,7 +439,7 @@ class ProgressReporter:
                 f"Dates:     {dates}  Current year: {year} ({state.current_year_messages:,} messages)",
                 f"Archived:  {state.counts.archived:,}  Seen/skipped: {state.counts.duplicates:,}  Autosaved: {state.counts.autosaves:,}  Infected: {state.counts.infected:,}",
             ]
-            lines = [self._fit(line, self.terminal_columns) for line in lines]
+            lines = [lines[0], *(self._fit(line, self.terminal_columns) for line in lines[1:])]
             rewind = f"\x1b[{self.rendered_lines}A" if self.rendered_lines else ""
             sys.stderr.write(rewind + "\n".join(f"\r\x1b[2K{line}" for line in lines) + "\n")
             self.rendered_lines = len(lines)
@@ -342,7 +449,10 @@ class ProgressReporter:
                 for worker in state.workers
             )
             print(
-                f"{display_label}: processed={state.processed} files_processed={state.files_processed} "
+                f"{display_label}: overall_bytes={overall.bytes_done} overall_total_bytes={overall.bytes_total} "
+                f"overall_percent={overall.percent:.1f}% files_processed={state.files_processed} "
+                f"files_total={state.source_files_total} eta={overall.eta.replace(' ', '')} "
+                f"processed={state.processed} "
                 f"active_workers={active} peak_workers={state.peak_active_files} "
                 f"rate={state.processed / elapsed:.2f}/s "
                 f"workers={workers} dates={dates} current_year={year} year_messages={state.current_year_messages} "
@@ -497,7 +607,7 @@ def ingest(args: argparse.Namespace) -> None:
              source_file_pks[source.path]),
         )
         catalog.commit()
-        progress.record_file_complete(source.path)
+        progress.record_file_complete(source.path, source.byte_length)
 
     def plan_source(source: SourceFile, prior: tuple[int | None, str | None] | None) -> SourcePlan:
         progress.record_file(source.path, 0, source.byte_length)
@@ -719,11 +829,16 @@ def ingest(args: argparse.Namespace) -> None:
         finally:
             progress.record_file_inactive(source_file.path)
 
+    roots = [Path(root) for root in args.roots]
+
     def discovered_sources() -> Iterable[SourceFile]:
-        for root in args.roots:
-            yield from source_files(Path(root))
+        for root in roots:
+            yield from source_files(root)
 
     try:
+        progress.set_phase(DISCOVERY_PHASE)
+        inventory = source_inventory(roots, progress.record_inventory)
+        progress.finish_inventory(inventory)
         progress.set_phase("checking sources")
         run_file_workers(
             discovered_sources(),
@@ -732,6 +847,10 @@ def ingest(args: argparse.Namespace) -> None:
             stop,
             progress.refresh,
         )
+        if progress.completed_inventory() != inventory:
+            raise RuntimeError(
+                "recognized source files changed between discovery and ingest; rerun after stabilizing the source"
+            )
         catalog.commit()
         search.commit()
         succeeded = True

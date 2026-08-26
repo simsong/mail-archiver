@@ -224,7 +224,7 @@ class GuiApi:
 
     def close(self, *_args: object) -> None:
         self._preview_executor.shutdown(wait=False, cancel_futures=True)
-        for child in self.children:
+        for child in tuple(self.children):
             child.close()
         self.children.clear()
         if self._temporary:

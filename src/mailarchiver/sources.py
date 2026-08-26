@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import mailbox
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Literal
 
@@ -43,6 +43,11 @@ class SourceHashes(BaseModel):
     sha256: str
 
 
+class SourceInventory(BaseModel):
+    file_count: int = 0
+    byte_count: int = 0
+
+
 class IncompleteAppleMailMessageError(ValueError):
     """An Apple Mail partial message cannot preserve detached attachment bytes."""
 
@@ -65,36 +70,59 @@ def is_maildir_message(path: Path) -> bool:
     return path.parent.name in {"cur", "new"}
 
 
-def source_files(source: Path) -> Iterator[SourceFile]:
+def _source_paths(source: Path) -> Iterator[Path]:
     if not source.exists():
         raise FileNotFoundError(source)
     if source.is_file():
-        paths: Iterator[Path] = iter((source,))
-    else:
-        def raise_walk_error(error: OSError) -> None:
-            raise error
+        yield source
+        return
 
-        paths = (
-            Path(directory) / filename
-            for directory, _subdirectories, filenames in os.walk(source, onerror=raise_walk_error)
-            for filename in filenames
+    def raise_walk_error(error: OSError) -> None:
+        raise error
+
+    for directory, _subdirectories, filenames in os.walk(source, onerror=raise_walk_error):
+        for filename in filenames:
+            yield Path(directory) / filename
+
+
+def _source_kind(path: Path) -> Literal["emlx", "mbox", "message"] | None:
+    if path.name.lower().endswith(".partial.emlx"):
+        raise IncompleteAppleMailMessageError(
+            f"Apple Mail partial message omits detached attachment bytes: {path}; "
+            "export the mailbox from Apple Mail before ingest"
         )
+    if path.suffix.lower() == ".emlx":
+        return "emlx"
+    if is_mbox(path):
+        return "mbox"
+    if path.suffix.lower() == ".eml" or is_maildir_message(path):
+        return "message"
+    return None
+
+
+def source_inventory(
+    roots: Iterable[Path], progress: Callable[[int, int], None] | None = None
+) -> SourceInventory:
+    """Count recognized source files and bytes without hashing or retaining them."""
+    inventory = SourceInventory()
+    for root in roots:
+        for path in _source_paths(root):
+            path = path.resolve()
+            if _source_kind(path) is None:
+                continue
+            inventory.file_count += 1
+            inventory.byte_count += path.stat().st_size
+            if progress is not None:
+                progress(inventory.file_count, inventory.byte_count)
+    return inventory
+
+
+def source_files(source: Path) -> Iterator[SourceFile]:
     volumes: dict[tuple[int, Path], SourceVolume] = {}
     mount_paths: dict[Path, Path] = {}
-    for path in paths:
+    for path in _source_paths(source):
         path = path.resolve()
-        kind: Literal["emlx", "mbox", "message"] | None = None
-        if path.name.lower().endswith(".partial.emlx"):
-            raise IncompleteAppleMailMessageError(
-                f"Apple Mail partial message omits detached attachment bytes: {path}; "
-                "export the mailbox from Apple Mail before ingest"
-            )
-        if path.suffix.lower() == ".emlx":
-            kind = "emlx"
-        elif is_mbox(path):
-            kind = "mbox"
-        elif path.suffix.lower() == ".eml" or is_maildir_message(path):
-            kind = "message"
+        kind = _source_kind(path)
         if kind is not None:
             stat = path.stat()
             mount_path = mount_paths.get(path.parent)

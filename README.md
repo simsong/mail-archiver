@@ -137,7 +137,10 @@ MAIL_ARCHIVE_DIR="$HOME/arch-local/normalized-mail" uv run mailarchiver ingest -
 Mailfile workers default to the CPU count, capped at eight. Override the limit
 for a benchmark or a less capable machine with a positive `--workers N`.
 Independent source mailfiles are read, parsed, and scanned concurrently;
-canonical MBOX and SQLite publication remains single-writer.
+canonical MBOX and SQLite publication remains single-writer. Before workers
+start, mailarchiver makes a lightweight read-only pass to count recognized
+source files and bytes; it does not hash or retain the source tree during this
+inventory.
 
 Messages are classified as `Sent` when their parsed `From:` address contains a
 case-insensitive token in `owner-names.txt`; they go to the year's
@@ -189,15 +192,16 @@ report: yearly sent/received/people totals and the 10 most frequent senders
 and recipients.
 
 During ingest, a heartbeat is written to standard error immediately, every 250
-milliseconds, and when the run finishes.  It shows the elapsed
-time, processed-message count, average messages per second, earliest and
-latest resolved message dates, current message year, that year's count, and
-active and peak worker counts. Each worker has a numbered row showing its
+milliseconds, and when the run finishes. Its highlighted top line shows total
+source byte and file completion plus an estimated time remaining. It also shows
+elapsed time, processed-message count, average messages per second, earliest
+and latest resolved message dates, current message year, that year's count,
+and active and peak worker counts. Each worker has a numbered row showing its
 current mailfile, byte-completion percentage, and phase. Workers send status
 events to the main thread, which alone renders the terminal. Long paths are
 fitted to the terminal width so the dashboard does not scroll. Redirected
-output stays line-oriented for logs. It also counts archived mail, previously-seen duplicate skips,
-autosave exclusions, and infected messages.
+output stays line-oriented for logs. It also counts archived mail,
+previously-seen duplicate skips, autosave exclusions, and infected messages.
 
 ## Interrupts and disk space
 

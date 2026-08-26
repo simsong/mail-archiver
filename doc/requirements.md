@@ -107,10 +107,12 @@ requirement.
   by a valid `From ` boundary resumes at that byte offset; all other changes
   reprocess the whole file.  The checkpoint is updated only after the selected
   region finishes and the source metadata remains stable.
-  Discovery is bounded by the configured worker count: each worker plans,
-  reads, parses, scans, and checkpoints one source mailfile at a time. Ingest
-  must not pre-hash the complete source tree. A new file's complete fingerprint
-  is calculated before its checkpoint is committed. A later source failure or
+  A lightweight preliminary pass counts recognized source files and their byte
+  lengths without hashing or retaining the tree. It must finish before any
+  message is published and provides stable overall file/byte totals. The
+  second pass is bounded by the configured worker count: each worker plans,
+  reads, parses, scans, and checkpoints one source mailfile at a time. A new
+  file's complete fingerprint is calculated before its checkpoint is committed. A later source failure or
   interruption retains committed messages; any in-flight file without a
   checkpoint remains safely rerunnable.
 
@@ -131,7 +133,9 @@ requirement.
   worker threads never write progress output. The driver writes standard error
   at startup, every 250 milliseconds, and completion. An interactive terminal
   receives a redraw-in-place scoreboard with a numbered row for every
-  configured worker; redirected output remains line-oriented. Both report
+  configured worker and a white-on-blue top line reporting aggregate byte and file
+  percentage and ETA; redirected output reports the same aggregate fields in
+  line-oriented text without terminal controls. Both report
   worker phases including `checking`, `ingesting`, `waiting for ClamAV
   startup`, `scanning`, `waiting to publish`, `publishing`, `checkpointing`,
   and `idle`, plus elapsed time, processed message and completed source-file
@@ -421,8 +425,11 @@ separate, one-name-per-line reusable classification input.  A local
 special-purpose search and message-viewing interface is a consumer of
 the two SQLite databases, not a reason to depend on Thunderbird or FoxTrot.
 No source mailbox is modified by this program.
-The current catalog schema is created only for a fresh archive and is versioned.
-An unversioned or incompatible catalog is rejected. A fresh catalog is also
+The complete current catalog DDL is the packaged `sql/V1__archive.sql` resource
+and is created only for a fresh archive. An unversioned catalog or any version
+other than V1 is rejected rather than migrated. The disposable search schema is
+likewise packaged and versioned; an obsolete search database is rebuilt, not
+migrated in place. A fresh catalog is also
 refused beside existing canonical MBOX or `.mbox.integrity` output because that
 would defeat deduplication. Those outputs are detected in `data/mbox/` and
 `integrity/`; unsupported root-level legacy output is never imported.

@@ -126,10 +126,14 @@ def test_ingest_routes_preserves_and_indexes_messages(
     assert "files_processed=4" in result.stderr
     assert "started:" in result.stderr
     assert "waiting for ClamAV startup:" in result.stderr
+    assert "discovering sources:" in result.stderr
     assert "ingesting:" in result.stderr
     assert "workers=" in result.stderr
     assert "peak_workers=4" in result.stderr
     assert "seen_skipped=" in result.stderr
+    assert "overall_percent=100.0%" in result.stderr
+    assert "files_total=4" in result.stderr
+    assert "eta=0s" in result.stderr
     assert "  year    sent    received    people" in result.stdout
     assert "  2024       1           2" in result.stdout
     assert "top senders" in result.stdout
@@ -353,15 +357,14 @@ def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, d
     assert "files_processed=4" in rerun.stderr
 
 
-def test_completed_file_is_published_before_later_source_failure(tmp_path: Path) -> None:
-    """Requirement: source discovery never delays publication of an earlier complete file."""
+def test_discovery_failure_prevents_partial_ingest(tmp_path: Path) -> None:
+    """Requirement: metadata discovery failures stop before MBOX publication."""
     source = tmp_path / "first.eml"
-    raw = (
+    source.write_bytes(
         b"Message-ID: <first-before-failure@example>\n"
         b"From: sender@example.net\n"
         b"Date: Thu, 1 Feb 2024 12:00:00 +0000\n\nfirst body\n"
     )
-    source.write_bytes(raw)
     archive = tmp_path / "archive"
     owner_names = Path(__file__).parents[1] / "owner-names.txt"
 
@@ -386,11 +389,11 @@ def test_completed_file_is_published_before_later_source_failure(tmp_path: Path)
 
     assert result.returncode == 1
     assert "source not found" in result.stderr
-    assert mailbox_message_bytes(mbox_directory(archive) / "2024-Archive1.mbox") == [raw]
+    assert not any(mbox_directory(archive).glob("*.mbox"))
     catalog = sqlite3.connect(archive / "archive.sqlite3")
     try:
-        assert catalog.execute("SELECT count(*) FROM messages").fetchone() == (1,)
-        assert catalog.execute("SELECT count(*) FROM source_files").fetchone() == (1,)
+        assert catalog.execute("SELECT count(*) FROM messages").fetchone() == (0,)
+        assert catalog.execute("SELECT count(*) FROM source_files").fetchone() == (0,)
     finally:
         catalog.close()
 

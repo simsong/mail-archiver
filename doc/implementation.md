@@ -81,7 +81,10 @@ archiver/
     bagit.py            Mailbag CSV and BagIt checkpoint publication
     mbox.py             streaming reader, mboxrd encoder, verifier
     message.py          header/MIME/date/classification parsing
-    catalog.py          archive.sqlite3 schema and transactions
+    catalog.py          packaged schema loading and database helpers
+    sql/
+      V1__archive.sql   authoritative archive.sqlite3 V1 schema
+      search.sql        disposable search.sqlite3 schema
     search.py           disposable search.sqlite3 and FTS5 rebuild
     clamav.py           clamdscan/clamscan adapter and result parsing
     ingest/
@@ -114,23 +117,29 @@ a foreground daemon only when no healthy configured socket is available, then
 removes the daemon's stale socket on exit; it never enables persistent or
 on-access scanning. Workers enqueue typed phase/path/offset updates; the main
 thread drains them and redraws the stderr scoreboard every 250 milliseconds.
-Each configured worker has a stable numbered row, following the bulk_extractor
+Before starting workers, a lightweight read-only discovery pass counts every
+recognized source file and its current byte length without hashing or retaining
+the tree. This gives the scoreboard a stable overall byte and file percentage and
+ETA; the terminal highlights that aggregate line in white on blue, while
+redirected output reports the same fields without terminal controls. Each
+configured worker has a stable numbered row, following the bulk_extractor
 status model, and worker threads never print directly. Lines are truncated from
 the left of long paths to the current terminal width before a dynamic cursor
 rewind, preventing wrapped paths from accumulating old headings. The title
 derives `waiting for ClamAV startup` and `ingesting` from worker messages. It
 shows active and peak concurrency, per-worker checking/ingesting/scanning/
 publishing/checkpointing/idle state, streaming source byte offsets, and
-completion percentage, and reports processed source-file plus
+completion percentage, and reports processed/total source-file plus
 archived/previously-seen/autosave/infected counts.  Control-C commits completed work, closes the
 temporary scanner, publishes a BagIt/Mailbag checkpoint, reports a controlled interruption, and
 prints the partial-run archive report before returning 130.  An `ENOSPC` append is truncated back to the prior MBOX size where
 possible and reports a controlled nonzero stop.  Acceptance coverage includes
 the checked-in MBOX/EMLX corpus, source checkpoints, append resumption,
 malformed metadata, publication recovery, and disposable-index failure.
-Source discovery and full-file fingerprinting are interleaved with ingest and
-bounded by `--workers`. Each pool task owns one source mailfile through
-planning, streaming parse and scan, and checkpoint. A never-seen file is
+After metadata discovery, source files are streamed into an ingest pool bounded
+by `--workers`; discovery does not pre-hash or retain file contents. Each pool
+task owns one source mailfile through planning, streaming parse and scan, and
+checkpoint. A never-seen file is
 ingested before its complete fingerprint is calculated; that fingerprint is
 still required before its checkpoint is committed. The scanner starts lazily
 at the first new message, so an unchanged tree does not start ClamAV.
@@ -154,9 +163,9 @@ source mailfiles in flight. Each file worker hashes, streams, parses, and sends
 one ClamAV request at a time, allowing independent mailfiles to use concurrent
 scanner clients. A single publisher lock serializes duplicate admission,
 observations, SQLite transactions, publication-journal updates, MBOX appends,
-and FTS writes. Source discovery never gets more than `N` files ahead and a
-discovery failure is raised only after already scheduled files finish. The
-parser rejects nonpositive worker counts before starting an ingest. A spawned
+and FTS writes. A discovery failure occurs before message publication, and a
+file/byte-total mismatch between the two passes fails the run for a stable
+rerun. The parser rejects nonpositive worker counts before starting an ingest. A spawned
 daemon must pass `clamdscan --ping` after its socket appears before any message
 scan is submitted.
 
@@ -169,8 +178,11 @@ it applies `to:`/`from:`/`subject:` catalog filters, UTC calendar-day
 `message_pk` header lines and reads a numbered message directly from its
 catalogued MBOX byte location, validating its SHA-256 before output.
 
-The catalog has an explicit schema version and is initialized only when fresh;
-unversioned or incompatible databases are rejected. `locations` and
+The authoritative current catalog schema is packaged as `sql/V1__archive.sql`.
+It is initialized only for an empty database; unversioned databases and schema
+versions other than V1 are rejected rather than migrated. This deliberately
+supports development-time database replacement while there are no users.
+`locations` and
 `mbox_generations` are written as part of each message publication.
 
 Header parsing decodes and unfolds RFC 2047 Subject values before catalog and
@@ -297,8 +309,10 @@ tag manifest is written last.
 
 ## Database design
 
-`archive.sqlite3` uses WAL mode during ingest, foreign keys, explicit
-transactions, and a schema version table.  Principal relations are:
+`archive.sqlite3` uses foreign keys, explicit transactions, and a schema
+version table. Its complete V1 DDL lives in the
+packaged `sql/V1__archive.sql` resource rather than an inline Python string.
+Principal relations are:
 
 ```text
 email_addresses(address_pk, address UNIQUE)
@@ -336,9 +350,11 @@ bounded search pages, `(source_file_pk, source_offset DESC)` for ingest resume,
 `(generation_pk, byte_offset, byte_length)` for ordered, covering location
 reads. Earlier single-column and forensic-hash indexes remain present.
 
-`search.sqlite3` has its own schema and does not use cross-database foreign
-keys. Its main FTS5 table includes an unindexed `sha256` column plus searchable
-headers and selected body text: `text/plain` first, otherwise rendered
+`search.sqlite3` has its own packaged, versioned `sql/search.sql` schema and
+does not use cross-database foreign keys. Existing unversioned or incompatible
+search databases are rejected and may be removed or rebuilt with
+`refresh-index`. Its main FTS5 table includes an unindexed `sha256` column plus
+searchable headers and selected body text: `text/plain` first, otherwise rendered
 `text/html`, otherwise a safe single-part fallback. A second FTS5 table stores
 text-attachment content only when requested, allowing the GUI to include it
 without changing default body-search semantics. Binary attachment bytes are
@@ -365,11 +381,14 @@ disposable FTS insertion for normal Sent and Archive mail. Extraction or indexin
 
 ## Ingest pipeline
 
-For every candidate source record:
+An ingest run executes these steps:
 
-1. Discover no more than `--workers` physical source files ahead. Each worker
-   fully processes and checkpoints one file. For a never-seen file, ingest
-   messages before calculating the complete source SHA-256. For a known file,
+1. Make a lightweight pass over all roots to count recognized source files and
+   bytes without hashing them. Fail before message publication if any root is
+   missing or unusable. Then discover the files again into at most `--workers`
+   concurrent tasks; verify the completed file/byte totals match the inventory.
+   Each worker fully processes and checkpoints one file. For a never-seen file,
+   ingest messages before calculating the complete source SHA-256. For a known file,
    fingerprint first to skip a complete match; for a grown MBOX, compare the
    old-length prefix and resume only at a validated appended-message boundary.
    Calculate any deferred fingerprint and publish the updated file checkpoint

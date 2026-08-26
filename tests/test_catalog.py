@@ -1,11 +1,20 @@
-"""Verify catalog creation, migration, indexes, and fail-closed schema handling."""
+"""Verify packaged V1 schemas, indexes, and fail-closed schema handling."""
 
 import sqlite3
+from importlib import resources
 from pathlib import Path
 
 import pytest
 
-from mailarchiver.catalog import SCHEMA_VERSION, create_catalog, owner_tokens
+from mailarchiver.catalog import (
+    ARCHIVE_SCHEMA,
+    SCHEMA_VERSION,
+    SEARCH_SCHEMA,
+    SEARCH_SCHEMA_VERSION,
+    create_catalog,
+    create_search,
+    owner_tokens,
+)
 
 
 def test_rejects_unversioned_catalog(tmp_path: Path) -> None:
@@ -23,7 +32,13 @@ def test_rejects_unversioned_catalog(tmp_path: Path) -> None:
         create_catalog(path)
 
 
-def test_creates_current_schema_directly(tmp_path: Path) -> None:
+def test_packaged_v1_schema_creates_current_catalog(tmp_path: Path) -> None:
+    schema = resources.files("mailarchiver").joinpath("sql", ARCHIVE_SCHEMA)
+    assert schema.is_file()
+    schema_text = schema.read_text(encoding="utf-8")
+    assert "CREATE TABLE source_volumes" in schema_text
+    assert "CREATE INDEX messages_date_message" in schema_text
+
     catalog = create_catalog(tmp_path / "archive.sqlite3")
     try:
         assert catalog.execute("SELECT version FROM schema_info").fetchone() == (SCHEMA_VERSION,)
@@ -50,45 +65,51 @@ def test_creates_current_schema_directly(tmp_path: Path) -> None:
         catalog.close()
 
 
+def test_rejects_schema_version_other_than_v1(tmp_path: Path) -> None:
+    path = tmp_path / "archive.sqlite3"
+    incompatible = sqlite3.connect(path)
+    incompatible.executescript(
+        "CREATE TABLE schema_info (version INTEGER NOT NULL); INSERT INTO schema_info VALUES (2);"
+    )
+    incompatible.close()
+
+    with pytest.raises(RuntimeError, match="expected 1"):
+        create_catalog(path)
+
+
+def test_packaged_search_schema_creates_current_disposable_index(tmp_path: Path) -> None:
+    schema = resources.files("mailarchiver").joinpath("sql", SEARCH_SCHEMA)
+    assert schema.is_file()
+    schema_text = schema.read_text(encoding="utf-8")
+    assert "CREATE VIRTUAL TABLE IF NOT EXISTS message_fts" in schema_text
+    assert "message_fts_rowid INTEGER NOT NULL UNIQUE" in schema_text
+
+    search = create_search(tmp_path / "search.sqlite3")
+    try:
+        assert search.execute("SELECT version FROM schema_info").fetchone() == (SEARCH_SCHEMA_VERSION,)
+        tables = {row[0] for row in search.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert {"message_fts", "attachment_fts", "message_metadata", "message_attachments"} <= tables
+        columns = {row[1] for row in search.execute("PRAGMA table_info(message_metadata)")}
+        assert {"message_fts_rowid", "attachment_fts_rowid"} <= columns
+    finally:
+        search.close()
+
+
+def test_rejects_obsolete_search_schema(tmp_path: Path) -> None:
+    path = tmp_path / "search.sqlite3"
+    obsolete = sqlite3.connect(path)
+    obsolete.executescript(
+        "CREATE TABLE message_metadata (sha256 TEXT PRIMARY KEY, fts_rowid INTEGER NOT NULL);"
+    )
+    obsolete.close()
+
+    with pytest.raises(RuntimeError, match="unsupported unversioned search"):
+        create_search(path)
+
+
 def test_owner_tokens_ignore_whitespace_and_indented_comments(tmp_path: Path) -> None:
     """Requirement: owner aliases are normalized without treating comments as identities."""
     path = tmp_path / "owners.txt"
     path.write_text("  # explanatory comment\n SimsonG \n\nSLG@example.com\n", encoding="utf-8")
 
     assert owner_tokens(path) == ["simsong", "slg@example.com"]
-
-
-def test_migrates_v1_source_paths_without_losing_observations(tmp_path: Path) -> None:
-    """Requirement: schema upgrades retain legacy source evidence instead of discarding it."""
-    path = tmp_path / "archive.sqlite3"
-    legacy = sqlite3.connect(path)
-    legacy.executescript(
-        """
-        CREATE TABLE schema_info (version INTEGER NOT NULL);
-        INSERT INTO schema_info VALUES (1);
-        CREATE TABLE ingest_runs (run_pk INTEGER PRIMARY KEY, started_at TEXT NOT NULL);
-        INSERT INTO ingest_runs VALUES (1, '2026-08-23T00:00:00+00:00');
-        CREATE TABLE source_files (
-            source_path TEXT PRIMARY KEY, modified_at_ns INTEGER NOT NULL, byte_length INTEGER NOT NULL,
-            sha256 TEXT NOT NULL, checked_at TEXT NOT NULL, completed_run INTEGER NOT NULL
-        );
-        INSERT INTO source_files VALUES ('/Volumes/Backup/mail/inbox.mbox', 1, 2, 'file-hash', '2026-08-23T00:00:00+00:00', 1);
-        CREATE TABLE observations (
-            observation_pk INTEGER PRIMARY KEY, run_pk INTEGER NOT NULL, message_pk INTEGER, source_path TEXT NOT NULL,
-            source_offset INTEGER NOT NULL, source_sha256 TEXT NOT NULL, disposition TEXT NOT NULL, detail TEXT NOT NULL
-        );
-        INSERT INTO observations VALUES (1, 1, NULL, '/Volumes/Backup/mail/inbox.mbox', 12, 'raw-hash', 'error', 'legacy');
-        """
-    )
-    legacy.commit()
-    legacy.close()
-
-    catalog = create_catalog(path)
-    try:
-        assert catalog.execute("SELECT version FROM schema_info").fetchone() == (SCHEMA_VERSION,)
-        assert catalog.execute(
-            "SELECT source_path, raw_sha256, semantic_sha256 FROM observations JOIN source_files USING (source_file_pk)"
-        ).fetchone() == ("mail/inbox.mbox", "raw-hash", None)
-        assert catalog.execute("SELECT count(*) FROM source_volumes").fetchone() == (1,)
-    finally:
-        catalog.close()

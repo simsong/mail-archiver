@@ -10,8 +10,12 @@ mock scanner.
 preservation, Sent classification, exact deduplication, collision preservation,
 autosave exclusion, path-year date fallback, invalid declared charset, ClamAV routing,
 MBOX partitioning, manifests, metadata, FTS, and observations.
-It also asserts the final real-time progress summary reports the processed
-message and completed source-file counts.
+It also asserts the metadata discovery pass and final real-time progress
+summary report total/completed source bytes, processed messages, and
+total/completed source-file counts. `test_progress.py` checks the overall ETA
+calculation, the terminal's white-on-blue top line, and control-free redirected
+output. `test_sources.py` verifies that discovery totals only recognized source
+files without hashing or retaining the tree.
 
 `test_unchanged_source_files_are_skipped_wholesale` verifies full source-file
 SHA-256 matches avoid per-message parsing, scanning, observations, and MBOX
@@ -31,6 +35,9 @@ and asserts exit 130, a controlled interruption report, and no traceback.
 `test_parser_failure_records_source_identity_and_failed_run` uses an undated
 message with no path-year fallback and checks the failed run result plus the
 error observation's source path, offset, raw SHA-256, and exception detail.
+`test_discovery_failure_prevents_partial_ingest` verifies that a missing root
+found by the metadata sizing pass stops before otherwise valid roots are
+published.
 `test_fresh_catalog_is_refused_beside_existing_mbox` protects against deleting
 only the database and accidentally appending duplicates to canonical output.
 `test_unusable_source_fails_cleanly` verifies a missing source and an Apple

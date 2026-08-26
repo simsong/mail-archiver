@@ -15,8 +15,9 @@ atomicity, tests, and module-level documentation.
 ## Tightening completed
 
 * Every tracked Python file now starts with a specific module docstring.
-* Bounded search and year-report SQL use the audited catalog indexes; all
-  pre-existing indexes remain present and schema version 2 is unchanged.
+* Bounded search and year-report SQL use the audited catalog indexes. The
+  complete current catalog is now the packaged V1 schema; obsolete development
+  databases are deliberately rejected rather than migrated.
 * FTS updates delete virtual rows by indexed metadata row IDs, and
   `refresh-index` validates MBOX/catalog identity and counts before replacing
   the prior disposable database.
