@@ -351,8 +351,8 @@ def configure_macos_application() -> None:
     """Replace the bare Python process identity before pywebview builds Cocoa menus."""
     if sys.platform != "darwin":
         return
-    from AppKit import NSApplication, NSImage  # pylint: disable=import-outside-toplevel,no-name-in-module
-    from Foundation import NSBundle, NSProcessInfo  # pylint: disable=import-outside-toplevel,no-name-in-module
+    from AppKit import NSApplication, NSImage  # pylint: disable=import-outside-toplevel,no-name-in-module,import-error
+    from Foundation import NSBundle, NSProcessInfo  # pylint: disable=import-outside-toplevel,no-name-in-module,import-error
 
     metadata = application_metadata()
     bundle = NSBundle.mainBundle()

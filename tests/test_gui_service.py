@@ -156,8 +156,8 @@ def test_gui_application_metadata_names_the_product() -> None:
 @pytest.mark.skipif(sys.platform != "darwin", reason="Cocoa metadata is macOS-specific")
 def test_gui_applies_application_metadata_to_cocoa() -> None:
     """Requirement: the live Cocoa process and bundle receive the product metadata."""
-    from AppKit import NSApplication  # pylint: disable=import-outside-toplevel,no-name-in-module
-    from Foundation import NSBundle, NSProcessInfo  # pylint: disable=import-outside-toplevel,no-name-in-module
+    from AppKit import NSApplication  # pylint: disable=import-outside-toplevel,no-name-in-module,import-error
+    from Foundation import NSBundle, NSProcessInfo  # pylint: disable=import-outside-toplevel,no-name-in-module,import-error
 
     configure_macos_application()
     info = NSBundle.mainBundle().localizedInfoDictionary() or NSBundle.mainBundle().infoDictionary()
