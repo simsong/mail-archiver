@@ -9,7 +9,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 SEARCH_SCHEMA_VERSION = 1
 ARCHIVE_SCHEMA = "V1__archive.sql"
-SEARCH_SCHEMA = "search.sql"
+SEARCH_SCHEMA = "V1__search.sql"
 
 
 def _schema(name: str) -> str:
@@ -18,6 +18,14 @@ def _schema(name: str) -> str:
 
 def _tables(database: sqlite3.Connection) -> set[str]:
     return {str(row[0]) for row in database.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def _indexes(database: sqlite3.Connection) -> set[str]:
+    return {str(row[0]) for row in database.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+
+
+def _columns(database: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in database.execute(f"PRAGMA table_info({table})")}
 
 
 def _require_version(
@@ -33,6 +41,82 @@ def _require_version(
         raise RuntimeError(f"unsupported {database_name} database schema {versions}; expected {expected}")
 
 
+def _require_layout(
+    database: sqlite3.Connection,
+    database_name: str,
+    tables: set[str],
+    required_tables: tuple[str, ...],
+    required_indexes: tuple[str, ...],
+    required_columns: tuple[tuple[str, tuple[str, ...]], ...],
+) -> None:
+    valid = set(required_tables) <= tables and set(required_indexes) <= _indexes(database)
+    valid = valid and all(set(columns) <= _columns(database, table) for table, columns in required_columns)
+    if not valid:
+        raise RuntimeError(f"unsupported {database_name} database V1 layout; use a new database")
+
+
+def _require_archive_layout(database: sqlite3.Connection, tables: set[str]) -> None:
+    _require_layout(
+        database,
+        "archive",
+        tables,
+        (
+            "ingest_runs",
+            "email_addresses",
+            "messages",
+            "source_volumes",
+            "source_files",
+            "observations",
+            "metadata_defects",
+            "recipients",
+            "mbox_generations",
+            "locations",
+        ),
+        (
+            "email_addresses_lower_address",
+            "messages_sender_address_pk",
+            "messages_sha256",
+            "messages_date_message",
+            "messages_subject_message",
+            "messages_category_date_message",
+            "messages_category_sender_address",
+            "recipients_address_pk",
+            "locations_generation_pk",
+            "locations_generation_offset",
+            "source_files_volume_path",
+            "observations_message_pk",
+            "observations_raw_sha256",
+            "observations_semantic_sha256",
+            "observations_source_file_offset",
+            "observations_run_observation",
+        ),
+        (
+            ("source_files", ("source_file_pk", "source_volume_pk", "source_path", "sha256")),
+            ("observations", ("source_file_pk", "raw_sha256", "semantic_sha256")),
+            ("locations", ("generation_pk", "byte_offset", "byte_length")),
+        ),
+    )
+
+
+def _require_search_layout(database: sqlite3.Connection, tables: set[str]) -> None:
+    _require_layout(
+        database,
+        "search",
+        tables,
+        ("message_fts", "attachment_fts", "message_metadata", "message_attachments"),
+        ("message_attachments_mime_type",),
+        (
+            ("message_fts", ("sha256", "content")),
+            ("attachment_fts", ("sha256", "content")),
+            (
+                "message_metadata",
+                ("sha256", "message_fts_rowid", "attachment_fts_rowid", "attachment_count", "preview"),
+            ),
+            ("message_attachments", ("sha256", "attachment_ordinal", "part_id", "filename", "mime_type")),
+        ),
+    )
+
+
 def create_catalog(path: Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
     database = sqlite3.connect(path, check_same_thread=check_same_thread)
     try:
@@ -40,6 +124,7 @@ def create_catalog(path: Path, *, check_same_thread: bool = True) -> sqlite3.Con
         tables = _tables(database)
         if tables:
             _require_version(database, tables, SCHEMA_VERSION, "archive")
+            _require_archive_layout(database, tables)
         else:
             database.executescript(_schema(ARCHIVE_SCHEMA))
         return database
@@ -54,6 +139,7 @@ def create_search(path: Path, *, check_same_thread: bool = True) -> sqlite3.Conn
         tables = _tables(database)
         if tables:
             _require_version(database, tables, SEARCH_SCHEMA_VERSION, "search")
+            _require_search_layout(database, tables)
         database.executescript(_schema(SEARCH_SCHEMA))
         return database
     except BaseException:

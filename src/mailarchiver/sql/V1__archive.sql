@@ -16,6 +16,8 @@ CREATE TABLE email_addresses (
     address TEXT NOT NULL UNIQUE
 );
 
+CREATE INDEX email_addresses_lower_address ON email_addresses(lower(address), address_pk);
+
 CREATE TABLE messages (
     message_pk INTEGER PRIMARY KEY,
     message_id_normalized TEXT NOT NULL,
@@ -93,6 +95,9 @@ CREATE TABLE locations (
 CREATE INDEX messages_sender_address_pk ON messages(sender_address_pk);
 CREATE INDEX messages_sha256 ON messages(sha256);
 CREATE INDEX messages_date_message ON messages(date_utc DESC, message_pk DESC);
+CREATE INDEX messages_subject_message ON messages(lower(subject), message_pk);
+CREATE INDEX messages_category_date_message ON messages(category, date_utc DESC, message_pk DESC);
+CREATE INDEX messages_category_sender_address ON messages(category, sender_address_pk);
 CREATE INDEX recipients_address_pk ON recipients(address_pk);
 CREATE INDEX locations_generation_pk ON locations(generation_pk);
 CREATE INDEX locations_generation_offset ON locations(generation_pk, byte_offset, byte_length);

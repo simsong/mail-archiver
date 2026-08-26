@@ -84,7 +84,7 @@ archiver/
     catalog.py          packaged schema loading and database helpers
     sql/
       V1__archive.sql   authoritative archive.sqlite3 V1 schema
-      search.sql        disposable search.sqlite3 schema
+      V1__search.sql    disposable search.sqlite3 V1 schema
     search.py           disposable search.sqlite3 and FTS5 rebuild
     clamav.py           clamdscan/clamscan adapter and result parsing
     ingest/
@@ -180,8 +180,10 @@ catalogued MBOX byte location, validating its SHA-256 before output.
 
 The authoritative current catalog schema is packaged as `sql/V1__archive.sql`.
 It is initialized only for an empty database; unversioned databases and schema
-versions other than V1 are rejected rather than migrated. This deliberately
-supports development-time database replacement while there are no users.
+versions other than V1 are rejected rather than migrated. Because an earlier
+development schema also used the V1 label, startup validates the required
+tables, columns, and named indexes before accepting an existing database. This
+deliberately supports database replacement while there are no users.
 `locations` and
 `mbox_generations` are written as part of each message publication.
 
@@ -348,9 +350,25 @@ preserved. The catalog also indexes `(date_utc DESC, message_pk DESC)` for
 bounded search pages, `(source_file_pk, source_offset DESC)` for ingest resume,
 `(run_pk, observation_pk)` for run review, and
 `(generation_pk, byte_offset, byte_length)` for ordered, covering location
-reads. Earlier single-column and forensic-hash indexes remain present.
+reads. Category/date and category/sender indexes support reports, rebuilds, and
+owner-address suppression. Expression indexes on case-folded subject and email
+address support alphabetical result pages. Earlier single-column and
+forensic-hash indexes remain present.
 
-`search.sqlite3` has its own packaged, versioned `sql/search.sql` schema and
+Query-plan acceptance tests cover ingest identity and checkpoint lookups,
+resume, run review, provenance, MBOX integrity traversal, category/date reports,
+all three result sort modes, and FTS-to-catalog SHA-256 joins. Search explicitly
+selects the matching date, subject, sender, or SHA-256 index for its bounded
+candidate stage. Index rebuild walks the unique mailbox-name index and covering
+location-order index, avoiding a message scan and temporary sort. Full scans
+remain only where the command intentionally consumes the whole result set,
+such as unfiltered review, complete checkpoint generation, and aggregate
+reports; grouping those complete results may still require temporary B-trees.
+Leading-wildcard `to:`, `from:`, and `subject:` substring predicates cannot use
+a selective ordinary B-tree, but their bounded traversal and relational joins
+remain indexed.
+
+`search.sqlite3` has its own packaged, versioned `sql/V1__search.sql` schema and
 does not use cross-database foreign keys. Existing unversioned or incompatible
 search databases are rejected and may be removed or rebuilt with
 `refresh-index`. Its main FTS5 table includes an unindexed `sha256` column plus

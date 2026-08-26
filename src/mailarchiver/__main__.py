@@ -1036,9 +1036,10 @@ def refresh_index(args: argparse.Namespace) -> None:
             assert expected_row is not None
             expected_by_file = dict(
                 catalog.execute(
-                    "SELECT mbox_generations.filename, COUNT(*) FROM messages "
-                    "JOIN locations USING (message_pk) JOIN mbox_generations USING (generation_pk) "
-                    "WHERE category IN (?, ?) GROUP BY mbox_generations.filename",
+                    "SELECT mbox_generations.filename, COUNT(*) FROM mbox_generations "
+                    "CROSS JOIN locations ON locations.generation_pk = mbox_generations.generation_pk "
+                    "JOIN messages ON messages.message_pk = locations.message_pk "
+                    "WHERE messages.category IN (?, ?) GROUP BY mbox_generations.filename",
                     SEARCH_CATEGORIES,
                 )
             )
@@ -1057,8 +1058,10 @@ def refresh_index(args: argparse.Namespace) -> None:
                     )
             rows = catalog.execute(
                 "SELECT messages.sha256, mbox_generations.filename, locations.byte_offset, locations.byte_length "
-                "FROM messages JOIN locations USING (message_pk) JOIN mbox_generations USING (generation_pk) "
-                "WHERE category IN (?, ?) ORDER BY mbox_generations.filename, locations.byte_offset",
+                "FROM mbox_generations "
+                "CROSS JOIN locations ON locations.generation_pk = mbox_generations.generation_pk "
+                "JOIN messages ON messages.message_pk = locations.message_pk "
+                "WHERE messages.category IN (?, ?) ORDER BY mbox_generations.filename, locations.byte_offset",
                 SEARCH_CATEGORIES,
             )
             indexed = 0

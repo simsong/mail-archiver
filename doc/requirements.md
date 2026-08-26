@@ -427,9 +427,9 @@ the two SQLite databases, not a reason to depend on Thunderbird or FoxTrot.
 No source mailbox is modified by this program.
 The complete current catalog DDL is the packaged `sql/V1__archive.sql` resource
 and is created only for a fresh archive. An unversioned catalog or any version
-other than V1 is rejected rather than migrated. The disposable search schema is
-likewise packaged and versioned; an obsolete search database is rebuilt, not
-migrated in place. A fresh catalog is also
+other than V1 is rejected rather than migrated. The separate disposable search
+database likewise has exactly one packaged `sql/V1__search.sql`; an obsolete
+search database is rebuilt, not migrated in place. A fresh catalog is also
 refused beside existing canonical MBOX or `.mbox.integrity` output because that
 would defeat deduplication. Those outputs are detected in `data/mbox/` and
 `integrity/`; unsupported root-level legacy output is never imported.

@@ -13,7 +13,15 @@ from pathlib import Path
 from mailarchiver.bagit import initialize_bag
 from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.layout import mbox_directory
-from mailarchiver.mailsearch import MessageHeader, SearchTerms, _search_statement, format_header, render_message
+from mailarchiver.mailsearch import (
+    MessageHeader,
+    SearchTerms,
+    SortDirection,
+    SortField,
+    _search_statement,
+    format_header,
+    render_message,
+)
 from mailarchiver.mbox import add_message
 from mailarchiver.search import index_message
 
@@ -98,6 +106,49 @@ def test_bounded_listing_uses_date_index_before_recipient_aggregation(tmp_path: 
 
     assert "MATERIALIZE candidates" in plan
     assert any("messages_date_message" in step for step in plan)
+
+
+def test_bounded_alphabetical_sorts_use_v1_expression_indexes(tmp_path: Path) -> None:
+    """Requirement: subject and sender pages traverse their requested sort indexes."""
+    archive, _ = make_archive(tmp_path)
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        catalog.execute("ATTACH DATABASE ? AS search", (str(archive / "search.sqlite3"),))
+        subject = _search_statement(
+            SearchTerms(), 10, sort_by=SortField.SUBJECT, direction=SortDirection.ASCENDING
+        )
+        sender = _search_statement(
+            SearchTerms(), 10, sort_by=SortField.SENDER, direction=SortDirection.ASCENDING
+        )
+        subject_plan = [
+            row[3] for row in catalog.execute("EXPLAIN QUERY PLAN " + subject.sql, subject.parameters)
+        ]
+        sender_plan = [
+            row[3] for row in catalog.execute("EXPLAIN QUERY PLAN " + sender.sql, sender.parameters)
+        ]
+    finally:
+        catalog.close()
+
+    assert any("messages_subject_message" in step for step in subject_plan)
+    assert any("email_addresses_lower_address" in step for step in sender_plan)
+    assert any("messages_sender_address_pk" in step for step in sender_plan)
+
+
+def test_full_text_candidates_use_fts_and_catalog_sha_indexes(tmp_path: Path) -> None:
+    """Requirement: FTS hits enter the catalog through indexed SHA-256 lookups."""
+    archive, _ = make_archive(tmp_path)
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        catalog.execute("ATTACH DATABASE ? AS search", (str(archive / "search.sqlite3"),))
+        statement = _search_statement(SearchTerms(text=["agenda"]), 10)
+        plan = [
+            row[3] for row in catalog.execute("EXPLAIN QUERY PLAN " + statement.sql, statement.parameters)
+        ]
+    finally:
+        catalog.close()
+
+    assert any("messages_sha256" in step for step in plan)
+    assert any("message_fts VIRTUAL TABLE INDEX" in step for step in plan)
 
 
 def test_mailsearch_limit_zero_and_number_print_original_message(tmp_path: Path) -> None:

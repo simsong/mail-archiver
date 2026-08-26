@@ -161,11 +161,32 @@ def _search_statement(
     limit_clause = "" if limit == 0 else "LIMIT ? OFFSET ? "
     if limit:
         parameters.extend((limit, offset))
+    candidate_source = (
+        "messages m INDEXED BY messages_sha256 "
+        "JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
+    )
+    if not terms.text:
+        if sort_by is SortField.DATE:
+            candidate_source = (
+                "messages m INDEXED BY messages_date_message "
+                "JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
+            )
+        elif sort_by is SortField.SUBJECT:
+            candidate_source = (
+                "messages m INDEXED BY messages_subject_message "
+                "JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
+            )
+        else:
+            candidate_source = (
+                "email_addresses sender INDEXED BY email_addresses_lower_address "
+                "CROSS JOIN messages m INDEXED BY messages_sender_address_pk "
+                "ON m.sender_address_pk = sender.address_pk "
+            )
     sql = (
         "WITH candidates AS MATERIALIZED ("
         "SELECT m.message_pk, m.sha256, sender.address AS sender, m.subject, m.date_utc "
-        "FROM messages m JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
-        "WHERE " + " AND ".join(clauses) + " "
+        f"FROM {candidate_source}"
+        f"WHERE {' AND '.join(clauses)} "
         f"ORDER BY {candidate_order} {order_direction}, m.message_pk {order_direction} {limit_clause}"
         ") SELECT c.message_pk, COALESCE(group_concat(DISTINCT recipient.address), ''), c.sender, c.subject, c.date_utc, "
         "COALESCE(metadata.attachment_count, 0) FROM candidates c "
