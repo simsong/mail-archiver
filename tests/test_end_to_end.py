@@ -23,6 +23,7 @@ from mailarchiver.layout import mbox_directory
 from mailarchiver.mbox import add_message
 from mailarchiver.source_volume import METADATA_CURRENT_MOUNT_PATH
 from mailarchiver.standalone_verify import semantic_bytes
+from e2e_tests.eicar_fixture import write_eicar_emlx
 
 
 TEST_DATA = Path(__file__).parent / "data"
@@ -43,12 +44,15 @@ def source_mail(tmp_path: Path) -> tuple[Path, dict[str, bytes]]:
     mbox = source / "three_messages.mbox"
     copy(TEST_DATA / "three_messages.mbox", mbox)
     copytree(TEST_DATA / "emlx_maildir", source / "emlx_maildir")
+    infected_path = source / "emlx_maildir/2024/infected/003-infected.emlx"
+    infected = write_eicar_emlx(infected_path.with_suffix(".emlx.template"), infected_path)
+    infected_path.with_suffix(".emlx.template").unlink()
     messages = mailbox_message_bytes(mbox)
     return source, {
         "sent": messages[0],
         "collision_one": messages[2],
         "collision_two": emlx_message_bytes(source / "emlx_maildir/2024/001-collision.emlx"),
-        "infected": emlx_message_bytes(source / "emlx_maildir/2024/infected/003-infected.emlx"),
+        "infected": infected,
     }
 
 
@@ -122,6 +126,9 @@ def test_ingest_routes_preserves_and_indexes_messages(
     owner_names = Path(__file__).parents[1] / "owner-names.txt"
 
     result = run_ingest(source, archive, owner_names)
+    infected_path = source / "emlx_maildir/2024/infected/003-infected.emlx"
+    infected_path.unlink()
+    assert not infected_path.exists()
     assert_success(result)
     assert "completed:" in result.stderr
     assert "processed=6" in result.stderr

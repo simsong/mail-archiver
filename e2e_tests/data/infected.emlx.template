@@ -1,0 +1,19 @@
+Message-ID: <infected-e2e@example>
+Date: Tue, 6 Feb 2024 12:00:00 +0000
+From: attacker@example.net
+To: archive-owner@example.org
+Subject: Runtime antivirus fixture
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="e2e-boundary"
+
+--e2e-boundary
+Content-Type: text/plain
+
+The attachment exists only inside the disposable E2E source directory.
+--e2e-boundary
+Content-Type: application/octet-stream; name="eicar.com"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="eicar.com"
+
+{{EICAR_BASE64}}
+--e2e-boundary--

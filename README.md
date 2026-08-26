@@ -317,10 +317,17 @@ small platform adapters and testing before Windows is supported.
 
 ## Test
 
-The ordinary suite uses static MBOX and `.emlx` fixtures, including an EICAR
-attachment that exercises the actual on-demand ClamAV route. The separately
-runnable end-to-end suite creates a fresh archive from representative EML
-messages, publishes all fixity, and runs the installed standalone verifier:
+The ordinary suite uses static MBOX and `.emlx` fixtures. Antivirus tests build
+the EICAR signature from fragments only inside a pytest temporary directory,
+ingest it with the real on-demand ClamAV daemon, and immediately delete the
+generated source; no complete virus-test signature is tracked in Git. The
+separate end-to-end suite copies its tracked, virus-free source corpus, ingests
+110 discoveries, verifies deduplication, autosave exclusion, quarantine,
+newline preservation, attachment indexing, BagIt fixity, and the installed
+standalone verifier. On macOS it also drives the shipped HTML and JavaScript
+through the real pywebview/WKWebView bridge, including pagination, search,
+sorting, message and MIME views, provenance, remote-content blocking, previews,
+exports, printing, drag-out, keyboard navigation, and error display:
 
 ```console
 make test
@@ -328,4 +335,5 @@ make test-e2e
 make check
 ```
 
-`make check` runs both suites.
+`make check` runs both suites. Regenerate the committed safe corpus after an
+intentional fixture change with `make fixture-e2e`.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import tempfile
@@ -33,6 +34,7 @@ from .gui_service import (
 )
 
 GUI_DIRECTORY = Path(__file__).parents[2] / "gui"
+E2E_DRIVER = Path(__file__).parents[2] / "e2e_tests" / "gui_driver.js"
 DEFAULT_PAGE_SIZE = 100
 
 
@@ -52,14 +54,32 @@ class OpenResult(BaseModel):
     filename: str
 
 
+class GuiE2EClientResult(BaseModel):
+    passed: bool
+    checks: list[str]
+    error: str | None = None
+
+
+class GuiE2EReport(GuiE2EClientResult):
+    exports: list[str]
+
+
 class GuiApi:
     """Narrow API exposed to one webview window."""
 
-    def __init__(self, archive: Path | None, temporary_directory: Path | None = None) -> None:
+    def __init__(
+        self,
+        archive: Path | None,
+        temporary_directory: Path | None = None,
+        e2e_directory: Path | None = None,
+    ) -> None:
         self.archive = archive
         self.window: Any = None
         self._temporary = tempfile.TemporaryDirectory(prefix="mailarchive-gui-") if temporary_directory is None else None
         self.temporary_directory = Path(self._temporary.name) if self._temporary else temporary_directory
+        self.e2e_directory = e2e_directory
+        if self.temporary_directory is not None:
+            self.temporary_directory.mkdir(parents=True, exist_ok=True)
         self.children: list[GuiApi] = []
         self._preview_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mail-preview")
         self._preview_lock = Lock()
@@ -76,6 +96,8 @@ class GuiApi:
         return GuiStatus(archive=str(self.archive) if self.archive else None, ready=ready).model_dump()
 
     def choose_archive(self) -> dict[str, object]:
+        if self.e2e_directory is not None:
+            return self.status()
         selected = self.window.create_file_dialog(webview.FileDialog.FOLDER, directory=str(Path.home()))
         if selected:
             archive = Path(selected[0])
@@ -152,6 +174,10 @@ class GuiApi:
 
     def save_message(self, message_pk: int) -> str | None:
         view = describe_message(self._archive(), message_pk)
+        if self.e2e_directory is not None:
+            destination = self.e2e_directory / f"saved-{export_filename(view)}"
+            write_message(self._archive(), message_pk, destination)
+            return str(destination)
         selected = self.window.create_file_dialog(
             webview.FileDialog.SAVE,
             directory=str(Path.home() / "Desktop"),
@@ -168,6 +194,10 @@ class GuiApi:
 
     def save_attachment(self, message_pk: int, part_id: int) -> str | None:
         attachment = attachment_descriptor(self._archive(), message_pk, part_id)
+        if self.e2e_directory is not None:
+            destination = self.e2e_directory / f"saved-{safe_filename(attachment.filename, part_id, attachment.content_type)}"
+            write_attachment(self._archive(), message_pk, part_id, destination)
+            return str(destination)
         selected = self.window.create_file_dialog(
             webview.FileDialog.SAVE,
             directory=str(Path.home() / "Desktop"),
@@ -201,7 +231,7 @@ class GuiApi:
     def open_message_window(self, message_pk: int) -> None:
         view: MessageView = describe_message(self._archive(), message_pk)
         base_url = str(self.window.get_current_url()).split("?", 1)[0]
-        child_api = GuiApi(self._archive(), self.temporary_directory)
+        child_api = GuiApi(self._archive(), self.temporary_directory, self.e2e_directory)
         child = webview.create_window(
             view.subject,
             f"{base_url}?message={message_pk}&standalone=1",
@@ -225,6 +255,8 @@ class GuiApi:
     def close(self, *_args: object) -> None:
         self._preview_executor.shutdown(wait=False, cancel_futures=True)
         for child in tuple(self.children):
+            if child.window is not None:
+                child.window.destroy()
             child.close()
         self.children.clear()
         if self._temporary:
@@ -244,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only graphical search of a mailarchiver archive.")
     parser.add_argument("--archive", type=Path, help="directory containing archive.sqlite3 and search.sqlite3")
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--e2e-test", type=Path, metavar="REPORT", help=argparse.SUPPRESS)
     return parser
 
 
@@ -275,13 +308,32 @@ def verify_bridge(window: Any, result: list[str]) -> None:
         window.destroy()
 
 
+def run_e2e_driver(window: Any, result: list[GuiE2EClientResult]) -> None:
+    """Run the browser-side acceptance driver inside the real native webview."""
+    try:
+        window.run_js(E2E_DRIVER.read_text(encoding="utf-8"))
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            value = window.evaluate_js("window.__mailarchiveE2E || null")
+            if value is not None:
+                result.append(GuiE2EClientResult.model_validate(value))
+                return
+            time.sleep(0.05)
+        raise RuntimeError("browser-side acceptance test timed out")
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        result.append(GuiE2EClientResult(passed=False, checks=[], error=str(error)))
+    finally:
+        window.destroy()
+
+
 def main() -> int:
     args = build_parser().parse_args()
     archive_value = os.environ.get("MAIL_ARCHIVE_DIR")
     archive = args.archive or (Path(archive_value) if archive_value else None)
     if archive is not None and not _is_archive(archive):
         raise SystemExit(f"mailsearch-gui: {archive} must contain archive.sqlite3 and search.sqlite3")
-    api = GuiApi(archive)
+    e2e_directory = args.e2e_test.parent / "gui-e2e-exports" if args.e2e_test else None
+    api = GuiApi(archive, e2e_directory, e2e_directory)
     window = webview.create_window(
         "Mail Archive",
         str(GUI_DIRECTORY / "index.html"),
@@ -295,8 +347,11 @@ def main() -> int:
     api.set_window(window)
     window.events.closed += api.close
     smoke_result: list[str] = []
+    e2e_result: list[GuiE2EClientResult] = []
     if args.smoke_test:
         window.events.loaded += lambda *_args: verify_bridge(window, smoke_result)
+    elif args.e2e_test:
+        window.events.loaded += lambda *_args: run_e2e_driver(window, e2e_result)
     webview.settings["ALLOW_FILE_URLS"] = True
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     webview.start(http_server=True, private_mode=True)
@@ -304,6 +359,15 @@ def main() -> int:
         passed = smoke_result == ["passed"]
         print("GUI bridge smoke test passed" if passed else f"GUI bridge smoke test failed: {smoke_result}")
         return 0 if passed else 1
+    if args.e2e_test:
+        browser = e2e_result[0] if e2e_result else GuiE2EClientResult(
+            passed=False, checks=[], error="native window closed before the browser test completed"
+        )
+        exports = sorted(path.name for path in e2e_directory.iterdir()) if e2e_directory else []
+        report = GuiE2EReport(**browser.model_dump(), exports=exports)
+        args.e2e_test.write_text(json.dumps(report.model_dump(), indent=2) + "\n", encoding="utf-8")
+        print("GUI end-to-end test passed" if report.passed else f"GUI end-to-end test failed: {report.error}")
+        return 0 if report.passed else 1
     return 0
 
 

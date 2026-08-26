@@ -1,4 +1,4 @@
-.PHONY: check fixture-bagit gui gui-smoke pylint run search summary-smoke test test-bagit test-e2e test-gui test-mailsearch test-headers test-progress test-provenance verify install-mac install-linux install-tika
+.PHONY: check fixture-bagit fixture-e2e gui gui-smoke pylint run search summary-smoke test test-bagit test-e2e test-gui test-mailsearch test-headers test-progress test-provenance verify install-mac install-linux install-tika
 
 TIKA_VERSION ?= 3.3.2
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
@@ -10,6 +10,9 @@ check: test test-e2e
 
 fixture-bagit:
 	uv run python tests/generate_bagit_fixture.py tests/data/three-message-mailbag
+
+fixture-e2e:
+	uv run python e2e_tests/generate_corpus.py e2e_tests/data/source
 
 pylint:
 	uv run pylint src tests e2e_tests

@@ -559,8 +559,11 @@ provenance reports can declare how they were produced.
 
 Tests use small, hand-authored MBOX and EMLX fixtures covering mboxrd quoting,
 bad dates, missing IDs, same-ID/different-content messages, autosaves,
-duplicate source trees, interruption recovery, and infected routing. They
-assert message identities and bytes, not only record counts. Rollover and typed
+duplicate source trees, interruption recovery, and infected routing. The EICAR
+signature is assembled from fragments only in a temporary test source and that
+file is deleted immediately after ingest; the repository contains only a safe
+message template. Tests assert message identities and bytes, not only record
+counts. Rollover and typed
 unscannable/scanner-error outcomes remain uncovered because those behaviors are
 not implemented. The separately runnable `make test-e2e` target starts a fresh
 CLI ingest with the real configured on-demand `clamd`, includes a source message
@@ -568,8 +571,13 @@ without a final newline, requires checkpoint publication, and invokes the
 installed standard-library-only verifier under isolated Python.
 
 `make test` runs the ordinary test tree, while `make check` runs it followed by
-the separate end-to-end suite. `make test-bagit` validates the database-independent
-three-message fixture and corruption cases. The installed `verify_mail_archive.py
+the separate end-to-end suite. The tracked source corpus has enough messages to
+exercise real result pagination and rich MIME behavior. On macOS, the same target drives the actual
+pywebview/WKWebView application through its Python bridge and tests all shipped
+search-interface behavior. Linux runs the complete ingest and verification
+portion and explicitly skips the native macOS UI portion. `make test-bagit`
+validates the database-independent three-message fixture and corruption cases.
+The installed `verify_mail_archive.py
 DIRECTORY` performs read-only validation of a supplied bag. The first acceptance run is against a copied
 small subset of `SLG Mail`, followed by a full read-only inventory comparison
 before any canonical archive is published.

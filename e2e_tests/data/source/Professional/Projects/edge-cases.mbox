@@ -1,0 +1,10 @@
+From fixture@example.net Mon Jan  1 00:00:00 2024
+Message-ID: <mboxrd-e2e@example>
+Date: Sat, 3 Feb 2024 12:00:00 +0000
+From: sender@example.net
+To: archive-owner@example.org
+Subject: MBOX quoting
+
+>From unquoted body line
+>>From literal quoted body line
+
