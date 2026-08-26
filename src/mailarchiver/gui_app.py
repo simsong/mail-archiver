@@ -260,6 +260,8 @@ class GuiApi:
 
     def open_message_window(self, message_pk: int) -> bool:
         view: MessageView = describe_message(self._archive(), message_pk)
+        if self.e2e_directory is not None:
+            return True
         base_url = str(self.window.get_current_url()).split("?", 1)[0]
         child_api = GuiApi(
             self._archive(), self.temporary_directory, self.e2e_directory, self.filter_sets.path
@@ -283,8 +285,6 @@ class GuiApi:
                 self.children.remove(child_api)
 
         child.events.closed += close_child
-        if self.e2e_directory is not None:
-            child.events.loaded += lambda *_args: child.destroy()
         return True
 
     def close(self, *_args: object) -> None:

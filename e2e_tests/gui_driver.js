@@ -13,7 +13,7 @@
       if (condition()) { checks.push(label); return; }
       await sleep(50);
     }
-    throw new Error(`Timed out: ${label}`);
+    throw new Error(`Timed out: ${label}; results=${document.querySelectorAll("#result-list .result").length}; status=${document.getElementById("result-status")?.textContent}`);
   };
   const rows = () => [...document.querySelectorAll("#result-list .result")];
   const subjects = () => rows().map(row => row.querySelector(".result-subject").textContent);
@@ -41,15 +41,16 @@
     assert(!document.getElementById("load-more").hidden, "pagination control displayed");
     await waitFor(() => document.querySelector(".result-preview")?.textContent.length > 0, "background preview displayed");
 
-    document.getElementById("choose-archive").click();
-    await sleep(300);
-    await waitFor(
-      () => rows().length === 100 && document.getElementById("result-status").textContent !== "Searching…",
-      "choose-archive control refreshes the active archive",
-    );
     document.getElementById("load-more").click();
     await waitFor(() => rows().length === 107, "Load More appends the second page");
     assert(document.getElementById("load-more").hidden, "Load More hides on the final page");
+    const chooseArchive = document.getElementById("choose-archive");
+    const completedChoices = chooseArchive.dataset.completed || "0";
+    chooseArchive.click();
+    await waitFor(
+      () => chooseArchive.dataset.completed !== completedChoices && rows().length === 100 && document.getElementById("result-status").textContent !== "Searching…",
+      "choose-archive control refreshes the active archive",
+    );
 
     const sort = document.getElementById("sort-by");
     sort.value = "subject";
@@ -187,9 +188,9 @@
     );
 
     rich.dispatchEvent(new MouseEvent("dblclick", {bubbles: true}));
-    await waitFor(() => rich.dataset.openedWindow === "true", "double-click opens a native message window");
+    await waitFor(() => rich.dataset.openedWindow === "true", "double-click invokes the message-window bridge");
     window.__mailarchiveE2E = {passed: true, checks, error: null};
   })().catch(error => {
-    window.__mailarchiveE2E = {passed: false, checks, error: String(error?.stack || error)};
+    window.__mailarchiveE2E = {passed: false, checks, error: String(error?.message || error)};
   });
 })();

@@ -43,7 +43,10 @@ async function initialize() {
     "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "error"]) {
     elements[id] = byId(id);
   }
-  elements["choose-archive"].addEventListener("click", chooseArchive);
+  elements["choose-archive"].addEventListener("click", async () => {
+    await chooseArchive();
+    elements["choose-archive"].dataset.completed = String(Number(elements["choose-archive"].dataset.completed || 0) + 1);
+  });
   elements["search-form"].addEventListener("submit", event => { event.preventDefault(); runSearch(false); });
   elements["load-more"].addEventListener("click", () => runSearch(true));
   elements["sort-by"].addEventListener("change", () => runSearch(false));
