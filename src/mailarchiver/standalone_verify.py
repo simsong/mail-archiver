@@ -309,6 +309,7 @@ def _parse_token(token: object, standards: list[HashStandard]) -> tuple[HashStan
 
 
 def _stored_candidates(box: mailbox.mbox, key: object) -> Iterable[bytes]:
+    """Independently try stored, mboxrd-unquoted, and writer-added-LF alternatives."""
     raw = box.get_bytes(key, from_=False)
     lines = raw.splitlines(keepends=True)
     ambiguous = [index for index, line in enumerate(lines) if line.startswith(b">From ")]

@@ -460,7 +460,10 @@ For any original message lacking a final line break, standard MBOX contributes
 one before its record separator. Direct retrieval considers the stored form and
 the form with one writer-added final line break removed, selecting only the
 candidate matching the catalogued original SHA-256. This includes the
-zero-byte-message case.
+zero-byte-message case. The implementation hashes the complete stored candidate
+first, then tries removing one terminal LF and one terminal CRLF in that order;
+it fails closed if no candidate has the expected hash. The MBOX-level hash still
+covers every stored byte.
 The standard-library writer's `>From ` representation is ambiguous when the
 source already contained a literal `>From ` line. The reader enumerates a
 bounded set of quote interpretations and selects only the candidate matching

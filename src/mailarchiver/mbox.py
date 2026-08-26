@@ -154,7 +154,14 @@ def _read_stored_payload(path: Path, location: MboxLocation) -> bytes:
 
 
 def read_location_candidates(path: Path, location: MboxLocation) -> Iterator[bytes]:
-    """Yield possible originals for the standard library's ambiguous From quoting."""
+    """Yield stored and alternate original-byte interpretations of one MBOX record.
+
+    For each possible mboxrd ``>From`` interpretation, yield the complete
+    stored payload first. If it ends in a line break, then yield alternatives
+    with one terminal LF or CRLF removed because Python's MBOX writer adds a
+    final line break when the source lacks one. Callers hash each candidate and
+    accept only the one matching the catalogued original-byte SHA-256.
+    """
     stored = _read_stored_payload(path, location)
     lines = stored.splitlines(keepends=True)
     ambiguous = [index for index, line in enumerate(lines) if line.startswith(b">From ")]
@@ -181,7 +188,7 @@ def read_location(path: Path, location: MboxLocation) -> bytes:
 
 
 def read_verified_location(path: Path, location: MboxLocation, expected_sha256: str) -> bytes:
-    """Select the original MBOX interpretation by its catalogued identity."""
+    """Try each stored-byte interpretation until one matches the original hash."""
     for raw in read_location_candidates(path, location):
         if hashlib.sha256(raw).hexdigest() == expected_sha256:
             return raw

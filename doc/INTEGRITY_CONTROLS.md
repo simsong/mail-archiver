@@ -240,6 +240,20 @@ terminal-line-break interpretations and accepts only a candidate matching
 `h2`. This includes mapping a one-line-break payload back to a zero-byte message
 only when its digest is SHA-256 of empty bytes.
 
+For each quoting interpretation, verification follows this explicit order:
+
+1. hash the complete stored message payload and compare it with `h2`;
+2. if that fails and the payload ends in LF, hash it with that one terminal LF
+   removed and compare again;
+3. if that fails and the payload ends in CRLF, hash it with that one terminal
+   CRLF removed and compare again; and
+4. fail verification if none of the candidates matches `h2`.
+
+This is not a rule that the final byte is generally ignored. If the source
+message contained its final line break, the complete stored candidate matches
+and that line break is part of `h2`. The complete-MBOX `h1` always includes the
+stored line break regardless of which per-message candidate matches `h2`.
+
 ### `h3`: semantic-message version 1 SHA-256
 
 `h3` is a conservative, delivery-aware identity derived from RFC 6376 DKIM
