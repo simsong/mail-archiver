@@ -19,6 +19,7 @@ KEY_FILESYSTEM_TYPE = "FilesystemType"
 KEY_MOUNT_POINT = "MountPoint"
 KEY_VOLUME_NAME = "VolumeName"
 KEY_VOLUME_UUID = "VolumeUUID"
+METADATA_CURRENT_MOUNT_PATH = "current_mount_path"
 
 
 class SourceVolume(BaseModel):
@@ -32,7 +33,7 @@ class SourceVolume(BaseModel):
 def local_source_volume(path: Path) -> SourceVolume:
     """Describe the mounted volume containing *path* without changing it."""
     resolved = path.resolve()
-    mount_path = _mount_path(resolved)
+    mount_path = local_mount_path(resolved)
     diskutil = _diskutil_info(resolved)
     device = str(os.stat(resolved).st_dev)
     volume_uuid = _text(diskutil.get(KEY_VOLUME_UUID))
@@ -43,7 +44,7 @@ def local_source_volume(path: Path) -> SourceVolume:
     metadata = {
         "format": "mailarchiver/source-volume/v1",
         "kind": "local-volume",
-        "current_mount_path": str(mount_path),
+        METADATA_CURRENT_MOUNT_PATH: str(mount_path),
         "device": device,
         "volume_label": _text(diskutil.get(KEY_VOLUME_NAME)),
         "volume_uuid": volume_uuid,
@@ -56,6 +57,11 @@ def local_source_volume(path: Path) -> SourceVolume:
         metadata_json=_json(metadata),
         mount_path=mount_path,
     )
+
+
+def local_mount_path(path: Path) -> Path:
+    """Return the mount containing *path* without collecting volume metadata."""
+    return _mount_path(path.resolve())
 
 
 def _mount_path(path: Path) -> Path:
