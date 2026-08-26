@@ -176,6 +176,10 @@ From this checkout, the equivalent command is:
 make verify ARCHIVE=/path/to/mail-archive
 ```
 
+`bag-info.txt` explicitly records that MBOX framing adds a final LF when a
+source message lacks one. No archival `X-` header is inserted; the original
+source-byte SHA-256 disambiguates the stored and recovered representations.
+
 The default index contains normalized headers and message body text only:
 `text/plain` when available, otherwise rendered `text/html`.  It excludes
 attachments, MIME structure, and base64 payloads. Use `--index-attachments`
@@ -311,9 +315,15 @@ small platform adapters and testing before Windows is supported.
 
 ## Test
 
-The end-to-end tests use static MBOX and `.emlx` fixtures, including an EICAR
-attachment that exercises the actual on-demand ClamAV route:
+The ordinary suite uses static MBOX and `.emlx` fixtures, including an EICAR
+attachment that exercises the actual on-demand ClamAV route. The separately
+runnable end-to-end suite creates a fresh archive from representative EML
+messages, publishes all fixity, and runs the installed standalone verifier:
 
 ```console
+make test
+make test-e2e
 make check
 ```
+
+`make check` runs both suites.

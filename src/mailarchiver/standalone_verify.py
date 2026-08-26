@@ -321,9 +321,12 @@ def _stored_candidates(box: mailbox.mbox, key: object) -> Iterable[bytes]:
         for bit, index in enumerate(ambiguous):
             if mask & (1 << bit):
                 candidate[index] = candidate[index][1:]
-        yield b"".join(candidate)
-    if raw == b"\n":
-        yield b""
+        stored = b"".join(candidate)
+        yield stored
+        if stored.endswith(b"\n"):
+            yield stored[:-1]
+        if stored.endswith(b"\r\n"):
+            yield stored[:-2]
 
 
 def _check_hashes(tokens: list[str], standards: list[HashStandard], data: bytes) -> list[str]:

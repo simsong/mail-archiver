@@ -10,3 +10,4 @@ Mailbag-Agent-Version: 0.0.0
 Payload-Oxum: 1023.1
 MBOX-Format-Details: mboxrd
 MBOX-Agent: Python mailbox
+Mailarchiver-Message-Newline-Policy: preserve-source; add-final-LF-for-MBOX-framing

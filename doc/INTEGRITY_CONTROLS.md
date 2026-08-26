@@ -127,14 +127,17 @@ Mailbag-Agent-Version: VERSION
 Payload-Oxum: BYTE_COUNT.FILE_COUNT
 MBOX-Format-Details: mboxrd
 MBOX-Agent: Python mailbox
+Mailarchiver-Message-Newline-Policy: preserve-source; add-final-LF-for-MBOX-framing
 ```
 
 The external identifier is created once and retained across checkpoints.
 `Bagging-Timestamp`, `Bagging-Date`, and `Payload-Oxum` describe the current
 checkpoint. `Original-Included` is `False` because the payload is a normalized,
 deduplicated archive assembled from heterogeneous sources; it is not a claim
-that every source container was copied unchanged. The original RFC 5322 bytes
-available from each source are nevertheless preserved inside the canonical
+that every source container was copied unchanged. The newline-policy field
+documents that MBOX framing adds a final LF when the source message has none;
+it does not add or modify an RFC 5322 header. The original RFC 5322 bytes
+available from each source are nevertheless recoverable from the canonical
 MBOX representation and checked per message.
 
 ### `mailbag.csv`
@@ -231,9 +234,10 @@ separator and storage quoting. No header, body, line-ending, MIME, whitespace,
 or character-set canonicalization is applied.
 
 Python's MBOX writer cannot distinguish storage quoting from an original
-literal `>From ` body line. The validator enumerates the bounded possible
-interpretations and accepts only a candidate matching `h2`. A zero-byte
-message similarly maps back from the one separator newline required by MBOX
+literal `>From ` body line. It also adds a final line break when the source
+message lacks one. The validator enumerates the bounded possible quoting and
+terminal-line-break interpretations and accepts only a candidate matching
+`h2`. This includes mapping a one-line-break payload back to a zero-byte message
 only when its digest is SHA-256 of empty bytes.
 
 ### `h3`: semantic-message version 1 SHA-256

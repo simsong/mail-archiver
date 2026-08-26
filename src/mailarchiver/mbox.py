@@ -167,9 +167,12 @@ def read_location_candidates(path: Path, location: MboxLocation) -> Iterator[byt
         for bit, index in enumerate(ambiguous):
             if mask & (1 << bit):
                 candidate[index] = candidate[index][1:]
-        yield b"".join(candidate)
-    if stored == b"\n":
-        yield b""
+        raw = b"".join(candidate)
+        yield raw
+        if raw.endswith(b"\n"):
+            yield raw[:-1]
+        if raw.endswith(b"\r\n"):
+            yield raw[:-2]
 
 
 def read_location(path: Path, location: MboxLocation) -> bytes:

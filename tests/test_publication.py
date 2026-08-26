@@ -126,6 +126,22 @@ def test_ambiguous_from_recovery_yields_each_interpretation_once(tmp_path: Path)
 
     candidates = list(read_location_candidates(path, location))
 
-    assert len(candidates) == 8
-    assert len(set(candidates)) == 8
+    assert len(candidates) == 16
+    assert len(set(candidates)) == 16
     assert raw in candidates
+
+
+def test_location_recovery_removes_one_writer_added_final_newline(tmp_path: Path) -> None:
+    """Regression: MBOX framing may add a final LF absent from the source message."""
+    path = tmp_path / "no-final-newline.mbox"
+    raw = b"Message-ID: <no-final-newline@example>\n\nbody"
+    box = mailbox.mbox(path, create=True)
+    try:
+        location = add_message(box, path, raw)
+    finally:
+        box.close()
+
+    candidates = list(read_location_candidates(path, location))
+
+    assert raw in candidates
+    assert raw + b"\n" in candidates

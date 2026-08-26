@@ -151,6 +151,28 @@ def test_verifier_recovers_multiple_ambiguous_from_lines(tmp_path: Path) -> None
     assert verify_mbox(path, sidecar) == []
 
 
+def test_verifier_recovers_message_without_source_final_newline(tmp_path: Path) -> None:
+    """Regression: independent verification recognizes one writer-added final LF."""
+    raw = b"Message-ID: <no-final-newline@example>\n\nbody"
+    path = tmp_path / "no-final-newline.mbox"
+    box = mailbox.mbox(path)
+    try:
+        box.add(raw)
+        box.flush()
+    finally:
+        box.close()
+    sidecar = tmp_path / "no-final-newline.mbox.integrity"
+    digest = hashlib.sha256(raw).hexdigest()
+    write_integrity_file(
+        path,
+        sidecar,
+        (IntegrityMessage("no-final-newline@example", digest, raw),),
+        1,
+    )
+
+    assert verify_mbox(path, sidecar) == []
+
+
 def test_verifier_accepts_multiple_digest_algorithms_for_one_standard(tmp_path: Path) -> None:
     """Requirement: one file may tag SHA-256 and SHA-512 digests of the same semantic input."""
     _, integrity, raw = make_integrity_archive(tmp_path)

@@ -456,9 +456,11 @@ They track the byte offset and byte length of each complete record.  Output
 currently uses the first numbered file for each year/category; the required
 3.75 GiB rollover selection remains planned. The directory contains no nested
 per-message files.
-For an original zero-byte message, standard MBOX contributes one payload
-separator newline. Direct retrieval maps exactly that one-byte representation
-back to empty bytes only when the catalogued SHA-256 is the empty-byte digest.
+For any original message lacking a final line break, standard MBOX contributes
+one before its record separator. Direct retrieval considers the stored form and
+the form with one writer-added final line break removed, selecting only the
+candidate matching the catalogued original SHA-256. This includes the
+zero-byte-message case.
 The standard-library writer's `>From ` representation is ambiguous when the
 source already contained a literal `>From ` line. The reader enumerates a
 bounded set of quote interpretations and selects only the candidate matching
@@ -557,14 +559,15 @@ bad dates, missing IDs, same-ID/different-content messages, autosaves,
 duplicate source trees, interruption recovery, and infected routing. They
 assert message identities and bytes, not only record counts. Rollover and typed
 unscannable/scanner-error outcomes remain uncovered because those behaviors are
-not implemented. Current end-to-end ingest tests use the real configured
-on-demand `clamd`; isolating one integration test and using recorded typed scan
-results elsewhere remains planned.
+not implemented. The separately runnable `make test-e2e` target starts a fresh
+CLI ingest with the real configured on-demand `clamd`, includes a source message
+without a final newline, requires checkpoint publication, and invokes the
+installed standard-library-only verifier under isolated Python.
 
-`make check` runs unit/integration tests; `make test-bagit` validates the
-database-independent three-message fixture and corruption cases. The installed
-`verify_mail_archive.py DIRECTORY` performs read-only validation of a supplied
-bag. The first acceptance run is against a copied
+`make test` runs the ordinary test tree, while `make check` runs it followed by
+the separate end-to-end suite. `make test-bagit` validates the database-independent
+three-message fixture and corruption cases. The installed `verify_mail_archive.py
+DIRECTORY` performs read-only validation of a supplied bag. The first acceptance run is against a copied
 small subset of `SLG Mail`, followed by a full read-only inventory comparison
 before any canonical archive is published.
 

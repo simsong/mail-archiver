@@ -60,9 +60,11 @@ directory, and a `data/mbox/` payload directory.
   Message-ID and raw SHA-256. It records the containing MBOX and MIME attachment
   count. Archives over 100,000 messages use the Mailbag-required numbered CSV
   parts.
-* A zero-byte source message retains the SHA-256 identity of empty bytes. Direct
-  retrieval removes only the single separator newline necessarily introduced
-  by standard MBOX encoding, and only when that exact empty digest is expected.
+* A source message retains the SHA-256 identity of its original bytes even when
+  it lacks a final line break. Because the standard MBOX writer adds a final
+  line break when one is absent, direct retrieval and independent verification
+  consider both representations and accept only the one matching that original
+  SHA-256. This includes the zero-byte-message case.
 * Because the standard-library MBOX writer does not distinguish an escaped
   source `From ` line from an original literal `>From ` line, direct retrieval
   considers the bounded possible interpretations and accepts only the one whose
