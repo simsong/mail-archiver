@@ -416,7 +416,10 @@ function resultRow(result) {
   row.append(subjectLine, line, preview);
   row.addEventListener("mousedown", () => elements["result-list"].focus({preventScroll: true}));
   row.addEventListener("click", () => selectMessage(result.message_pk));
-  row.addEventListener("dblclick", () => call(() => window.pywebview.api.open_message_window(result.message_pk)));
+  row.addEventListener("dblclick", async () => {
+    await call(() => window.pywebview.api.open_message_window(result.message_pk));
+    row.dataset.openedWindow = "true";
+  });
   installDrag(row, () => result.message_pk);
   return row;
 }

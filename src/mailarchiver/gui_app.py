@@ -258,7 +258,7 @@ class GuiApi:
         subprocess.Popen(["/usr/bin/open", str(destination)], close_fds=True)
         return OpenResult(filename=descriptor.filename, opened=True).model_dump()
 
-    def open_message_window(self, message_pk: int) -> None:
+    def open_message_window(self, message_pk: int) -> bool:
         view: MessageView = describe_message(self._archive(), message_pk)
         base_url = str(self.window.get_current_url()).split("?", 1)[0]
         child_api = GuiApi(
@@ -283,6 +283,9 @@ class GuiApi:
                 self.children.remove(child_api)
 
         child.events.closed += close_child
+        if self.e2e_directory is not None:
+            child.events.loaded += lambda *_args: child.destroy()
+        return True
 
     def close(self, *_args: object) -> None:
         self._preview_executor.shutdown(wait=False, cancel_futures=True)

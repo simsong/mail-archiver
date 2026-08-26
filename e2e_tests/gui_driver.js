@@ -187,9 +187,7 @@
     );
 
     rich.dispatchEvent(new MouseEvent("dblclick", {bubbles: true}));
-    await sleep(500);
-    checks.push("double-click opens a native message window");
-    await sleep(500);
+    await waitFor(() => rich.dataset.openedWindow === "true", "double-click opens a native message window");
     window.__mailarchiveE2E = {passed: true, checks, error: null};
   })().catch(error => {
     window.__mailarchiveE2E = {passed: false, checks, error: String(error?.stack || error)};
