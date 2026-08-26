@@ -1,4 +1,4 @@
-"""Requirement: incomplete MBOX/catalog/search publication is rolled back on recovery."""
+"""Verify journal recovery retains committed mail and rolls back orphaned appends."""
 
 import hashlib
 import mailbox
@@ -7,7 +7,15 @@ from pathlib import Path
 from mailarchiver.bagit import initialize_bag
 from mailarchiver.catalog import create_catalog, create_search
 from mailarchiver.layout import mbox_directory
-from mailarchiver.mbox import PendingPublication, PublicationRecovery, add_message, journal_publication, recover_publication
+from mailarchiver.mbox import (
+    PendingPublication,
+    PublicationRecovery,
+    add_message,
+    journal_publication,
+    read_location_candidates,
+    recover_publication,
+)
+from mailarchiver.search import index_message
 
 
 def test_recovery_truncates_orphaned_mbox_append_and_search_row(tmp_path: Path) -> None:
@@ -23,6 +31,7 @@ def test_recovery_truncates_orphaned_mbox_append_and_search_row(tmp_path: Path) 
         add_message(box, path, orphan)
     finally:
         box.close()
+    orphan_sha256 = hashlib.sha256(orphan).hexdigest()
     journal_publication(
         archive,
         PendingPublication(
@@ -30,18 +39,18 @@ def test_recovery_truncates_orphaned_mbox_append_and_search_row(tmp_path: Path) 
             prior_size=prior_size,
             file_existed=True,
             message_id="orphan@example",
-            sha256="orphan-sha256",
+            sha256=orphan_sha256,
         ),
     )
     catalog = create_catalog(archive / "archive.sqlite3")
     search = create_search(archive / "search.sqlite3")
-    search.execute("INSERT INTO message_fts(sha256, content) VALUES (?, ?)", ("orphan-sha256", "orphan"))
+    index_message(search, orphan, False)
     search.commit()
 
     try:
         assert recover_publication(archive, catalog, search) is PublicationRecovery.ROLLED_BACK
         assert path.stat().st_size == prior_size
-        assert search.execute("SELECT count(*) FROM message_fts WHERE sha256 = ?", ("orphan-sha256",)).fetchone() == (0,)
+        assert search.execute("SELECT count(*) FROM message_fts WHERE sha256 = ?", (orphan_sha256,)).fetchone() == (0,)
         assert not (archive / ".mailarchiver-pending.json").exists()
     finally:
         catalog.close()
@@ -103,3 +112,20 @@ def test_recovery_keeps_catalogued_mbox_append(tmp_path: Path) -> None:
         assert [recovered.get_bytes(key, from_=False) for key in recovered.iterkeys()] == [raw]
     finally:
         recovered.close()
+
+
+def test_ambiguous_from_recovery_yields_each_interpretation_once(tmp_path: Path) -> None:
+    """Requirement: hash recovery streams every bounded From-quote interpretation once."""
+    path = tmp_path / "ambiguous.mbox"
+    raw = b"Message-ID: <ambiguous@example>\n\nFrom one\nFrom two\nFrom three\n"
+    box = mailbox.mbox(path, create=True)
+    try:
+        location = add_message(box, path, raw)
+    finally:
+        box.close()
+
+    candidates = list(read_location_candidates(path, location))
+
+    assert len(candidates) == 8
+    assert len(set(candidates)) == 8
+    assert raw in candidates

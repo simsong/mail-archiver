@@ -1,9 +1,10 @@
-"""Requirements: mailsearch is read-only and finds headers, text, and numbered mail."""
+"""Verify CLI search syntax, indexed plans, rendering, and exact numbered retrieval."""
 
 from __future__ import annotations
 
 import hashlib
 import mailbox
+import sqlite3
 import subprocess
 import sys
 from os import environ
@@ -12,7 +13,7 @@ from pathlib import Path
 from mailarchiver.bagit import initialize_bag
 from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.layout import mbox_directory
-from mailarchiver.mailsearch import MessageHeader, format_header, render_message
+from mailarchiver.mailsearch import MessageHeader, SearchTerms, _search_statement, format_header, render_message
 from mailarchiver.mbox import add_message
 from mailarchiver.search import index_message
 
@@ -82,6 +83,21 @@ def test_mailsearch_finds_structured_and_full_text_matches(tmp_path: Path) -> No
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == "1 to:recipient@example.net from:sender@example.net subject:planning meeting date:2024-01-03T10:00:00+00:00\n"
+
+
+def test_bounded_listing_uses_date_index_before_recipient_aggregation(tmp_path: Path) -> None:
+    """Requirement: a bounded date listing selects indexed candidates before recipient aggregation."""
+    archive, _ = make_archive(tmp_path)
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        catalog.execute("ATTACH DATABASE ? AS search", (str(archive / "search.sqlite3"),))
+        statement = _search_statement(SearchTerms(), limit=10)
+        plan = [row[3] for row in catalog.execute("EXPLAIN QUERY PLAN " + statement.sql, statement.parameters)]
+    finally:
+        catalog.close()
+
+    assert "MATERIALIZE candidates" in plan
+    assert any("messages_date_message" in step for step in plan)
 
 
 def test_mailsearch_limit_zero_and_number_print_original_message(tmp_path: Path) -> None:

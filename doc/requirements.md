@@ -106,12 +106,13 @@ requirement.
   first compares the SHA-256 of the old length.  A matching MBOX prefix followed
   by a valid `From ` boundary resumes at that byte offset; all other changes
   reprocess the whole file.  The checkpoint is updated only after the selected
-  region and its queued scans finish and the source metadata remains stable.
-  Discovery, ingest, fingerprinting, and checkpointing proceed one file at a
-  time; ingest must not pre-hash the complete source tree or a never-seen first
-  file before archiving its messages. A new file's complete fingerprint is
-  calculated before its checkpoint is committed. A later source failure or
-  interruption retains every earlier fully published file.
+  region finishes and the source metadata remains stable.
+  Discovery is bounded by the configured worker count: each worker plans,
+  reads, parses, scans, and checkpoints one source mailfile at a time. Ingest
+  must not pre-hash the complete source tree. A new file's complete fingerprint
+  is calculated before its checkpoint is committed. A later source failure or
+  interruption retains committed messages; any in-flight file without a
+  checkpoint remains safely rerunnable.
 
 ## Malware handling
 
@@ -120,20 +121,29 @@ requirement.
   foreground `clamd` for the ingest when the configured local socket is not
   healthy, reuses a healthy existing daemon without stopping it, and never
   enables on-access or scheduled scanning.
-* `ingest --workers N` controls the bounded ClamAV scan pool.  Its default is
-  the detected CPU count capped at eight.  Source reading, duplicate decisions,
-  SQLite commits, and canonical MBOX publication remain single-writer.
-* Ingest progress is written to standard error at startup, every 250
-  milliseconds, and completion.  An interactive terminal receives a
-  redraw-in-place scoreboard; redirected output remains line-oriented.  Both report the phase,
-  including `checking sources`, `waiting for ClamAV startup`, and `ingesting`, plus elapsed
-  time, processed message and completed source-file counts, average message rate, resolved date range,
-  current year/current-year count, current source file, and source-file byte
-  completion percentage.  It separately reports archived, duplicate
+* `ingest --workers N` controls the number of source mailfiles ingested
+  simultaneously. Its default is the detected CPU count capped at eight, and
+  `N` must be positive. Each worker reads and parses its mailfile and submits
+  one ClamAV request at a time. Duplicate admission, SQLite commits, the
+  publication journal, and canonical MBOX appends remain serialized through
+  one publisher.
+* Mailfile workers send typed status updates to a main-thread status driver;
+  worker threads never write progress output. The driver writes standard error
+  at startup, every 250 milliseconds, and completion. An interactive terminal
+  receives a redraw-in-place scoreboard with a numbered row for every
+  configured worker; redirected output remains line-oriented. Both report
+  worker phases including `checking`, `ingesting`, `waiting for ClamAV
+  startup`, `scanning`, `waiting to publish`, `publishing`, `checkpointing`,
+  and `idle`, plus elapsed time, processed message and completed source-file
+  counts, average message rate, resolved date range, current year/current-year
+  count, active and peak worker counts, source file, and byte completion
+  percentage. Lines must be fitted to the terminal width so redraws never
+  accumulate wrapped headings. It separately reports archived, duplicate
   (previously-seen and skipped), autosave-excluded, and infected counts.
   While ClamAV loads virus definitions, every refresh explicitly identifies
   that wait and shows its increasing startup elapsed time instead of a stale
-  source-file status.
+  source-file status. A newly started daemon is ready only after the configured
+  scanner health probe succeeds, not merely when its socket appears.
 * Control-C is a graceful stop: close scanner and MBOX resources, commit
   completed messages and observations, publish a complete BagIt/Mailbag
   checkpoint, report interruption,
@@ -142,7 +152,7 @@ requirement.
   must be rolled back to the prior file size where possible, reported, and
   stopped without silently treating the message as archived.
 * Every ingest run records its completion time, result, and failure detail.
-  An unexpected parser failure drains earlier queued messages, closes
+  An unexpected parser failure preserves earlier published messages, closes
   resources, refreshes the BagIt/Mailbag checkpoint for committed MBOX changes, and leaves a
   rerunnable error observation containing the source offset and raw SHA-256.
 * Before each MBOX append, ingest durably records the target, prior length,
@@ -157,6 +167,7 @@ requirement.
   last message dates for each address. Addresses identified by Sent classification are suppressed
   from these correspondent lists only; they remain in the catalog and yearly
   people counts.  `--top 0` suppresses correspondent lists.
+  Year ranges must be ascending and correspondent limits must be nonnegative.
 * ClamAV outcomes are `clean`, `infected`, `unscannable`, or `scanner-error`,
   with scanner version, signature database version, and diagnostic retained.
 * Only a positive detection routes a message to `INFECTED1.mbox`; an
@@ -225,6 +236,15 @@ not make attachment payload bytes canonical database content.
 The message metadata also stores a deterministic, whitespace-collapsed preview
 of the first 18 words of the preferred non-attachment body. An ellipsis marks a
 truncated body.
+The SHA-256 primary key in ordinary message metadata maps each message to its
+message-body and optional attachment FTS row IDs. Updating or removing indexed
+content must resolve SHA-256 through that ordinary index and address FTS rows
+by row ID; it must never scan an FTS table by its unindexed SHA-256 column.
+The canonical catalog separately indexes message SHA-256 for FTS-to-message
+lookups. Bounded date-ordered listings must use the date/message index to
+select the requested page before recipient aggregation. Year-scoped reports
+must express their bounds as indexed `date_utc` ranges rather than applying a
+function to every stored date.
 Index extraction and insertion happen after canonical MBOX/catalog publication.
 An indexing failure is recorded as a metadata defect and does not reject mail;
 `refresh-index` repairs missing disposable content.
@@ -386,7 +406,10 @@ the command fails before reading or writing an archive.
 * A future integrated `verify` command is strictly read-only: it reparses every canonical MBOX,
   checks integrity files, offsets, and database rows, and reports duplicate-policy
   violations.
-* `refresh-index` rebuilds the disposable FTS database. `review` queries the
+* `refresh-index` rebuilds the disposable FTS database in a temporary file,
+  verifies every normal MBOX message against the catalog and the total
+  searchable-message count, and replaces the prior index only after those
+  checks succeed. `review` queries the
   committed source-observation log by run, source, and disposition. Derived
   catalog fields and canonical locations are created correctly during ingest.
 

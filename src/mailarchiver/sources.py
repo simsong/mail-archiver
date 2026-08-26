@@ -1,4 +1,4 @@
-"""Read-only streaming adapters for local message sources."""
+"""Discover and stream MBOX, EMLX, EML, and Maildir source messages read-only."""
 
 from __future__ import annotations
 

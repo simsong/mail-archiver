@@ -1,4 +1,4 @@
-"""Create native Mailbag/BagIt metadata and fixity checkpoints."""
+"""Publish native Mailbag metadata, payload manifests, and durable tag fixity."""
 
 from __future__ import annotations
 

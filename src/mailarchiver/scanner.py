@@ -1,4 +1,4 @@
-"""On-demand ClamAV process management."""
+"""Start, health-check, use, and stop the ingest run's on-demand ClamAV daemon."""
 
 from __future__ import annotations
 
@@ -29,12 +29,13 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         CLAMD_SOCKET.unlink(missing_ok=True)
         self.process = subprocess.Popen([CLAMD, "--foreground", f"--config-file={CLAMD_CONFIG}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            for _ in range(CLAMD_START_TIMEOUT_SECONDS * 10):
-                if CLAMD_SOCKET.exists():
+            deadline = time.monotonic() + CLAMD_START_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
+                if CLAMD_SOCKET.exists() and self.available():
                     return self
                 if self.process.poll() is not None:
                     raise RuntimeError("clamd failed to start; inspect its configuration")
-                time.sleep(0.1)
+                time.sleep(0.5 if CLAMD_SOCKET.exists() else 0.1)
         except BaseException:
             self.__exit__()
             raise
@@ -42,9 +43,15 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         raise RuntimeError("timed out waiting for clamd socket")
 
     def __exit__(self, *_: object) -> None:
-        if self.process is not None:
-            self.process.terminate()
-            self.process.wait(timeout=10)
+        process, self.process = self.process, None
+        if process is not None:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
             CLAMD_SOCKET.unlink(missing_ok=True)
 
     @staticmethod

@@ -1,4 +1,4 @@
-"""Disposable FTS5 indexing of message text, never raw MIME attachments."""
+"""Build disposable FTS5 body, preview, and optional text-attachment indexes."""
 
 from __future__ import annotations
 
@@ -113,22 +113,41 @@ def indexed_attachments(message: Message) -> list[IndexedAttachment]:
     return attachments
 
 
+def delete_indexed_message(search: sqlite3.Connection, digest: str) -> None:
+    """Delete disposable message content through the indexed SHA-256 mapping."""
+    row = search.execute(
+        "SELECT message_fts_rowid, attachment_fts_rowid FROM message_metadata WHERE sha256 = ?", (digest,)
+    ).fetchone()
+    if row is None:
+        return
+    message_fts_rowid, attachment_fts_rowid = row
+    search.execute("DELETE FROM message_fts WHERE rowid = ?", (message_fts_rowid,))
+    if attachment_fts_rowid is not None:
+        search.execute("DELETE FROM attachment_fts WHERE rowid = ?", (attachment_fts_rowid,))
+    search.execute("DELETE FROM message_metadata WHERE sha256 = ?", (digest,))
+
+
 def index_message(search: sqlite3.Connection, raw: bytes, index_attachments: bool) -> None:
     digest = hashlib.sha256(raw).hexdigest()
     message = BytesParser(policy=policy.compat32).parsebytes(raw)
     attachments = indexed_attachments(message)
     body = preferred_body_text(message)
-    search.execute("DELETE FROM message_fts WHERE sha256 = ?", (digest,))
-    search.execute("DELETE FROM attachment_fts WHERE sha256 = ?", (digest,))
-    search.execute("INSERT INTO message_fts(sha256, content) VALUES (?, ?)", (digest, parsed_message_text(message, False, body)))
+    delete_indexed_message(search, digest)
+    message_fts_rowid = search.execute(
+        "INSERT INTO message_fts(sha256, content) VALUES (?, ?)",
+        (digest, parsed_message_text(message, False, body)),
+    ).lastrowid
+    assert message_fts_rowid is not None
+    attachment_fts_rowid: int | None = None
     if index_attachments and (attachments_text := attachment_text(message)):
-        search.execute("INSERT INTO attachment_fts(sha256, content) VALUES (?, ?)", (digest, attachments_text))
+        attachment_fts_rowid = search.execute(
+            "INSERT INTO attachment_fts(sha256, content) VALUES (?, ?)", (digest, attachments_text)
+        ).lastrowid
     search.execute(
-        "INSERT INTO message_metadata(sha256, attachment_count, preview) VALUES (?, ?, ?) "
-        "ON CONFLICT(sha256) DO UPDATE SET attachment_count = excluded.attachment_count, preview = excluded.preview",
-        (digest, len(attachments), body_preview(body)),
+        "INSERT INTO message_metadata(sha256, message_fts_rowid, attachment_fts_rowid, attachment_count, preview) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (digest, message_fts_rowid, attachment_fts_rowid, len(attachments), body_preview(body)),
     )
-    search.execute("DELETE FROM message_attachments WHERE sha256 = ?", (digest,))
     search.executemany(
         "INSERT INTO message_attachments(sha256, attachment_ordinal, part_id, filename, mime_type) VALUES (?, ?, ?, ?, ?)",
         ((digest, item.attachment_ordinal, item.part_id, item.filename, item.mime_type) for item in attachments),

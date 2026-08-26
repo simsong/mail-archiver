@@ -1,4 +1,4 @@
-"""Canonical MBOX writes, retrieval, recovery, and integrity generation."""
+"""Publish canonical MBOX bytes and recover or verify their direct locations."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import mailbox
 import os
 import shutil
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from .layout import integrity_path, mbox_directory, mbox_path
 from .message import ParsedMessage
+from .search import delete_indexed_message
 from .standalone_verify import IntegrityMessage, write_integrity_file
 
 
@@ -89,9 +90,7 @@ def recover_publication(archive: Path, catalog: sqlite3.Connection, search: sqli
         return PublicationRecovery.COMMITTED
     path = mbox_path(archive, publication.filename)
     if not path.exists() and not publication.file_existed:
-        search.execute("DELETE FROM message_fts WHERE sha256 = ?", (publication.sha256,))
-        search.execute("DELETE FROM attachment_fts WHERE sha256 = ?", (publication.sha256,))
-        search.execute("DELETE FROM message_metadata WHERE sha256 = ?", (publication.sha256,))
+        delete_indexed_message(search, publication.sha256)
         search.commit()
         clear_publication_journal(archive)
         return PublicationRecovery.ROLLED_BACK
@@ -104,9 +103,7 @@ def recover_publication(archive: Path, catalog: sqlite3.Connection, search: sqli
             os.fsync(output.fileno())
     else:
         path.unlink()
-    search.execute("DELETE FROM message_fts WHERE sha256 = ?", (publication.sha256,))
-    search.execute("DELETE FROM attachment_fts WHERE sha256 = ?", (publication.sha256,))
-    search.execute("DELETE FROM message_metadata WHERE sha256 = ?", (publication.sha256,))
+    delete_indexed_message(search, publication.sha256)
     search.commit()
     clear_publication_journal(archive)
     return PublicationRecovery.ROLLED_BACK
@@ -156,24 +153,21 @@ def _read_stored_payload(path: Path, location: MboxLocation) -> bytes:
     return raw
 
 
-def read_location_candidates(path: Path, location: MboxLocation):
+def read_location_candidates(path: Path, location: MboxLocation) -> Iterator[bytes]:
     """Yield possible originals for the standard library's ambiguous From quoting."""
     stored = _read_stored_payload(path, location)
     lines = stored.splitlines(keepends=True)
     ambiguous = [index for index, line in enumerate(lines) if line.startswith(b">From ")]
-    masks = [(1 << len(ambiguous)) - 1, 0]
+    fully_unquoted = (1 << len(ambiguous)) - 1
+    masks = [fully_unquoted] + ([0] if fully_unquoted else [])
     if len(ambiguous) <= MAX_AMBIGUOUS_FROM_LINES:
-        masks.extend(range(1 << len(ambiguous)))
-    seen: set[bytes] = set()
+        masks.extend(range(1, fully_unquoted))
     for mask in masks:
         candidate = list(lines)
         for bit, index in enumerate(ambiguous):
             if mask & (1 << bit):
                 candidate[index] = candidate[index][1:]
-        raw = b"".join(candidate)
-        if raw not in seen:
-            seen.add(raw)
-            yield raw
+        yield b"".join(candidate)
     if stored == b"\n":
         yield b""
 

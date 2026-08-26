@@ -1,4 +1,4 @@
-"""Summarize standard input with Apple's on-device Foundation Models framework."""
+"""Compile and invoke the Apple Foundation Models helper for local text summaries."""
 
 from __future__ import annotations
 

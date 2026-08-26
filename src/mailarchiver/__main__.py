@@ -1,4 +1,4 @@
-"""Local archive ingestion and review CLI."""
+"""Run canonical mail ingest, provenance review, reports, and FTS rebuilds."""
 
 from __future__ import annotations
 
@@ -6,18 +6,20 @@ import argparse
 import hashlib
 import os
 import mailbox
+import queue
 import re
+import shutil
 import sqlite3
 import sys
 import threading
 import time
-from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import ExitStack
+from collections.abc import Callable, Iterable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from tabulate import tabulate
 
 from .archive_path import add_archive_argument, require_archive
@@ -27,12 +29,14 @@ from .layout import mbox_directory, mbox_path
 from .message import ParsedMessage, parse_message
 from .mbox import (
     DiskFullError,
+    MboxLocation,
     PendingPublication,
     PublicationRecovery,
     add_message,
     clear_publication_journal,
     journal_publication,
     mailbox_name,
+    read_verified_location,
     recover_publication,
 )
 from .scanner import ClamScanner
@@ -53,6 +57,23 @@ from .standalone_verify import install_archive_verifier, semantic_bytes
 DEFAULT_REPORT_TOP = 10
 PROGRESS_REFRESH_SECONDS = 0.25
 CLAMAV_START_PHASE = "waiting for ClamAV startup"
+WorkerItem = TypeVar("WorkerItem")
+
+
+def positive_integer(value: str) -> int:
+    """Parse a command-line integer that must be greater than zero."""
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return number
+
+
+def nonnegative_integer(value: str) -> int:
+    """Parse a command-line integer that may be zero but not negative."""
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be zero or positive")
+    return number
 
 
 class YearProgress(BaseModel):
@@ -72,6 +93,38 @@ class PendingScan(BaseModel):
     parsed: ParsedMessage
 
 
+WorkerPhase = Literal[
+    "idle",
+    "checking",
+    "ingesting",
+    "deduplicating",
+    "waiting for ClamAV startup",
+    "scanning",
+    "waiting to publish",
+    "publishing",
+    "checkpointing",
+]
+
+
+class WorkerProgress(BaseModel):
+    worker: int
+    phase: WorkerPhase = "idle"
+    path: str | None = None
+    bytes_done: int = 0
+    bytes_total: int = 0
+
+
+class ProgressUpdate(BaseModel):
+    worker: int
+    phase: WorkerPhase | None = None
+    path: str | None = None
+    bytes_done: int | None = None
+    bytes_total: int | None = None
+    message_date: datetime | None = None
+    disposition: str | None = None
+    file_complete: bool = False
+
+
 class ProgressState(BaseModel):
     started_at: datetime
     started_monotonic: float
@@ -81,117 +134,218 @@ class ProgressState(BaseModel):
     latest_date: datetime | None = None
     current_year: int | None = None
     current_year_messages: int = 0
-    current_file: str | None = None
-    file_bytes_done: int = 0
-    file_bytes_total: int = 0
-    counts: IngestCounts = IngestCounts()
-    years: list[YearProgress] = []
+    peak_active_files: int = 0
+    workers: list[WorkerProgress] = Field(default_factory=list)
+    counts: IngestCounts = Field(default_factory=IngestCounts)
+    years: list[YearProgress] = Field(default_factory=list)
 
 
 class ProgressReporter:
-    """Print a thread-safe ingest heartbeat without delaying message handling."""
+    """Receive worker updates and let the main thread render ingest status."""
 
-    def __init__(self) -> None:
-        self.state = ProgressState(started_at=datetime.now(timezone.utc), started_monotonic=time.monotonic())
-        self.lock = threading.Lock()
-        self.done = threading.Event()
-        self.thread = threading.Thread(target=self.heartbeat, daemon=True)
+    def __init__(self, worker_count: int = 1) -> None:
+        self.state = ProgressState(
+            started_at=datetime.now(timezone.utc),
+            started_monotonic=time.monotonic(),
+            workers=[WorkerProgress(worker=worker) for worker in range(1, worker_count + 1)],
+        )
+        self.updates: queue.SimpleQueue[ProgressUpdate] = queue.SimpleQueue()
+        self.driver_thread = threading.get_ident()
         self.tty = sys.stderr.isatty()
-        self.rendered = False
+        self.terminal_columns = max(shutil.get_terminal_size((120, 24)).columns, 20)
+        self.rendered_lines = 0
+        self.base_phase = "started"
         self.phase = "started"
         self.phase_started_monotonic = self.state.started_monotonic
 
     def start(self) -> None:
         self.display(self.phase)
-        self.thread.start()
 
     def set_phase(self, phase: str) -> None:
-        with self.lock:
-            self.phase = phase
-            self.phase_started_monotonic = time.monotonic()
+        self._assert_driver_thread()
+        self.base_phase = phase
+        self.phase = phase
+        self.phase_started_monotonic = time.monotonic()
         self.display(phase)
 
     def record(self, parsed: ParsedMessage, source: SourceMessage) -> None:
-        date = datetime.fromisoformat(parsed.date_utc)
-        with self.lock:
-            self.state.processed += 1
-            self.state.earliest_date = date if self.state.earliest_date is None else min(self.state.earliest_date, date)
-            self.state.latest_date = date if self.state.latest_date is None else max(self.state.latest_date, date)
-            year = date.year
-            progress = next((entry for entry in self.state.years if entry.year == year), None)
-            if progress is None:
-                progress = YearProgress(year=year)
-                self.state.years.append(progress)
-            progress.messages += 1
-            self.state.current_year = year
-            self.state.current_year_messages = progress.messages
-            self.state.current_file = str(source.path)
-            self.state.file_bytes_done = source.bytes_done
-            self.state.file_bytes_total = source.bytes_total
+        self._send(
+            "ingesting",
+            source.path,
+            source.bytes_done,
+            source.bytes_total,
+            message_date=datetime.fromisoformat(parsed.date_utc),
+        )
 
     def record_source(self, source: SourceMessage) -> None:
-        with self.lock:
-            self.state.current_file = str(source.path)
-            self.state.file_bytes_done = source.bytes_done
-            self.state.file_bytes_total = source.bytes_total
+        self._send("ingesting", source.path, source.bytes_done, source.bytes_total)
 
     def record_file(self, path: Path, bytes_done: int, bytes_total: int) -> None:
-        with self.lock:
-            self.state.current_file = str(path)
-            self.state.file_bytes_done = bytes_done
-            self.state.file_bytes_total = bytes_total
+        self._send("checking", path, bytes_done, bytes_total)
 
-    def record_file_complete(self) -> None:
-        with self.lock:
-            self.state.files_processed += 1
+    def record_worker(
+        self,
+        phase: WorkerPhase,
+        path: Path,
+        bytes_done: int,
+        bytes_total: int,
+    ) -> None:
+        self._send(phase, path, bytes_done, bytes_total)
+
+    def record_file_complete(self, path: Path) -> None:
+        self._send("idle", path, 0, 0, file_complete=True)
+
+    def record_file_inactive(self, path: Path) -> None:
+        self._send("idle", path, 0, 0)
 
     def record_disposition(self, disposition: str) -> None:
-        with self.lock:
-            if disposition == "archived":
+        self.updates.put(ProgressUpdate(worker=self._worker_number(), disposition=disposition))
+
+    def _send(
+        self,
+        phase: WorkerPhase,
+        path: Path,
+        bytes_done: int,
+        bytes_total: int,
+        *,
+        message_date: datetime | None = None,
+        file_complete: bool = False,
+    ) -> None:
+        self.updates.put(
+            ProgressUpdate(
+                worker=self._worker_number(),
+                phase=phase,
+                path=str(path),
+                bytes_done=bytes_done,
+                bytes_total=bytes_total,
+                message_date=message_date,
+                file_complete=file_complete,
+            )
+        )
+
+    @staticmethod
+    def _worker_number() -> int:
+        name = threading.current_thread().name
+        match = re.fullmatch(r"mailfile_(\d+)", name)
+        if match is None:
+            raise RuntimeError(f"progress update sent outside a mailfile worker: {name}")
+        return int(match.group(1)) + 1
+
+    def _assert_driver_thread(self) -> None:
+        if threading.get_ident() != self.driver_thread:
+            raise RuntimeError("only the main status driver may render progress")
+
+    def _drain_updates(self) -> None:
+        self._assert_driver_thread()
+        while True:
+            try:
+                update = self.updates.get_nowait()
+            except queue.Empty:
+                break
+            worker = self.state.workers[update.worker - 1]
+            if update.phase is not None:
+                worker.phase = update.phase
+            if update.path is not None:
+                worker.path = update.path
+            if update.bytes_done is not None:
+                worker.bytes_done = update.bytes_done
+            if update.bytes_total is not None:
+                worker.bytes_total = update.bytes_total
+            if update.message_date is not None:
+                self._record_message(update.message_date)
+            if update.file_complete:
+                self.state.files_processed += 1
+            if update.disposition == "archived":
                 self.state.counts.archived += 1
-            elif disposition == "duplicate":
+            elif update.disposition == "duplicate":
                 self.state.counts.duplicates += 1
-            elif disposition == "autosave-excluded":
+            elif update.disposition == "autosave-excluded":
                 self.state.counts.autosaves += 1
-            elif disposition == "infected":
+            elif update.disposition == "infected":
                 self.state.counts.infected += 1
+            active = sum(item.phase != "idle" for item in self.state.workers)
+            self.state.peak_active_files = max(self.state.peak_active_files, active)
 
-    def heartbeat(self) -> None:
-        while not self.done.wait(PROGRESS_REFRESH_SECONDS):
-            with self.lock:
-                phase = self.phase
-            self.display(phase)
+    def _record_message(self, date: datetime) -> None:
+        self.state.processed += 1
+        self.state.earliest_date = date if self.state.earliest_date is None else min(self.state.earliest_date, date)
+        self.state.latest_date = date if self.state.latest_date is None else max(self.state.latest_date, date)
+        progress = next((entry for entry in self.state.years if entry.year == date.year), None)
+        if progress is None:
+            progress = YearProgress(year=date.year)
+            self.state.years.append(progress)
+        progress.messages += 1
+        self.state.current_year = date.year
+        self.state.current_year_messages = progress.messages
 
-    def display(self, label: str) -> None:
-        with self.lock:
-            state = self.state.model_copy(deep=True)
-            phase_started_monotonic = self.phase_started_monotonic
+    def refresh(self) -> None:
+        self.display(None)
+
+    def _worker_phase(self) -> str:
+        phases = {worker.phase for worker in self.state.workers}
+        if CLAMAV_START_PHASE in phases:
+            return CLAMAV_START_PHASE
+        if phases != {"idle"}:
+            return "ingesting"
+        return self.base_phase
+
+    @staticmethod
+    def _worker_line(worker: WorkerProgress, columns: int) -> str:
+        prefix = f"Thread {worker.worker:>2}: [{worker.phase}]"
+        if worker.phase == "idle" or worker.path is None:
+            return prefix
+        percent = 0 if worker.bytes_total == 0 else 100 * worker.bytes_done / worker.bytes_total
+        suffix = f" ({percent:.1f}%)"
+        available = max(columns - len(prefix) - len(suffix) - 2, 1)
+        path = worker.path
+        if len(path) > available:
+            path = "…" if available == 1 else "…" + path[-(available - 1):]
+        return f"{prefix} {path}{suffix}"
+
+    @staticmethod
+    def _fit(line: str, columns: int) -> str:
+        if len(line) <= columns:
+            return line
+        return line[: max(columns - 1, 0)] + "…"
+
+    def display(self, label: str | None) -> None:
+        self._drain_updates()
+        display_label = label or self._worker_phase()
+        if display_label != self.phase:
+            self.phase = display_label
+            self.phase_started_monotonic = time.monotonic()
+        state = self.state.model_copy(deep=True)
         elapsed = max(time.monotonic() - state.started_monotonic, 0.001)
-        phase_elapsed = max(time.monotonic() - phase_started_monotonic, 0.0)
+        phase_elapsed = max(time.monotonic() - self.phase_started_monotonic, 0.0)
         dates = "none" if state.earliest_date is None else f"{state.earliest_date.date()}..{state.latest_date.date()}"
         year = "none" if state.current_year is None else str(state.current_year)
-        percent = 0 if state.file_bytes_total == 0 else 100 * state.file_bytes_done / state.file_bytes_total
-        current = "waiting for source" if state.current_file is None else f"{state.current_file} ({percent:.1f}%)"
-        display_label = label
-        if label == CLAMAV_START_PHASE:
-            display_label = f"{label}: {phase_elapsed:.1f}s"
-            current = "ClamAV daemon is loading virus definitions"
+        if display_label == CLAMAV_START_PHASE:
+            display_label = f"{CLAMAV_START_PHASE}: {phase_elapsed:.1f}s"
+        active = sum(worker.phase != "idle" for worker in state.workers)
         if self.tty:
             lines = [
                 f"mailarchiver ingest  [{display_label}]",
                 f"Processed: {state.processed:,} messages in {state.files_processed:,} files  "
                 f"Rate: {state.processed / elapsed:.2f} messages/s  Elapsed: {elapsed:.0f}s",
-                f"Current:   {current}",
+                f"Workers:   {active:,} active; peak {state.peak_active_files:,}; {len(state.workers):,} configured",
+                *(self._worker_line(worker, self.terminal_columns) for worker in state.workers),
                 f"Dates:     {dates}  Current year: {year} ({state.current_year_messages:,} messages)",
                 f"Archived:  {state.counts.archived:,}  Seen/skipped: {state.counts.duplicates:,}  Autosaved: {state.counts.autosaves:,}  Infected: {state.counts.infected:,}",
             ]
-            sys.stderr.write(("\x1b[5A" if self.rendered else "") + "\n".join(f"\r\x1b[2K{line}" for line in lines) + "\n")
-            self.rendered = True
+            lines = [self._fit(line, self.terminal_columns) for line in lines]
+            rewind = f"\x1b[{self.rendered_lines}A" if self.rendered_lines else ""
+            sys.stderr.write(rewind + "\n".join(f"\r\x1b[2K{line}" for line in lines) + "\n")
+            self.rendered_lines = len(lines)
         else:
+            workers = " ".join(
+                f"{worker.worker}:{worker.phase}:{Path(worker.path).name if worker.path else '-'}"
+                for worker in state.workers
+            )
             print(
                 f"{display_label}: processed={state.processed} files_processed={state.files_processed} "
+                f"active_workers={active} peak_workers={state.peak_active_files} "
                 f"rate={state.processed / elapsed:.2f}/s "
-                f"file={current} dates={dates} current_year={year} year_messages={state.current_year_messages} "
+                f"workers={workers} dates={dates} current_year={year} year_messages={state.current_year_messages} "
                 f"archived={state.counts.archived} seen_skipped={state.counts.duplicates} "
                 f"autosaved={state.counts.autosaves} infected={state.counts.infected}",
                 file=sys.stderr,
@@ -199,9 +353,56 @@ class ProgressReporter:
         sys.stderr.flush()
 
     def finish(self, status: str) -> None:
-        self.done.set()
-        self.thread.join()
         self.display(status)
+
+
+def run_file_workers(
+    items: Iterable[WorkerItem],
+    worker_count: int,
+    process: Callable[[WorkerItem], None],
+    stop: threading.Event,
+    status_driver: Callable[[], None],
+) -> None:
+    """Process at most ``worker_count`` source files concurrently and defer discovery errors."""
+    iterator = iter(items)
+    pool = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="mailfile")
+    pending: set[Future[None]] = set()
+    exhausted = False
+    discovery_error: BaseException | None = None
+    try:
+        while pending or not exhausted:
+            if stop.is_set():
+                exhausted = True
+            while not exhausted and len(pending) < worker_count:
+                try:
+                    item = next(iterator)
+                except StopIteration:
+                    exhausted = True
+                except BaseException as error:
+                    discovery_error = error
+                    exhausted = True
+                else:
+                    pending.add(pool.submit(process, item))
+            if not pending:
+                break
+            completed, pending = wait(
+                pending,
+                timeout=PROGRESS_REFRESH_SECONDS,
+                return_when=FIRST_COMPLETED,
+            )
+            status_driver()
+            for future in completed:
+                future.result()
+        if discovery_error is not None:
+            raise discovery_error
+    except BaseException:
+        stop.set()
+        for future in pending:
+            future.cancel()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+        status_driver()
 
 
 def ingest(args: argparse.Namespace) -> None:
@@ -218,7 +419,8 @@ def ingest(args: argparse.Namespace) -> None:
     if not catalog_path.exists() and existing_output:
         raise RuntimeError("cannot create a fresh catalog beside existing archive output; use a new empty archive directory")
     initialize_bag(archive)
-    catalog, search = create_catalog(catalog_path), create_search(archive / "search.sqlite3")
+    catalog = create_catalog(catalog_path, check_same_thread=False)
+    search = create_search(archive / "search.sqlite3", check_same_thread=False)
     install_archive_verifier(archive)
     recovery = recover_publication(archive, catalog, search)
     if recovery is not PublicationRecovery.NONE:
@@ -228,11 +430,14 @@ def ingest(args: argparse.Namespace) -> None:
     run_pk = catalog.execute("INSERT INTO ingest_runs(started_at) VALUES (?)", (datetime.now(timezone.utc).isoformat(),)).lastrowid
     catalog.commit()
     boxes: dict[Path, mailbox.mbox] = {}
-    prior_dates: dict[Path, datetime] = {}
     source_file_pks: dict[Path, int] = {}
     pending_duplicate_observations: dict[tuple[str, str], list[int]] = {}
     pending_identities: set[tuple[str, str]] = set()
-    progress = ProgressReporter()
+    publication_lock = threading.RLock()
+    scanner_lock = threading.Lock()
+    stop = threading.Event()
+    scanner: ClamScanner | None = None
+    progress = ProgressReporter(args.workers)
     succeeded = False
     interrupted = False
     disk_full = False
@@ -275,6 +480,7 @@ def ingest(args: argparse.Namespace) -> None:
         return int(cursor.lastrowid)
 
     def checkpoint(source: SourceFile, sha256: str) -> None:
+        progress.record_worker("checkpointing", source.path, source.byte_length, source.byte_length)
         current = source.path.stat()
         if current.st_size != source.byte_length or current.st_mtime_ns != source.modified_at_ns:
             raise RuntimeError(f"source changed during ingest: {source.path}")
@@ -285,19 +491,16 @@ def ingest(args: argparse.Namespace) -> None:
              source_file_pks[source.path]),
         )
         catalog.commit()
-        progress.record_file_complete()
+        progress.record_file_complete(source.path)
 
-    def plan_source(source: SourceFile) -> SourcePlan:
+    def plan_source(source: SourceFile, prior: tuple[int | None, str | None] | None) -> SourcePlan:
         progress.record_file(source.path, 0, source.byte_length)
-        volume_pk = source_volume_pk(source)
-        prior = catalog.execute(
-            "SELECT byte_length, sha256 FROM source_files WHERE source_volume_pk = ? AND source_path = ?",
-            (volume_pk, source.source_path),
-        ).fetchone()
         report_hash = lambda done, _total: progress.record_file(source.path, done, source.byte_length)
         if prior is None:
             return SourcePlan(source=source)
         prior_length, prior_sha256 = prior
+        if prior_length is None or prior_sha256 is None:
+            return SourcePlan(source=source, sha256=sha256_file(source.path, progress=report_hash))
         if source.byte_length == prior_length:
             sha256 = sha256_file(source.path, progress=report_hash)
             return SourcePlan(source=source, sha256=sha256, skip=sha256 == prior_sha256)
@@ -365,108 +568,164 @@ def ingest(args: argparse.Namespace) -> None:
             progress.record_disposition("infected")
         return int(message_pk)
 
-    try:
-        scanner: ClamScanner | None = None
-        workers: ThreadPoolExecutor | None = None
-        with ExitStack() as resources:
-            for root in args.roots:
-                for source_file in source_files(Path(root)):
-                    progress.set_phase("checking sources")
-                    plan = plan_source(source_file)
-                    register_source_file(source_file)
-                    catalog.commit()
-                    if plan.skip:
-                        assert plan.sha256 is not None
-                        checkpoint(source_file, plan.sha256)
+    def scan_message(source: SourceMessage) -> bool:
+        nonlocal scanner
+        if scanner is None:
+            progress.record_worker(
+                CLAMAV_START_PHASE,
+                source.path,
+                source.bytes_done,
+                source.bytes_total,
+            )
+            with scanner_lock:
+                if scanner is None:
+                    candidate = ClamScanner()
+                    candidate.__enter__()
+                    scanner = candidate
+        assert scanner is not None
+        progress.record_worker("scanning", source.path, source.bytes_done, source.bytes_total)
+        return scanner.infected(source.raw)
+
+    def ingest_source_file(source_file: SourceFile) -> None:
+        try:
+            if stop.is_set():
+                return
+            progress.record_worker("checking", source_file.path, 0, source_file.byte_length)
+            with publication_lock:
+                volume_pk = source_volume_pk(source_file)
+                prior = catalog.execute(
+                    "SELECT byte_length, sha256 FROM source_files WHERE source_volume_pk = ? AND source_path = ?",
+                    (volume_pk, source_file.source_path),
+                ).fetchone()
+                register_source_file(source_file)
+                catalog.commit()
+            plan = plan_source(source_file, prior)
+            if stop.is_set():
+                return
+            if plan.skip:
+                assert plan.sha256 is not None
+                with publication_lock:
+                    checkpoint(source_file, plan.sha256)
+                return
+
+            prior_date: datetime | None = None
+            if plan.start_offset:
+                with publication_lock:
+                    row = catalog.execute(
+                        "SELECT messages.date_utc FROM observations JOIN messages USING (message_pk) "
+                        "JOIN source_files USING (source_file_pk) WHERE source_file_pk = ? AND source_offset < ? "
+                        "ORDER BY source_offset DESC LIMIT 1",
+                        (source_file_pks[source_file.path], plan.start_offset),
+                    ).fetchone()
+                if row is not None:
+                    prior_date = datetime.fromisoformat(row[0])
+
+            for source in source_messages(plan.source, plan.start_offset):
+                if stop.is_set():
+                    return
+                raw = source.raw
+                progress.record_source(source)
+                try:
+                    parsed = parse_message(raw, source.path, prior_date)
+                except Exception as error:
+                    digest = hashlib.sha256(raw).hexdigest()
+                    with publication_lock:
+                        observe(source, "error", f"{type(error).__name__}: {error}", digest)
+                        catalog.commit()
+                    raise RuntimeError(
+                        f"failed to parse {source.path} at source offset {source.source_offset}; sha256={digest}"
+                    ) from error
+                prior_date = datetime.fromisoformat(parsed.date_utc)
+                progress.record(parsed, source)
+                if parsed.autosave:
+                    progress.record_worker(
+                        "publishing", source.path, source.bytes_done, source.bytes_total
+                    )
+                    with publication_lock:
+                        observe(source, "autosave-excluded", "X-Apple-Auto-Saved", parsed.sha256)
+                        catalog.commit()
+                    progress.record_disposition("autosave-excluded")
+                    continue
+
+                identity = (parsed.message_id, parsed.sha256)
+                progress.record_worker(
+                    "deduplicating", source.path, source.bytes_done, source.bytes_total
+                )
+                with publication_lock:
+                    existing = catalog.execute(
+                        "SELECT message_pk FROM messages WHERE message_id_normalized = ? AND sha256 = ?", identity
+                    ).fetchone()
+                    if existing is not None or identity in pending_identities:
+                        message_pk = None if existing is None else existing[0]
+                        detail = (
+                            "same Message-ID and SHA-256"
+                            if existing is not None
+                            else "same Message-ID and SHA-256 pending scan"
+                        )
+                        if message_pk is not None:
+                            catalog.executemany(
+                                "INSERT OR IGNORE INTO metadata_defects(message_pk, field, detail) VALUES (?, ?, ?)",
+                                ((message_pk, defect.field, defect.detail) for defect in parsed.defects),
+                            )
+                        observation_pk = observe(source, "duplicate", detail, parsed.sha256, message_pk)
+                        if message_pk is None:
+                            pending_duplicate_observations.setdefault(identity, []).append(observation_pk)
+                        catalog.commit()
+                        progress.record_disposition("duplicate")
                         continue
-                    if scanner is None:
-                        progress.set_phase(CLAMAV_START_PHASE)
-                        scanner = resources.enter_context(ClamScanner())
-                        workers = resources.enter_context(ThreadPoolExecutor(max_workers=args.workers))
-                    assert scanner is not None and workers is not None
-                    progress.set_phase("ingesting")
-                    pending: deque[tuple[PendingScan, Future[bool]]] = deque()
+                    pending_identities.add(identity)
 
-                    def drain_pending() -> None:
-                        while pending:
-                            completed, future = pending.popleft()
-                            identity = (completed.parsed.message_id, completed.parsed.sha256)
-                            message_pk = archive_scanned(completed, future.result())
-                            catalog.executemany(
-                                "UPDATE observations SET message_pk = ? WHERE observation_pk = ?",
-                                ((message_pk, observation_pk) for observation_pk in pending_duplicate_observations.pop(identity, [])),
-                            )
-                            catalog.commit()
-                            pending_identities.remove(identity)
-
-                    path = plan.source.path
-                    if plan.start_offset:
-                        prior = catalog.execute(
-                            "SELECT messages.date_utc FROM observations JOIN messages USING (message_pk) "
-                            "JOIN source_files USING (source_file_pk) WHERE source_file_pk = ? AND source_offset < ? "
-                            "ORDER BY source_offset DESC LIMIT 1",
-                            (source_file_pks[path], plan.start_offset),
-                        ).fetchone()
-                        if prior is not None:
-                            prior_dates[path] = datetime.fromisoformat(prior[0])
-                    for source in source_messages(plan.source, plan.start_offset):
-                        path, raw = source.path, source.raw
-                        progress.record_source(source)
-                        try:
-                            parsed = parse_message(raw, path, prior_dates.get(path))
-                        except Exception as error:
-                            digest = hashlib.sha256(raw).hexdigest()
-                            observe(source, "error", f"{type(error).__name__}: {error}", digest)
-                            catalog.commit()
-                            drain_pending()
-                            raise RuntimeError(
-                                f"failed to parse {path} at source offset {source.source_offset}; sha256={digest}"
-                            ) from error
-                        prior_dates[path] = datetime.fromisoformat(parsed.date_utc)
-                        progress.record(parsed, source)
-                        if parsed.autosave:
-                            observe(source, "autosave-excluded", "X-Apple-Auto-Saved", parsed.sha256)
-                            catalog.commit()
-                            progress.record_disposition("autosave-excluded")
-                            continue
-                        identity = (parsed.message_id, parsed.sha256)
-                        existing = catalog.execute("SELECT message_pk FROM messages WHERE message_id_normalized = ? AND sha256 = ?", identity).fetchone()
-                        if existing is not None or identity in pending_identities:
-                            message_pk = None if existing is None else existing[0]
-                            detail = "same Message-ID and SHA-256" if existing is not None else "same Message-ID and SHA-256 pending scan"
-                            if message_pk is not None:
-                                catalog.executemany(
-                                    "INSERT OR IGNORE INTO metadata_defects(message_pk, field, detail) VALUES (?, ?, ?)",
-                                    ((message_pk, defect.field, defect.detail) for defect in parsed.defects),
-                                )
-                            observation_pk = observe(source, "duplicate", detail, parsed.sha256, message_pk)
-                            if message_pk is None:
-                                pending_duplicate_observations.setdefault(identity, []).append(observation_pk)
-                            catalog.commit()
-                            progress.record_disposition("duplicate")
-                            continue
-                        candidate = PendingScan(source=source, parsed=parsed)
-                        pending_identities.add(identity)
-                        pending.append((candidate, workers.submit(scanner.infected, raw)))
-                        if len(pending) >= args.workers * 2:
-                            completed, future = pending.popleft()
-                            identity = (completed.parsed.message_id, completed.parsed.sha256)
-                            message_pk = archive_scanned(completed, future.result())
-                            catalog.executemany(
-                                "UPDATE observations SET message_pk = ? WHERE observation_pk = ?",
-                                ((message_pk, observation_pk) for observation_pk in pending_duplicate_observations.pop(identity, [])),
-                            )
-                            catalog.commit()
-                            pending_identities.remove(identity)
-                    drain_pending()
-                    progress.set_phase("checking sources")
-                    source_sha256 = plan.sha256 or sha256_file(
-                        plan.source.path,
-                        progress=lambda done, _total: progress.record_file(
-                            plan.source.path, done, plan.source.byte_length
+                candidate = PendingScan(source=source, parsed=parsed)
+                infected = scan_message(source)
+                if stop.is_set():
+                    return
+                progress.record_worker(
+                    "waiting to publish", source.path, source.bytes_done, source.bytes_total
+                )
+                with publication_lock:
+                    progress.record_worker(
+                        "publishing", source.path, source.bytes_done, source.bytes_total
+                    )
+                    message_pk = archive_scanned(candidate, infected)
+                    catalog.executemany(
+                        "UPDATE observations SET message_pk = ? WHERE observation_pk = ?",
+                        (
+                            (message_pk, observation_pk)
+                            for observation_pk in pending_duplicate_observations.pop(identity, [])
                         ),
                     )
-                    checkpoint(plan.source, source_sha256)
+                    catalog.commit()
+                    pending_identities.remove(identity)
+
+            source_sha256 = plan.sha256 or sha256_file(
+                plan.source.path,
+                progress=lambda done, _total: progress.record_file(
+                    plan.source.path, done, plan.source.byte_length
+                ),
+            )
+            if stop.is_set():
+                return
+            with publication_lock:
+                checkpoint(plan.source, source_sha256)
+        except BaseException:
+            stop.set()
+            raise
+        finally:
+            progress.record_file_inactive(source_file.path)
+
+    def discovered_sources() -> Iterable[SourceFile]:
+        for root in args.roots:
+            yield from source_files(Path(root))
+
+    try:
+        progress.set_phase("checking sources")
+        run_file_workers(
+            discovered_sources(),
+            args.workers,
+            ingest_source_file,
+            stop,
+            progress.refresh,
+        )
         catalog.commit()
         search.commit()
         succeeded = True
@@ -488,6 +747,9 @@ def ingest(args: argparse.Namespace) -> None:
         search.rollback()
         raise
     finally:
+        stop.set()
+        if scanner is not None:
+            scanner.__exit__()
         for box in boxes.values():
             box.close()
         result = "completed" if succeeded else "interrupted" if interrupted else "disk-full" if disk_full else "failed"
@@ -541,7 +803,10 @@ def report_years(value: str | None) -> tuple[int, int] | None:
     if match is None:
         raise ValueError("--year must be YYYY or YYYY-YYYY")
     years = value.split("-")
-    return int(years[0]), int(years[-1])
+    first, last = int(years[0]), int(years[-1])
+    if first > last:
+        raise ValueError("--year range must be ascending")
+    return first, last
 
 
 def print_report(archive: Path, years: tuple[int, int] | None, top: int | None) -> None:
@@ -550,8 +815,8 @@ def print_report(archive: Path, years: tuple[int, int] | None, top: int | None) 
         conditions = ["category IN (?, ?)"]
         parameters: tuple[str | int, ...] = SEARCH_CATEGORIES
         if years is not None:
-            conditions.append("CAST(substr(date_utc, 1, 4) AS INTEGER) BETWEEN ? AND ?")
-            parameters += years
+            conditions.append("date_utc >= ? AND date_utc < ?")
+            parameters += (f"{years[0]:04d}-01-01T00:00:00+00:00", f"{years[1] + 1:04d}-01-01T00:00:00+00:00")
         clause = " WHERE " + " AND ".join(conditions)
         rows = catalog.execute(
             "WITH relevant AS (SELECT * FROM messages" + clause + "), "
@@ -636,20 +901,61 @@ def refresh_index(args: argparse.Namespace) -> None:
     archive = Path(args.archive)
     temporary = archive / "search.sqlite3.tmp"
     temporary.unlink(missing_ok=True)
-    search = create_search(temporary)
+    catalog = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
     try:
-        for path in mbox_directory(archive).glob("*.mbox"):
-            if QUARANTINE_MAILBOX.fullmatch(path.name):
-                continue
-            box = mailbox.mbox(path, factory=None, create=False)
-            try:
-                for key in box.iterkeys():
-                    index_message(search, box.get_bytes(key, from_=False), args.index_attachments)
-            finally:
-                box.close()
-        search.commit()
+        search = create_search(temporary)
+        try:
+            expected_row = catalog.execute(
+                "SELECT COUNT(*) FROM messages WHERE category IN (?, ?)", SEARCH_CATEGORIES
+            ).fetchone()
+            assert expected_row is not None
+            expected_by_file = dict(
+                catalog.execute(
+                    "SELECT mbox_generations.filename, COUNT(*) FROM messages "
+                    "JOIN locations USING (message_pk) JOIN mbox_generations USING (generation_pk) "
+                    "WHERE category IN (?, ?) GROUP BY mbox_generations.filename",
+                    SEARCH_CATEGORIES,
+                )
+            )
+            for path in mbox_directory(archive).glob("*.mbox"):
+                if QUARANTINE_MAILBOX.fullmatch(path.name):
+                    continue
+                box = mailbox.mbox(path, factory=None, create=False)
+                try:
+                    actual = len(box)
+                finally:
+                    box.close()
+                expected = int(expected_by_file.get(path.name, 0))
+                if actual != expected:
+                    raise RuntimeError(
+                        f"canonical MBOX/catalog count mismatch for {path.name}: {actual} records, {expected} catalogued"
+                    )
+            rows = catalog.execute(
+                "SELECT messages.sha256, mbox_generations.filename, locations.byte_offset, locations.byte_length "
+                "FROM messages JOIN locations USING (message_pk) JOIN mbox_generations USING (generation_pk) "
+                "WHERE category IN (?, ?) ORDER BY mbox_generations.filename, locations.byte_offset",
+                SEARCH_CATEGORIES,
+            )
+            indexed = 0
+            for digest, filename, offset, length in rows:
+                if QUARANTINE_MAILBOX.fullmatch(filename):
+                    raise RuntimeError(f"searchable catalog message is stored in quarantine MBOX: {filename}")
+                raw = read_verified_location(
+                    mbox_path(archive, filename),
+                    MboxLocation(byte_offset=offset, byte_length=length),
+                    digest,
+                )
+                index_message(search, raw, args.index_attachments)
+                indexed += 1
+            if indexed != int(expected_row[0]):
+                raise RuntimeError(
+                    f"catalog has {expected_row[0]} searchable messages but only {indexed} have canonical locations"
+                )
+            search.commit()
+        finally:
+            search.close()
     finally:
-        search.close()
+        catalog.close()
     os.replace(temporary, archive / "search.sqlite3")
 
 
@@ -660,7 +966,7 @@ def main() -> int:
     ingest_parser = commands.add_parser("ingest")
     ingest_parser.add_argument("--owner-names-file", required=True)
     ingest_parser.add_argument("--clamav", action="store_true", required=True, help="scan new messages with on-demand ClamAV")
-    ingest_parser.add_argument("--workers", type=int, default=min(os.cpu_count() or 1, 8), help="concurrent ClamAV scans (default: cores, capped at 8)")
+    ingest_parser.add_argument("--workers", type=positive_integer, default=min(os.cpu_count() or 1, 8), help="source mailfiles ingested concurrently (default: cores, capped at 8)")
     ingest_parser.add_argument("--index-attachments", action="store_true", help="index text attachments; non-text attachments require the planned Tika extractor")
     ingest_parser.add_argument("roots", nargs="+", metavar="ROOT")
     ingest_parser.set_defaults(function=ingest)
@@ -669,7 +975,7 @@ def main() -> int:
     review_parser.set_defaults(function=review)
     report_parser = commands.add_parser("report")
     report_parser.add_argument("--year", help="year or inclusive year range, for example 2016 or 2010-2020")
-    report_parser.add_argument("--top", type=int, default=DEFAULT_REPORT_TOP, help="top senders and recipients to show (default: 10; use 0 to suppress)")
+    report_parser.add_argument("--top", type=nonnegative_integer, default=DEFAULT_REPORT_TOP, help="top senders and recipients to show (default: 10; use 0 to suppress)")
     report_parser.set_defaults(function=report)
     refresh_parser = commands.add_parser("refresh-index")
     refresh_parser.add_argument("--index-attachments", action="store_true", help="include text attachments; non-text attachments require the planned Tika extractor")

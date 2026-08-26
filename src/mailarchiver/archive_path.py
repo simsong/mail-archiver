@@ -1,4 +1,4 @@
-"""Shared archive-directory command-line configuration."""
+"""Share archive-path CLI and environment handling across read-only commands."""
 
 from __future__ import annotations
 

@@ -45,6 +45,8 @@ archiving system. It currently ingests local MBOX, EML, Maildir, and complete
 Apple Mail `.emlx` messages. Outlook `.pst`/`.ost`, Eudora, working IMAP cache
 directories, Gmail, live IMAP, redaction, richer research data, sorting/repacking,
 and rollover remain planned; see [doc/implementation.md](doc/implementation.md).
+The [current source-code audit](doc/source-code-audit.md) distinguishes completed
+tightening from the remaining architectural gaps.
 The [competitive analysis](doc/competitive_analysis.md) explains how this
 combination differs from preservation, migration, search, forensic, and
 commercial compliance products. [Project direction](doc/project_direction.md)
@@ -132,8 +134,10 @@ For example, with the project's supplied owner-token list and a new archive:
 MAIL_ARCHIVE_DIR="$HOME/arch-local/normalized-mail" uv run mailarchiver ingest --owner-names-file owner-names.txt --clamav "$HOME/arch-local/SLG Mail"
 ```
 
-ClamAV scan workers default to the CPU count, capped at eight.  Override the
-limit for a benchmark or a less capable machine with `--workers N`.
+Mailfile workers default to the CPU count, capped at eight. Override the limit
+for a benchmark or a less capable machine with a positive `--workers N`.
+Independent source mailfiles are read, parsed, and scanned concurrently;
+canonical MBOX and SQLite publication remains single-writer.
 
 Messages are classified as `Sent` when their parsed `From:` address contains a
 case-insensitive token in `owner-names.txt`; they go to the year's
@@ -188,9 +192,11 @@ During ingest, a heartbeat is written to standard error immediately, every 250
 milliseconds, and when the run finishes.  It shows the elapsed
 time, processed-message count, average messages per second, earliest and
 latest resolved message dates, current message year, that year's count, and
-the current source file with its byte-completion percentage.  On a terminal it
-redraws as a five-line scoreboard; redirected output stays line-oriented for
-logs.  It also counts archived mail, previously-seen duplicate skips,
+active and peak worker counts. Each worker has a numbered row showing its
+current mailfile, byte-completion percentage, and phase. Workers send status
+events to the main thread, which alone renders the terminal. Long paths are
+fitted to the terminal width so the dashboard does not scroll. Redirected
+output stays line-oriented for logs. It also counts archived mail, previously-seen duplicate skips,
 autosave exclusions, and infected messages.
 
 ## Interrupts and disk space

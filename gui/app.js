@@ -1,3 +1,4 @@
+/* Drive the read-only pywebview mail browser while rejecting stale async responses. */
 "use strict";
 
 const state = {
@@ -8,6 +9,8 @@ const state = {
   searchAttachments: false,
   selected: null,
   selectionRequest: null,
+  searchRequest: 0,
+  partRequest: 0,
   view: null,
   dragExports: new Map(),
   previewUrl: null,
@@ -63,7 +66,23 @@ function showBridgeFailure() {
 
 async function chooseArchive() {
   const status = await call(() => window.pywebview.api.choose_archive());
-  if (status) { applyStatus(status); if (status.ready) await runSearch(false); }
+  if (status) {
+    resetArchiveView();
+    applyStatus(status);
+    if (status.ready) await runSearch(false);
+  }
+}
+
+function resetArchiveView() {
+  state.searchRequest += 1;
+  state.partRequest += 1;
+  state.selected = null;
+  state.selectionRequest = null;
+  state.view = null;
+  state.dragExports.clear();
+  clearAttachmentPreview();
+  elements["result-list"].replaceChildren();
+  elements["message-content"].hidden = true;
 }
 
 function applyStatus(status) {
@@ -80,9 +99,10 @@ async function runSearch(append) {
   const searchAttachments = elements["search-attachments"].checked;
   const sameSearch = query === state.query && sortBy === state.sortBy && sortDirection === state.sortDirection && searchAttachments === state.searchAttachments;
   const offset = append && sameSearch ? state.offset : 0;
+  const request = ++state.searchRequest;
   elements["result-status"].textContent = "Searching…";
   const page = await call(() => window.pywebview.api.search(query, offset, sortBy, sortDirection, searchAttachments));
-  if (!page) return;
+  if (!page || request !== state.searchRequest) return;
   state.query = query;
   state.sortBy = sortBy;
   state.sortDirection = sortDirection;
@@ -166,6 +186,7 @@ async function requestPreviews(messagePks) {
 
 async function selectMessage(messagePk) {
   state.selectionRequest = messagePk;
+  state.partRequest += 1;
   const view = await call(() => window.pywebview.api.message(messagePk));
   if (!view || state.selectionRequest !== messagePk) return;
   state.selected = messagePk;
@@ -249,8 +270,10 @@ function partOption(part) {
 
 async function showPart(partId, allowRemote) {
   if (!state.selected) return;
-  const part = await call(() => window.pywebview.api.part(state.selected, partId, allowRemote));
-  if (!part) return;
+  const messagePk = state.selected;
+  const request = ++state.partRequest;
+  const part = await call(() => window.pywebview.api.part(messagePk, partId, allowRemote));
+  if (!part || request !== state.partRequest || messagePk !== state.selected) return;
   elements["body-view"].replaceChildren();
   elements["remote-content"].hidden = !part.remote_content_blocked;
   if (part.kind === "html") {

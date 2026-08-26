@@ -1,4 +1,4 @@
-"""Requirements: dates fall back safely and malformed header bytes do not alter mail."""
+"""Verify malformed metadata is recorded while message identity and dates stay stable."""
 
 import hashlib
 from email import policy

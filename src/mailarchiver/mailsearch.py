@@ -1,4 +1,4 @@
-"""Read-only Apple Mail-style search over a mailarchiver archive."""
+"""Search catalog and FTS data read-only, then retrieve hash-verified MBOX bytes."""
 
 from __future__ import annotations
 
@@ -50,6 +50,11 @@ class MessageHeader(BaseModel):
     attachment_count: int = 0
 
 
+class SearchStatement(BaseModel):
+    sql: str
+    parameters: list[str | int]
+
+
 class SortField(StrEnum):
     DATE = "date"
     SUBJECT = "subject"
@@ -99,6 +104,80 @@ def parse_query(query: str) -> SearchTerms:
         raise
 
 
+def _search_statement(
+    terms: SearchTerms,
+    limit: int,
+    offset: int = 0,
+    sort_by: SortField = SortField.DATE,
+    direction: SortDirection = SortDirection.DESCENDING,
+    search_attachments: bool = False,
+) -> SearchStatement:
+    clauses = ["m.category IN (?, ?)"]
+    parameters: list[str | int] = list(SEARCH_CATEGORIES)
+    for address in terms.to:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM recipients r JOIN email_addresses a ON a.address_pk = r.address_pk "
+            "WHERE r.message_pk = m.message_pk AND lower(a.address) LIKE ? ESCAPE '\\')"
+        )
+        parameters.append(contains(address))
+    for address in terms.from_:
+        clauses.append("lower(sender.address) LIKE ? ESCAPE '\\'")
+        parameters.append(contains(address))
+    for subject in terms.subject:
+        clauses.append("lower(m.subject) LIKE ? ESCAPE '\\'")
+        parameters.append(contains(subject))
+    for selected_date in terms.date:
+        clauses.append("m.date_utc >= ? AND m.date_utc < ?")
+        parameters.extend((selected_date.isoformat() + "T00:00:00+00:00", (selected_date + timedelta(days=1)).isoformat() + "T00:00:00+00:00"))
+    for selected_date in terms.before:
+        clauses.append("m.date_utc < ?")
+        parameters.append(selected_date.isoformat() + "T00:00:00+00:00")
+    for selected_date in terms.after:
+        clauses.append("m.date_utc >= ?")
+        parameters.append((selected_date + timedelta(days=1)).isoformat() + "T00:00:00+00:00")
+    if terms.text:
+        if search_attachments:
+            for term in terms.text:
+                clauses.append(
+                    "m.sha256 IN (SELECT sha256 FROM search.message_fts WHERE message_fts MATCH ? "
+                    "UNION SELECT sha256 FROM search.attachment_fts WHERE attachment_fts MATCH ?)"
+                )
+                match = fts_query([term])
+                parameters.extend((match, match))
+        else:
+            clauses.append("m.sha256 IN (SELECT sha256 FROM search.message_fts WHERE message_fts MATCH ?)")
+            parameters.append(fts_query(terms.text))
+    candidate_order = {
+        SortField.DATE: "m.date_utc",
+        SortField.SUBJECT: "lower(m.subject)",
+        SortField.SENDER: "lower(sender.address)",
+    }[sort_by]
+    result_order = {
+        SortField.DATE: "c.date_utc",
+        SortField.SUBJECT: "lower(c.subject)",
+        SortField.SENDER: "lower(c.sender)",
+    }[sort_by]
+    order_direction = "ASC" if direction == SortDirection.ASCENDING else "DESC"
+    limit_clause = "" if limit == 0 else "LIMIT ? OFFSET ? "
+    if limit:
+        parameters.extend((limit, offset))
+    sql = (
+        "WITH candidates AS MATERIALIZED ("
+        "SELECT m.message_pk, m.sha256, sender.address AS sender, m.subject, m.date_utc "
+        "FROM messages m JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
+        "WHERE " + " AND ".join(clauses) + " "
+        f"ORDER BY {candidate_order} {order_direction}, m.message_pk {order_direction} {limit_clause}"
+        ") SELECT c.message_pk, COALESCE(group_concat(DISTINCT recipient.address), ''), c.sender, c.subject, c.date_utc, "
+        "COALESCE(metadata.attachment_count, 0) FROM candidates c "
+        "LEFT JOIN search.message_metadata metadata ON metadata.sha256 = c.sha256 "
+        "LEFT JOIN recipients r ON r.message_pk = c.message_pk "
+        "LEFT JOIN email_addresses recipient ON recipient.address_pk = r.address_pk "
+        "GROUP BY c.message_pk "
+        f"ORDER BY {result_order} {order_direction}, c.message_pk {order_direction}"
+    )
+    return SearchStatement(sql=sql, parameters=parameters)
+
+
 def search_headers(
     archive: Path,
     terms: SearchTerms,
@@ -114,62 +193,9 @@ def search_headers(
     database = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
     try:
         database.execute("ATTACH DATABASE ? AS search", (f"file:{search_path}?mode=ro",))
-        clauses = ["m.category IN (?, ?)"]
-        parameters: list[str | int] = list(SEARCH_CATEGORIES)
-        for address in terms.to:
-            clauses.append(
-                "EXISTS (SELECT 1 FROM recipients r JOIN email_addresses a ON a.address_pk = r.address_pk "
-                "WHERE r.message_pk = m.message_pk AND lower(a.address) LIKE ? ESCAPE '\\')"
-            )
-            parameters.append(contains(address))
-        for address in terms.from_:
-            clauses.append("lower(sender.address) LIKE ? ESCAPE '\\'")
-            parameters.append(contains(address))
-        for subject in terms.subject:
-            clauses.append("lower(m.subject) LIKE ? ESCAPE '\\'")
-            parameters.append(contains(subject))
-        for selected_date in terms.date:
-            clauses.append("m.date_utc >= ? AND m.date_utc < ?")
-            parameters.extend((selected_date.isoformat() + "T00:00:00+00:00", (selected_date + timedelta(days=1)).isoformat() + "T00:00:00+00:00"))
-        for selected_date in terms.before:
-            clauses.append("m.date_utc < ?")
-            parameters.append(selected_date.isoformat() + "T00:00:00+00:00")
-        for selected_date in terms.after:
-            clauses.append("m.date_utc >= ?")
-            parameters.append((selected_date + timedelta(days=1)).isoformat() + "T00:00:00+00:00")
-        if terms.text:
-            if search_attachments:
-                for term in terms.text:
-                    clauses.append(
-                        "m.sha256 IN (SELECT sha256 FROM search.message_fts WHERE message_fts MATCH ? "
-                        "UNION SELECT sha256 FROM search.attachment_fts WHERE attachment_fts MATCH ?)"
-                    )
-                    match = fts_query([term])
-                    parameters.extend((match, match))
-            else:
-                clauses.append("m.sha256 IN (SELECT sha256 FROM search.message_fts WHERE message_fts MATCH ?)")
-                parameters.append(fts_query(terms.text))
-        order_column = {
-            SortField.DATE: "m.date_utc",
-            SortField.SUBJECT: "lower(m.subject)",
-            SortField.SENDER: "lower(sender.address)",
-        }[sort_by]
-        order_direction = "ASC" if direction == SortDirection.ASCENDING else "DESC"
-        query = (
-            "SELECT m.message_pk, COALESCE(group_concat(DISTINCT recipient.address), ''), sender.address, m.subject, m.date_utc, "
-            "COALESCE(metadata.attachment_count, 0) "
-            "FROM messages m JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
-            "LEFT JOIN search.message_metadata metadata ON metadata.sha256 = m.sha256 "
-            "LEFT JOIN recipients r ON r.message_pk = m.message_pk "
-            "LEFT JOIN email_addresses recipient ON recipient.address_pk = r.address_pk "
-            + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
-            + f"GROUP BY m.message_pk ORDER BY {order_column} {order_direction}, m.message_pk {order_direction} "
-            + ("" if limit == 0 else "LIMIT ? OFFSET ?")
-        )
-        if limit:
-            parameters.extend((limit, offset))
+        statement = _search_statement(terms, limit, offset, sort_by, direction, search_attachments)
         fields = ("message_pk", "recipients", "sender", "subject", "date_utc", "attachment_count")
-        return [MessageHeader.model_validate(dict(zip(fields, row))) for row in database.execute(query, parameters)]
+        return [MessageHeader.model_validate(dict(zip(fields, row))) for row in database.execute(statement.sql, statement.parameters)]
     finally:
         database.close()
 

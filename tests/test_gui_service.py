@@ -1,4 +1,4 @@
-"""Requirements: the GUI reuses search semantics and preserves exported mail."""
+"""Verify GUI services search, sanitize, preview, and export without archive writes."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.gui_service import (
     RAW_PART_ID,
     attachment_content,
+    attachment_descriptor,
     describe_message,
     is_risky,
     message_previews,
@@ -241,6 +242,8 @@ def test_gui_exports_exact_eml_and_decoded_attachment(tmp_path: Path) -> None:
     assert eml_path.read_bytes() == MULTIPART_MESSAGE
     assert hashlib.sha256(eml_path.read_bytes()).hexdigest() == hashlib.sha256(MULTIPART_MESSAGE).hexdigest()
     assert pdf_path.read_bytes() == b"%PDF-1.4\n"
+    descriptor = attachment_descriptor(archive, 2, pdf.part_id)
+    assert (descriptor.filename, descriptor.content_type) == ("report.pdf", "application/pdf")
     content = attachment_content(archive, 2, pdf.part_id)
     assert base64.b64decode(content.content_base64) == pdf_path.read_bytes()
     assert content.filename == "report.pdf"

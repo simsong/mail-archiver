@@ -1,4 +1,4 @@
-"""SQLite catalog and disposable search-index setup."""
+"""Create, migrate, and query the canonical catalog and disposable FTS schema."""
 
 from __future__ import annotations
 
@@ -10,21 +10,23 @@ from pathlib import Path
 SCHEMA_VERSION = 2
 
 
-def create_catalog(path: Path) -> sqlite3.Connection:
-    database = sqlite3.connect(path)
-    database.execute("PRAGMA foreign_keys = ON")
-    tables = {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    if tables and "schema_info" not in tables:
+def create_catalog(path: Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
+    database = sqlite3.connect(path, check_same_thread=check_same_thread)
+    try:
+        database.execute("PRAGMA foreign_keys = ON")
+        tables = {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if tables and "schema_info" not in tables:
+            raise RuntimeError("unsupported unversioned archive database; use a new empty archive directory")
+        version = database.execute("SELECT version FROM schema_info").fetchone() if "schema_info" in tables else None
+        if version == (1,):
+            _migrate_v1(database)
+        elif version is not None and version != (SCHEMA_VERSION,):
+            raise RuntimeError(f"unsupported archive database schema {version}; expected {SCHEMA_VERSION}")
+        _create_schema(database)
+        return database
+    except BaseException:
         database.close()
-        raise RuntimeError("unsupported unversioned archive database; use a new empty archive directory")
-    version = database.execute("SELECT version FROM schema_info").fetchone() if "schema_info" in tables else None
-    if version == (1,):
-        _migrate_v1(database)
-    elif version is not None and version != (SCHEMA_VERSION,):
-        database.close()
-        raise RuntimeError(f"unsupported archive database schema {version}; expected {SCHEMA_VERSION}")
-    _create_schema(database)
-    return database
+        raise
 
 
 def _create_schema(database: sqlite3.Connection) -> None:
@@ -96,12 +98,20 @@ def _create_schema(database: sqlite3.Connection) -> None:
             byte_length INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS messages_sender_address_pk ON messages(sender_address_pk);
+        CREATE INDEX IF NOT EXISTS messages_sha256 ON messages(sha256);
+        CREATE INDEX IF NOT EXISTS messages_date_message ON messages(date_utc DESC, message_pk DESC);
         CREATE INDEX IF NOT EXISTS recipients_address_pk ON recipients(address_pk);
         CREATE INDEX IF NOT EXISTS locations_generation_pk ON locations(generation_pk);
+        CREATE INDEX IF NOT EXISTS locations_generation_offset
+            ON locations(generation_pk, byte_offset, byte_length);
         CREATE INDEX IF NOT EXISTS source_files_volume_path ON source_files(source_volume_pk, source_path);
         CREATE INDEX IF NOT EXISTS observations_message_pk ON observations(message_pk);
         CREATE INDEX IF NOT EXISTS observations_raw_sha256 ON observations(raw_sha256);
         CREATE INDEX IF NOT EXISTS observations_semantic_sha256 ON observations(semantic_sha256);
+        CREATE INDEX IF NOT EXISTS observations_source_file_offset
+            ON observations(source_file_pk, source_offset DESC);
+        CREATE INDEX IF NOT EXISTS observations_run_observation
+            ON observations(run_pk, observation_pk);
         """
     )
 
@@ -174,34 +184,41 @@ def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
-def create_search(path: Path) -> sqlite3.Connection:
-    database = sqlite3.connect(path)
-    database.execute("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(sha256 UNINDEXED, content)")
-    database.execute("CREATE VIRTUAL TABLE IF NOT EXISTS attachment_fts USING fts5(sha256 UNINDEXED, content)")
-    database.executescript(
-        """
-        PRAGMA foreign_keys = ON;
-        CREATE TABLE IF NOT EXISTS message_metadata (
-            sha256 TEXT PRIMARY KEY,
-            attachment_count INTEGER NOT NULL CHECK (attachment_count >= 0),
-            preview TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS message_attachments (
-            sha256 TEXT NOT NULL REFERENCES message_metadata(sha256) ON DELETE CASCADE,
-            attachment_ordinal INTEGER NOT NULL CHECK (attachment_ordinal > 0),
-            part_id INTEGER NOT NULL CHECK (part_id >= 0),
-            filename TEXT NOT NULL,
-            mime_type TEXT NOT NULL,
-            PRIMARY KEY (sha256, attachment_ordinal)
-        );
-        CREATE INDEX IF NOT EXISTS message_attachments_mime_type ON message_attachments(mime_type);
-        """
-    )
-    return database
+def create_search(path: Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
+    database = sqlite3.connect(path, check_same_thread=check_same_thread)
+    try:
+        database.execute("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(sha256 UNINDEXED, content)")
+        database.execute("CREATE VIRTUAL TABLE IF NOT EXISTS attachment_fts USING fts5(sha256 UNINDEXED, content)")
+        database.executescript(
+            """
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE IF NOT EXISTS message_metadata (
+                sha256 TEXT PRIMARY KEY,
+                message_fts_rowid INTEGER NOT NULL UNIQUE,
+                attachment_fts_rowid INTEGER UNIQUE,
+                attachment_count INTEGER NOT NULL CHECK (attachment_count >= 0),
+                preview TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS message_attachments (
+                sha256 TEXT NOT NULL REFERENCES message_metadata(sha256) ON DELETE CASCADE,
+                attachment_ordinal INTEGER NOT NULL CHECK (attachment_ordinal > 0),
+                part_id INTEGER NOT NULL CHECK (part_id >= 0),
+                filename TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                PRIMARY KEY (sha256, attachment_ordinal)
+            );
+            CREATE INDEX IF NOT EXISTS message_attachments_mime_type ON message_attachments(mime_type);
+            """
+        )
+        return database
+    except BaseException:
+        database.close()
+        raise
 
 
 def owner_tokens(path: Path) -> list[str]:
-    return [line.strip().lower() for line in path.read_text().splitlines() if line.strip() and not line.startswith("#")]
+    lines = (line.strip().lower() for line in path.read_text().splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
 
 
 def address_pk(database: sqlite3.Connection, address: str) -> int:

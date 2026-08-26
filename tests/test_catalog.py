@@ -1,11 +1,11 @@
-"""Requirements: fresh catalogs are versioned and incompatible schemas fail closed."""
+"""Verify catalog creation, migration, indexes, and fail-closed schema handling."""
 
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from mailarchiver.catalog import SCHEMA_VERSION, create_catalog
+from mailarchiver.catalog import SCHEMA_VERSION, create_catalog, owner_tokens
 
 
 def test_rejects_unversioned_catalog(tmp_path: Path) -> None:
@@ -29,8 +29,33 @@ def test_creates_current_schema_directly(tmp_path: Path) -> None:
         assert catalog.execute("SELECT version FROM schema_info").fetchone() == (SCHEMA_VERSION,)
         tables = {row[0] for row in catalog.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"source_volumes", "source_files", "observations", "metadata_defects"} <= tables
+        indexes = {row[0] for row in catalog.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        assert {
+            "messages_sha256",
+            "messages_date_message",
+            "observations_source_file_offset",
+            "observations_run_observation",
+            "locations_generation_offset",
+        } <= indexes
+        assert {
+            "messages_sender_address_pk",
+            "recipients_address_pk",
+            "source_files_volume_path",
+            "observations_message_pk",
+            "observations_raw_sha256",
+            "observations_semantic_sha256",
+            "locations_generation_pk",
+        } <= indexes
     finally:
         catalog.close()
+
+
+def test_owner_tokens_ignore_whitespace_and_indented_comments(tmp_path: Path) -> None:
+    """Requirement: owner aliases are normalized without treating comments as identities."""
+    path = tmp_path / "owners.txt"
+    path.write_text("  # explanatory comment\n SimsonG \n\nSLG@example.com\n", encoding="utf-8")
+
+    assert owner_tokens(path) == ["simsong", "slg@example.com"]
 
 
 def test_migrates_v1_source_paths_without_losing_observations(tmp_path: Path) -> None:

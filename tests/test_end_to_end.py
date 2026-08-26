@@ -1,7 +1,8 @@
-"""Black-box acceptance tests for requirements in doc/end-to-end-tests.md."""
+"""Exercise complete ingest, recovery, reporting, and failure behavior as subprocesses."""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import mailbox
 import os
@@ -9,12 +10,16 @@ import signal
 import sqlite3
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from shutil import copy, copytree
 
 import pytest
 
+from mailarchiver.__main__ import nonnegative_integer, positive_integer, report_years
+from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.layout import mbox_directory
+from mailarchiver.mbox import add_message
 from mailarchiver.standalone_verify import semantic_bytes
 
 
@@ -75,6 +80,19 @@ def assert_success(result: subprocess.CompletedProcess[str]) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_cli_numeric_ranges_fail_early() -> None:
+    """Requirement: nonsensical concurrency, report counts, and year ranges fail at parsing."""
+    assert positive_integer("1") == 1
+    assert nonnegative_integer("0") == 0
+    assert report_years("2020-2024") == (2020, 2024)
+    with pytest.raises(argparse.ArgumentTypeError, match="greater than zero"):
+        positive_integer("0")
+    with pytest.raises(argparse.ArgumentTypeError, match="zero or positive"):
+        nonnegative_integer("-1")
+    with pytest.raises(ValueError, match="ascending"):
+        report_years("2024-2020")
+
+
 def test_ingest_routes_preserves_and_indexes_messages(
     source_mail: tuple[Path, dict[str, bytes]], tmp_path: Path
 ) -> None:
@@ -91,17 +109,17 @@ def test_ingest_routes_preserves_and_indexes_messages(
     assert "started:" in result.stderr
     assert "waiting for ClamAV startup:" in result.stderr
     assert "ingesting:" in result.stderr
-    assert "file=" in result.stderr
+    assert "workers=" in result.stderr
+    assert "peak_workers=4" in result.stderr
     assert "seen_skipped=" in result.stderr
     assert "  year    sent    received    people" in result.stdout
     assert "  2024       1           2" in result.stdout
     assert "top senders" in result.stdout
 
     assert mailbox_message_bytes(mbox_directory(archive) / "2024-Sent1.mbox") == [raw["sent"]]
-    assert mailbox_message_bytes(mbox_directory(archive) / "2024-Archive1.mbox") == [
-        raw["collision_one"],
-        raw["collision_two"],
-    ]
+    assert Counter(mailbox_message_bytes(mbox_directory(archive) / "2024-Archive1.mbox")) == Counter(
+        (raw["collision_one"], raw["collision_two"])
+    )
     assert len(mailbox_message_bytes(mbox_directory(archive) / "INFECTED1.mbox")) == 1
     assert all(
         b"autosave@example" not in item
@@ -119,7 +137,8 @@ def test_ingest_routes_preserves_and_indexes_messages(
             "SELECT count(*) FROM observations WHERE disposition = 'duplicate' AND message_pk IS NULL"
         ).fetchone() == (0,)
         raw_hash, semantic_hash = catalog.execute(
-            "SELECT raw_sha256, semantic_sha256 FROM observations WHERE message_pk IS NOT NULL ORDER BY observation_pk LIMIT 1"
+            "SELECT raw_sha256, semantic_sha256 FROM observations "
+            "JOIN messages USING (message_pk) WHERE messages.category = 'Sent'"
         ).fetchone()
         assert raw_hash == hashlib.sha256(raw["sent"]).hexdigest()
         assert semantic_hash == hashlib.sha256(semantic_bytes(raw["sent"])).hexdigest()
@@ -198,17 +217,42 @@ def test_refresh_index_excludes_quarantine_mailboxes(tmp_path: Path) -> None:
     archive.mkdir()
     mbox_directory(archive).mkdir(parents=True)
     messages = {
-        "2024-Archive1.mbox": b"Message-ID: <normal@example>\nSubject: normal\n\nnormal body\n",
+        "2024-Archive1.mbox": (
+            b"Message-ID: <normal@example>\nSubject: normal\n\nnormal body\nFrom ordinary\n>From literal\n"
+        ),
         "INFECTED1.mbox": b"Message-ID: <infected@example>\nSubject: infected\n\ninfected body\n",
         "MALFORMED1.mbox": b"Message-ID: <malformed@example>\nSubject: malformed\n\nmalformed body\n",
     }
+    locations = {}
     for filename, raw in messages.items():
-        box = mailbox.mbox(mbox_directory(archive) / filename, create=True)
+        path = mbox_directory(archive) / filename
+        box = mailbox.mbox(path, create=True)
         try:
-            box.add(raw)
-            box.flush()
+            locations[filename] = add_message(box, path, raw)
         finally:
             box.close()
+    catalog = create_catalog(archive / "archive.sqlite3")
+    try:
+        sender_pk = address_pk(catalog, "sender@example.net")
+        for filename, raw in messages.items():
+            category = "Archive" if filename.startswith("2024-") else filename.split("1.", 1)[0]
+            message_pk = catalog.execute(
+                "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
+                "VALUES (?, ?, ?, '', '2024-01-01T00:00:00+00:00', 'date', ?)",
+                (filename, hashlib.sha256(raw).hexdigest(), sender_pk, category),
+            ).lastrowid
+            generation_pk = catalog.execute(
+                "INSERT INTO mbox_generations(filename, sha256, message_count, byte_count) VALUES (?, '', 1, ?)",
+                (filename, (mbox_directory(archive) / filename).stat().st_size),
+            ).lastrowid
+            location = locations[filename]
+            catalog.execute(
+                "INSERT INTO locations(message_pk, generation_pk, byte_offset, byte_length) VALUES (?, ?, ?, ?)",
+                (message_pk, generation_pk, location.byte_offset, location.byte_length),
+            )
+        catalog.commit()
+    finally:
+        catalog.close()
 
     refreshed = subprocess.run(
         [sys.executable, "-m", "mailarchiver", "--archive", str(archive), "refresh-index"],
@@ -223,6 +267,39 @@ def test_refresh_index_excludes_quarantine_mailboxes(tmp_path: Path) -> None:
         assert search.execute("SELECT sha256 FROM message_fts").fetchall() == [
             (hashlib.sha256(messages["2024-Archive1.mbox"]).hexdigest(),)
         ]
+    finally:
+        search.close()
+
+
+def test_refresh_index_preserves_prior_index_when_mbox_and_catalog_disagree(tmp_path: Path) -> None:
+    """Requirement: FTS replacement fails closed unless every normal MBOX row is catalogued."""
+    archive = tmp_path / "archive"
+    mbox_directory(archive).mkdir(parents=True)
+    path = mbox_directory(archive) / "2024-Archive1.mbox"
+    box = mailbox.mbox(path, create=True)
+    try:
+        box.add(b"Message-ID: <uncatalogued@example>\n\nbody\n")
+        box.flush()
+    finally:
+        box.close()
+    create_catalog(archive / "archive.sqlite3").close()
+    old_search = create_search(archive / "search.sqlite3")
+    old_search.execute("CREATE TABLE preserved(value TEXT)")
+    old_search.execute("INSERT INTO preserved VALUES ('old index')")
+    old_search.commit()
+    old_search.close()
+
+    refreshed = subprocess.run(
+        [sys.executable, "-m", "mailarchiver", "--archive", str(archive), "refresh-index"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert refreshed.returncode != 0
+    search = sqlite3.connect(archive / "search.sqlite3")
+    try:
+        assert search.execute("SELECT value FROM preserved").fetchone() == ("old index",)
     finally:
         search.close()
 

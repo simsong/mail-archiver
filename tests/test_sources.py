@@ -1,4 +1,4 @@
-"""Requirements: source fingerprints verify complete files and prior-length prefixes."""
+"""Verify read-only source discovery, EMLX/MBOX streaming, and append fingerprints."""
 
 import hashlib
 import json

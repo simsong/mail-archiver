@@ -1,4 +1,4 @@
-"""Generate the checked-in three-message native Mailbag fixture."""
+"""Regenerate the deterministic three-message Mailbag fixture used by tests."""
 
 from __future__ import annotations
 

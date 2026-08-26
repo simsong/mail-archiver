@@ -1,4 +1,4 @@
-"""Read-only descriptions of storage volumes that hold source mail."""
+"""Capture stable identity and read-only OS metadata for source-mail volumes."""
 
 from __future__ import annotations
 
