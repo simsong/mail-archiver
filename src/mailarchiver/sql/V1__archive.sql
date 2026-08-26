@@ -102,6 +102,7 @@ CREATE INDEX recipients_address_pk ON recipients(address_pk);
 CREATE INDEX locations_generation_pk ON locations(generation_pk);
 CREATE INDEX locations_generation_offset ON locations(generation_pk, byte_offset, byte_length);
 CREATE INDEX source_files_volume_path ON source_files(source_volume_pk, source_path);
+CREATE INDEX source_files_path_volume ON source_files(source_path, source_volume_pk);
 CREATE INDEX observations_message_pk ON observations(message_pk);
 CREATE INDEX observations_raw_sha256 ON observations(raw_sha256);
 CREATE INDEX observations_semantic_sha256 ON observations(semantic_sha256);

@@ -32,6 +32,7 @@ from .gui_service import (
     write_attachment,
     write_message,
 )
+from .mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, mailbox_tree
 
 GUI_DIRECTORY = Path(__file__).parents[2] / "gui"
 E2E_DRIVER = Path(__file__).parents[2] / "e2e_tests" / "gui_driver.js"
@@ -72,12 +73,14 @@ class GuiApi:
         archive: Path | None,
         temporary_directory: Path | None = None,
         e2e_directory: Path | None = None,
+        preferences_file: Path | None = None,
     ) -> None:
         self.archive = archive
         self.window: Any = None
         self._temporary = tempfile.TemporaryDirectory(prefix="mailarchive-gui-") if temporary_directory is None else None
         self.temporary_directory = Path(self._temporary.name) if self._temporary else temporary_directory
         self.e2e_directory = e2e_directory
+        self.filter_sets = FilterSetStore(preferences_file)
         if self.temporary_directory is not None:
             self.temporary_directory.mkdir(parents=True, exist_ok=True)
         self.children: list[GuiApi] = []
@@ -87,6 +90,7 @@ class GuiApi:
         self._preview_pending: set[int] = set()
         self._preview_error: str | None = None
         self._preview_generation = 0
+        self._tree_cache: dict[bool, list[dict[str, object]]] = {}
 
     def set_window(self, window: Any) -> None:
         self.window = window
@@ -109,6 +113,7 @@ class GuiApi:
                 self._preview_cache.clear()
                 self._preview_pending.clear()
                 self._preview_error = None
+            self._tree_cache.clear()
         return self.status()
 
     def search(
@@ -118,10 +123,35 @@ class GuiApi:
         sort_by: str = "date",
         direction: str = "descending",
         search_attachments: bool = False,
+        mailbox_selections: list[str] | None = None,
     ) -> dict[str, object]:
         return search_page(
-            self._archive(), query, offset, DEFAULT_PAGE_SIZE, sort_by, direction, search_attachments
+            self._archive(), query, offset, DEFAULT_PAGE_SIZE, sort_by, direction,
+            search_attachments, mailbox_selections,
         ).model_dump(mode="json")
+
+    def mailbox_tree(self, show_volumes: bool = False) -> list[dict[str, object]]:
+        if show_volumes not in self._tree_cache:
+            self._tree_cache[show_volumes] = [
+                node.model_dump(mode="json") for node in mailbox_tree(self._archive(), show_volumes)
+            ]
+        return self._tree_cache[show_volumes]
+
+    def saved_filter_sets(self) -> dict[str, object]:
+        return self.filter_sets.read().model_dump(mode="json")
+
+    def save_filter_set(self, name: str, show_volumes: bool, selections: list[str]) -> dict[str, object]:
+        for token in selections:
+            MailboxSelection.from_token(token)
+        return self.filter_sets.save(
+            FilterSet(name=name, show_volumes=show_volumes, selections=selections)
+        ).model_dump(mode="json")
+
+    def rename_filter_set(self, old_name: str, new_name: str) -> dict[str, object]:
+        return self.filter_sets.rename(old_name, new_name).model_dump(mode="json")
+
+    def delete_filter_set(self, name: str) -> dict[str, object]:
+        return self.filter_sets.delete(name).model_dump(mode="json")
 
     def request_previews(self, message_pks: list[int]) -> bool:
         if not message_pks or len(message_pks) > DEFAULT_PAGE_SIZE:
@@ -231,7 +261,9 @@ class GuiApi:
     def open_message_window(self, message_pk: int) -> None:
         view: MessageView = describe_message(self._archive(), message_pk)
         base_url = str(self.window.get_current_url()).split("?", 1)[0]
-        child_api = GuiApi(self._archive(), self.temporary_directory, self.e2e_directory)
+        child_api = GuiApi(
+            self._archive(), self.temporary_directory, self.e2e_directory, self.filter_sets.path
+        )
         child = webview.create_window(
             view.subject,
             f"{base_url}?message={message_pk}&standalone=1",
@@ -333,7 +365,8 @@ def main() -> int:
     if archive is not None and not _is_archive(archive):
         raise SystemExit(f"mailsearch-gui: {archive} must contain archive.sqlite3 and search.sqlite3")
     e2e_directory = args.e2e_test.parent / "gui-e2e-exports" if args.e2e_test else None
-    api = GuiApi(archive, e2e_directory, e2e_directory)
+    preferences_file = e2e_directory / "filter-sets.json" if e2e_directory else None
+    api = GuiApi(archive, e2e_directory, e2e_directory, preferences_file)
     window = webview.create_window(
         "Mail Archive",
         str(GUI_DIRECTORY / "index.html"),

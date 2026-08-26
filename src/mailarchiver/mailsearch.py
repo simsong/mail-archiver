@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from .archive_path import add_archive_argument, require_archive
 from .layout import mbox_path
+from .mailbox_tree import MailboxSelection
 from .message import decoded_header
 from .mbox import MboxLocation, read_verified_location
 from .search import SEARCH_CATEGORIES, decoded_part, html_text, is_attachment
@@ -111,6 +112,7 @@ def _search_statement(
     sort_by: SortField = SortField.DATE,
     direction: SortDirection = SortDirection.DESCENDING,
     search_attachments: bool = False,
+    mailbox_selections: list[MailboxSelection] | None = None,
 ) -> SearchStatement:
     clauses = ["m.category IN (?, ?)"]
     parameters: list[str | int] = list(SEARCH_CATEGORIES)
@@ -147,6 +149,25 @@ def _search_statement(
         else:
             clauses.append("m.sha256 IN (SELECT sha256 FROM search.message_fts WHERE message_fts MATCH ?)")
             parameters.append(fts_query(terms.text))
+    if mailbox_selections:
+        alternatives = []
+        for selection in mailbox_selections:
+            selected = []
+            if selection.volume_identity is not None:
+                selected.append("source_volumes.identity_json = ?")
+                parameters.append(selection.volume_identity)
+            if selection.path:
+                selected.append(
+                    "(source_files.source_path = ? OR "
+                    "(source_files.source_path >= ? AND source_files.source_path < ?))"
+                )
+                parameters.extend((selection.path, selection.path + "/", selection.path + "0"))
+            alternatives.append("(" + (" AND ".join(selected) if selected else "1") + ")")
+        clauses.append(
+            "EXISTS (SELECT 1 FROM observations INDEXED BY observations_message_pk "
+            "JOIN source_files USING (source_file_pk) JOIN source_volumes USING (source_volume_pk) "
+            "WHERE observations.message_pk = m.message_pk AND (" + " OR ".join(alternatives) + "))"
+        )
     candidate_order = {
         SortField.DATE: "m.date_utc",
         SortField.SUBJECT: "lower(m.subject)",
@@ -207,6 +228,7 @@ def search_headers(
     sort_by: SortField = SortField.DATE,
     direction: SortDirection = SortDirection.DESCENDING,
     search_attachments: bool = False,
+    mailbox_selections: list[MailboxSelection] | None = None,
 ) -> list[MessageHeader]:
     catalog_path, search_path = archive / "archive.sqlite3", archive / "search.sqlite3"
     if not catalog_path.is_file() or not search_path.is_file():
@@ -214,7 +236,9 @@ def search_headers(
     database = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
     try:
         database.execute("ATTACH DATABASE ? AS search", (f"file:{search_path}?mode=ro",))
-        statement = _search_statement(terms, limit, offset, sort_by, direction, search_attachments)
+        statement = _search_statement(
+            terms, limit, offset, sort_by, direction, search_attachments, mailbox_selections
+        )
         fields = ("message_pk", "recipients", "sender", "subject", "date_utc", "attachment_count")
         return [MessageHeader.model_validate(dict(zip(fields, row))) for row in database.execute(statement.sql, statement.parameters)]
     finally:

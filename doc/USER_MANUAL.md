@@ -15,10 +15,6 @@ Mail Archiver currently reads:
 Outlook PST and OST files, Gmail, Microsoft 365, and live IMAP accounts are
 planned but are not yet supported.
 
-> **Planned interface:** The original-mailbox tree and saved filter sets shown
-> below have been approved for implementation but are not available yet. The
-> current ingest and search instructions describe working software.
-
 ## Before you begin
 
 Ask the person who installed Mail Archiver to confirm that:
@@ -169,10 +165,10 @@ make run ARGS='--archive "/path/to/mail-archive" refresh-index --index-attachmen
 
 PDF and Microsoft Office attachment extraction is not implemented yet.
 
-## Planned original-mailbox filters
+## Filter by original mailbox
 
-The approved search design adds **Show original folder structure**. When it is
-checked, an **Original mailboxes** tree appears before the result list.
+Select **Show original folder structure** to display the **Original
+mailboxes** tree before the result list.
 
 ![Approved original-mailbox filter design](images/original-mailbox-tree-search-v2.png)
 
@@ -180,8 +176,9 @@ The tree behaves as follows:
 
 * Counts are distinct, deduplicated canonical messages, not source
   occurrences.
-* Selecting a folder selects everything below it. Several folders or mailboxes
-  can be selected at the same time.
+* Select the checkbox beside a folder to select everything below it. A dash in
+  a folder checkbox means that only some contents are selected. Several
+  folders or mailboxes can be selected at the same time.
 * Selected branches are combined: a result may come from any selected branch.
   The result itself still appears only once.
 * A directory whose contents are all single-message EML or EMLX files is shown
@@ -193,13 +190,15 @@ The tree behaves as follows:
 * **Show source volumes** separates the tree by source volume when that detail
   is needed.
 * Hiding the tree keeps its selection but disables the original-mailbox
-  filter. Showing the tree again restores the selection and filtering.
+  filter. Showing the tree again restores the selection and filtering. A
+  hidden tree never filters results.
 
 ### Filter sets
 
 The **Filter set** pop-up replaces a clear-selection button:
 
 * **None** is permanent and means that no original-mailbox filter is applied.
+  **Current selection** appears while a selection has not yet been saved.
 * A named filter set restores its saved mailbox and folder selections.
 * **Save...** asks for a name and saves the current selection. It can also clone
   an existing filter set under a new name.
@@ -208,9 +207,10 @@ The **Filter set** pop-up replaces a clear-selection button:
   deleted.
 
 Filter sets are preferences for the current computer. They are stored in the
-operating system's standard per-user preferences location, not inside the mail
-archive. They therefore do not change the archive or travel with it unless the
-preferences are copied separately.
+operating system's standard per-user preferences location (`Library/Preferences`
+on macOS, roaming application data on Windows, or the XDG configuration folder
+on Linux), not inside the mail archive. They therefore do not change the archive
+or travel with it unless the preferences are copied separately.
 
 ## Search from the command line
 

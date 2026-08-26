@@ -165,5 +165,7 @@ def test_native_search_ui_end_to_end(built_archive: BuiltArchive, tmp_path: Path
     assert len(result.checks) >= 30
     assert "saved-tiny.png" in result.exports
     assert "saved-review.command" in result.exports
+    assert "filter-sets.json" in result.exports
+    assert not (built_archive.archive / "filter-sets.json").exists()
     assert any(name.startswith("saved-Rich UI message-") and name.endswith(".eml") for name in result.exports)
     assert any(name.startswith("Rich UI message-") and name.endswith(".eml") for name in result.exports)

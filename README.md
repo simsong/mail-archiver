@@ -309,6 +309,14 @@ Select **Search attachments** to include the separate text-attachment index in
 ordinary full-text searches. Build the attachment index with `uv run
 mailarchiver refresh-index --index-attachments` so that table has content.
 
+Select **Show original folder structure** to filter before sorting and paging
+by one or more remembered source folders or logical mailboxes. Counts are
+deduplicated canonical messages. Directories containing only EML/EMLX messages
+and Maildir `cur`/`new` contents collapse into one mailbox. Source volumes merge
+by default and can be shown explicitly. Named filter sets are stored atomically
+in the operating system's per-user preferences location, outside the archive.
+See [`doc/USER_MANUAL.md`](doc/USER_MANUAL.md#filter-by-original-mailbox).
+
 pywebview also supports Windows and Linux, but this application is not yet
 portable: attachment opening currently calls the macOS `open` command, Finder
 drag-out is macOS-specific, and only the Cocoa/WKWebView bridge has been tested.

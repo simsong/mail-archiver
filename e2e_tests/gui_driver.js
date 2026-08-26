@@ -31,6 +31,8 @@
       `search '${query}' returns ${expected}`,
     );
   };
+  const treeNode = label => [...document.querySelectorAll(".mailbox-node")]
+    .find(node => node.dataset.label === label);
 
   (async () => {
     await waitFor(() => typeof window.pywebview?.api?.search === "function", "native bridge injected");
@@ -115,6 +117,67 @@
     Object.defineProperty(drag, "dataTransfer", {value: transfer});
     document.getElementById("message-file-well").dispatchEvent(drag);
     assert(transfer.values.DownloadURL?.startsWith("message/rfc822:"), "drag event publishes an RFC 822 download");
+
+    await search("", 100, false);
+    const showTree = document.getElementById("show-original-folders");
+    assert(document.getElementById("mailbox-browser").hidden, "original-mailbox tree starts hidden");
+    showTree.checked = true;
+    showTree.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => !document.getElementById("mailbox-browser").hidden && treeNode("Inbox"), "original-mailbox tree appears");
+    assert(treeNode("Inbox").textContent.includes("104"), "mailbox count is deduplicated");
+    assert(treeNode("Loose Mail") && !treeNode("001-single.eml"), "single-message files collapse into their containing folder");
+    treeNode("Inbox").querySelector("input[type=checkbox]").click();
+    await waitFor(() => rows().length === 100 && !document.getElementById("load-more").hidden, "mailbox selection filters before pagination");
+    document.getElementById("load-more").click();
+    await waitFor(() => rows().length === 104, "mailbox selection returns its complete result union");
+
+    showTree.checked = false;
+    showTree.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => document.getElementById("mailbox-browser").hidden && rows().length === 100, "hiding tree disables its filter");
+    showTree.checked = true;
+    showTree.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => !document.getElementById("mailbox-browser").hidden && rows().length === 100, "showing tree restores its filter selection");
+
+    const showVolumes = document.getElementById("show-source-volumes");
+    showVolumes.checked = true;
+    showVolumes.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => document.querySelector(".mailbox-node[data-kind=volume]"), "source-volume roots can be shown");
+    showVolumes.checked = false;
+    showVolumes.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => !document.querySelector(".mailbox-node[data-kind=volume]"), "source volumes are merged when hidden");
+
+    const filterSets = document.getElementById("filter-set");
+    filterSets.value = "__save__";
+    filterSets.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => document.getElementById("save-filter-dialog").open, "Save opens a filter-set naming dialog");
+    document.getElementById("filter-set-name").value = "Work";
+    document.getElementById("save-filter-form").dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
+    await waitFor(() => [...filterSets.options].some(option => option.textContent === "Work"), "named filter set is saved");
+    filterSets.value = "";
+    filterSets.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => rows().length === 100 && !document.getElementById("load-more").hidden, "None disables the saved mailbox filter");
+    filterSets.value = "Work";
+    filterSets.dispatchEvent(new Event("change", {bubbles: true}));
+    await sleep(300);
+    await waitFor(() => rows().length === 100 && !document.getElementById("load-more").hidden, "named filter set restores its selection");
+    document.getElementById("load-more").click();
+    await waitFor(() => rows().length === 104, "restored filter set returns the saved mailbox union");
+    filterSets.value = "__save__";
+    filterSets.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => document.getElementById("save-filter-dialog").open, "Save can clone the active filter set");
+    document.getElementById("filter-set-name").value = "Work Copy";
+    document.getElementById("save-filter-form").dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
+    await waitFor(() => [...filterSets.options].some(option => option.textContent === "Work Copy"), "active filter set is cloned under a new name");
+
+    document.getElementById("manage-filter-sets").click();
+    await waitFor(() => document.getElementById("manage-filter-dialog").open, "filter-set manager opens");
+    const managed = document.querySelector("#filter-set-list .filter-set-row");
+    managed.querySelector("input").value = "Professional";
+    [...managed.querySelectorAll("button")].find(button => button.textContent === "Rename").click();
+    await waitFor(() => [...filterSets.options].some(option => option.textContent === "Professional"), "filter set can be renamed");
+    [...managed.querySelectorAll("button")].find(button => button.textContent === "Delete").click();
+    await waitFor(() => ![...filterSets.options].some(option => option.textContent === "Professional"), "filter set can be deleted");
+    document.getElementById("close-filter-manager").click();
 
     document.getElementById("search").value = '"';
     document.getElementById("search-form").dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));

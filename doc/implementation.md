@@ -236,6 +236,24 @@ typed search service. Ordinary terms search `message_fts` by default; when the
 box is selected they search the union of `message_fts` and `attachment_fts`.
 Metadata selectors are unchanged.
 
+The optional original-mailbox explorer is built from volume-relative
+`source_files.source_path` values. Pydantic node identifiers encode a normalized
+logical path and, only in explicit-volume mode, the stable source-volume
+identity; browser input never supplies SQL. MBOX files are leaves, while
+Maildir `cur`/`new` contents and directories containing only direct EML/EMLX
+files collapse into logical-mailbox leaves. Exact node counts use
+`COUNT(DISTINCT observations.message_pk)` with the path/volume and
+`observations_source_file_offset` indexes. Hidden-volume trees merge identical
+volume-relative paths. The two tree modes are cached for the active archive.
+
+Selected branches become one correlated `EXISTS` predicate inside the
+materialized candidate query, before its `LIMIT` and `OFFSET`. The predicate
+uses `observations_message_pk`, so multiple source observations provide union
+semantics without duplicating a canonical result. Hiding the explorer sends no
+selection while retaining its browser state. Versioned Pydantic filter sets
+are fsynced to a temporary file and atomically replaced in the platform's
+per-user preferences directory; the archive is never written.
+
 MIME descriptions and API responses are Pydantic models.  Body content is
 loaded only for the selected part.  HTML parsing removes active elements,
 event handlers, file URLs, and unsafe URL schemes, replaces image CID references

@@ -15,10 +15,24 @@
           <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder='Search mail — from:alice@example.com subject:"annual report"'>
         </form>
         <label class="attachment-search"><input id="search-attachments" type="checkbox"> Search attachments</label>
+        <label class="attachment-search"><input id="show-original-folders" type="checkbox"> Show original folder structure</label>
         <span id="archive-label"></span>
       </header>
 
       <section class="workspace">
+        <aside id="mailbox-browser" class="mailbox-browser no-print" hidden>
+          <h2>Original mailboxes</h2>
+          <div class="mailbox-controls">
+            <label for="filter-set">Filter set:</label>
+            <select id="filter-set" aria-label="Original-mailbox filter set">
+              <option value="">None</option>
+              <option value="__save__">Save...</option>
+            </select>
+            <button id="manage-filter-sets" type="button" aria-label="Manage filter sets">...</button>
+          </div>
+          <label class="volume-toggle"><input id="show-source-volumes" type="checkbox"> Show source volumes</label>
+          <div id="mailbox-tree" role="tree" aria-label="Original mailboxes" aria-multiselectable="true"></div>
+        </aside>
         <aside class="results no-print">
           <div class="result-controls">
             <div id="result-status" class="status">Choose an archive to begin.</div>
@@ -68,6 +82,23 @@
         </article>
       </section>
       <div id="error" role="alert" hidden></div>
+      <dialog id="save-filter-dialog">
+        <form id="save-filter-form">
+          <h2>Save Filter Set</h2>
+          <label>Name <input id="filter-set-name" required autocomplete="off"></label>
+          <div class="dialog-actions">
+            <button id="cancel-save-filter" type="button">Cancel</button>
+            <button type="submit">Save</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="manage-filter-dialog">
+        <div class="filter-manager">
+          <h2>Filter Sets</h2>
+          <div id="filter-set-list"></div>
+          <div class="dialog-actions"><button id="close-filter-manager" type="button">Close</button></div>
+        </div>
+      </dialog>
     </main>
     <script src="app.js"></script>
   </body>

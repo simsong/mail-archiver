@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
 from .mailsearch import MessageHeader, SortDirection, SortField, parse_query, read_message_bytes, search_headers
+from .mailbox_tree import MailboxSelection
 from .message import decoded_header
 from .search import decoded_part, is_attachment
 
@@ -127,18 +128,15 @@ def search_page(
     sort_by: SortField | str = SortField.DATE,
     direction: SortDirection | str = SortDirection.DESCENDING,
     search_attachments: bool = False,
+    mailbox_selections: list[str] | None = None,
 ) -> SearchPage:
     """Return one bounded page using exactly the CLI query language."""
     if offset < 0 or limit < 1:
         raise ValueError("search offset and limit must be positive")
+    selections = [MailboxSelection.from_token(token) for token in mailbox_selections or []]
     found = search_headers(
-        archive,
-        parse_query(query),
-        limit + 1,
-        offset,
-        SortField(sort_by),
-        SortDirection(direction),
-        search_attachments,
+        archive, parse_query(query), limit + 1, offset, SortField(sort_by),
+        SortDirection(direction), search_attachments, selections,
     )
     return SearchPage(results=found[:limit], offset=offset, has_more=len(found) > limit)
 
