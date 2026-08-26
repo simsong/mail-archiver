@@ -45,6 +45,8 @@ archiving system. It currently ingests local MBOX, EML, Maildir, and complete
 Apple Mail `.emlx` messages. Outlook `.pst`/`.ost`, Eudora, working IMAP cache
 directories, Gmail, live IMAP, redaction, richer research data, sorting/repacking,
 and rollover remain planned; see [doc/implementation.md](doc/implementation.md).
+The [archivist-facing user manual](doc/USER_MANUAL.md) gives step-by-step
+instructions for ingest, verification, and search.
 The [current source-code audit](doc/source-code-audit.md) distinguishes completed
 tightening from the remaining architectural gaps.
 The [competitive analysis](doc/competitive_analysis.md) explains how this
