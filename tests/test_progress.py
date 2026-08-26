@@ -121,27 +121,23 @@ def test_redirected_overall_progress_has_no_terminal_controls(capsys: pytest.Cap
     assert "\x1b" not in output
 
 
-def test_clamav_startup_wait_is_repeated_with_elapsed_time(capsys: pytest.CaptureFixture[str]) -> None:
-    """Requirement: the main status driver reports a worker's long ClamAV startup."""
-    progress = ProgressReporter()
+def test_clamav_preflight_is_repeated_before_workers_start(capsys: pytest.CaptureFixture[str]) -> None:
+    """Requirement: the main status driver reports ClamAV readiness before worker activity."""
+    progress = ProgressReporter(worker_count=2)
     progress.tty = False
     progress.start()
-    stop = threading.Event()
-
-    def process(_item: int) -> None:
-        path = Path("source.mbox")
-        progress.record_worker(CLAMAV_START_PHASE, path, 0, 100)
-        time.sleep(PROGRESS_REFRESH_SECONDS * 2.5)
-        progress.record_worker("idle", path, 0, 0)
 
     try:
-        run_file_workers((1,), 1, process, stop, progress.refresh)
+        progress.set_phase(CLAMAV_START_PHASE)
+        time.sleep(PROGRESS_REFRESH_SECONDS)
+        progress.refresh()
     finally:
         progress.finish("completed")
 
     lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith(CLAMAV_START_PHASE)]
     assert len(lines) >= 2
-    assert any("workers=1:waiting for ClamAV startup:source.mbox" in line for line in lines)
+    assert all("processed=0 active_workers=0 peak_workers=0" in line for line in lines)
+    assert all("workers=1:idle:- 2:idle:-" in line for line in lines)
 
 
 def test_file_worker_pool_runs_no_more_than_requested_mailfiles() -> None:

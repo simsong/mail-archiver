@@ -26,6 +26,8 @@ from mailarchiver.standalone_verify import semantic_bytes
 
 
 TEST_DATA = Path(__file__).parent / "data"
+CLAMD_ENV = "MAILARCHIVER_CLAMD"
+CLAMD_SOCKET_ENV = "MAILARCHIVER_CLAMD_SOCKET"
 
 
 def emlx_message_bytes(path: Path) -> bytes:
@@ -128,6 +130,10 @@ def test_ingest_routes_preserves_and_indexes_messages(
     assert "waiting for ClamAV startup:" in result.stderr
     assert "discovering sources:" in result.stderr
     assert "ingesting:" in result.stderr
+    startup = result.stderr.index("waiting for ClamAV startup:")
+    ingesting = result.stderr.index("ingesting:")
+    assert startup < ingesting
+    assert "processed=0 active_workers=0" in result.stderr[startup:ingesting]
     assert "workers=" in result.stderr
     assert "peak_workers=4" in result.stderr
     assert "seen_skipped=" in result.stderr
@@ -625,3 +631,49 @@ def test_unusable_source_fails_cleanly(
     assert diagnostic in result.stderr
     assert "Traceback" not in result.stderr
     assert not list(mbox_directory(archive).glob("*.mbox"))
+
+
+def test_clamav_startup_failure_prevents_worker_activity(tmp_path: Path) -> None:
+    """Regression: clamd must become ready before workers can parse or publish mail."""
+    source = tmp_path / "source.eml"
+    source.write_bytes(
+        b"Message-ID: <one@example>\nDate: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"
+    )
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+    missing_clamd = tmp_path / "missing-clamd"
+    environment = os.environ.copy()
+    environment[CLAMD_ENV] = str(missing_clamd)
+    environment[CLAMD_SOCKET_ENV] = str(tmp_path / "clamd.sock")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mailarchiver",
+            "--archive",
+            str(archive),
+            "ingest",
+            "--owner-names-file",
+            str(owner_names),
+            "--clamav",
+            str(source),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 1
+    assert f"ClamAV startup failed: cannot start {missing_clamd}" in result.stderr
+    assert "processed=0 active_workers=0 peak_workers=0" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not list(mbox_directory(archive).glob("*.mbox"))
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT count(*) FROM source_files").fetchone() == (0,)
+        assert catalog.execute("SELECT count(*) FROM observations").fetchone() == (0,)
+        assert catalog.execute("SELECT result FROM ingest_runs").fetchone() == ("failed",)
+    finally:
+        catalog.close()

@@ -119,14 +119,17 @@ on-access scanning. Workers enqueue typed phase/path/offset updates; the main
 thread drains them and redraws the stderr scoreboard every 250 milliseconds.
 Before starting workers, a lightweight read-only discovery pass counts every
 recognized source file and its current byte length without hashing or retaining
-the tree. This gives the scoreboard a stable overall byte and file percentage and
-ETA; the terminal highlights that aggregate line in white on blue, while
+the tree. The main thread then starts or validates ClamAV and waits for its
+health probe before creating the mailfile worker pool. This gives the scoreboard
+a stable overall byte and file percentage and ETA; the terminal highlights that
+aggregate line in white on blue, while
 redirected output reports the same fields without terminal controls. Each
 configured worker has a stable numbered row, following the bulk_extractor
 status model, and worker threads never print directly. Lines are truncated from
 the left of long paths to the current terminal width before a dynamic cursor
 rewind, preventing wrapped paths from accumulating old headings. The title
-derives `waiting for ClamAV startup` and `ingesting` from worker messages. It
+reports the main-thread `waiting for ClamAV startup` preflight and derives
+`ingesting` from worker messages. It
 shows active and peak concurrency, per-worker checking/ingesting/scanning/
 publishing/checkpointing/idle state, streaming source byte offsets, and
 completion percentage, and reports processed/total source-file plus
@@ -141,8 +144,8 @@ by `--workers`; discovery does not pre-hash or retain file contents. Each pool
 task owns one source mailfile through planning, streaming parse and scan, and
 checkpoint. A never-seen file is
 ingested before its complete fingerprint is calculated; that fingerprint is
-still required before its checkpoint is committed. The scanner starts lazily
-at the first new message, so an unchanged tree does not start ClamAV.
+still required before its checkpoint is committed. ClamAV readiness is an ingest
+precondition, so no worker reads or parses mail until the daemon is healthy.
 Modern Apple Mail package traversal recognizes complete
 `Data/.../Messages/*.emlx` payloads and ignores MailData, plist, and detached
 attachment files. It reports missing paths and macOS Full Disk Access failures

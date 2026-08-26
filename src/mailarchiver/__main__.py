@@ -40,7 +40,7 @@ from .mbox import (
     read_verified_location,
     recover_publication,
 )
-from .scanner import ClamScanner
+from .scanner import ClamScanner, ClamScannerStartupError
 from .search import QUARANTINE_MAILBOX, SEARCH_CATEGORIES, index_message, index_message_safely
 from .sources import (
     IncompleteAppleMailMessageError,
@@ -104,7 +104,6 @@ WorkerPhase = Literal[
     "checking",
     "ingesting",
     "deduplicating",
-    "waiting for ClamAV startup",
     "scanning",
     "waiting to publish",
     "publishing",
@@ -385,8 +384,6 @@ class ProgressReporter:
 
     def _worker_phase(self) -> str:
         phases = {worker.phase for worker in self.state.workers}
-        if CLAMAV_START_PHASE in phases:
-            return CLAMAV_START_PHASE
         if phases != {"idle"}:
             return "ingesting"
         return self.base_phase
@@ -545,7 +542,6 @@ def ingest(args: argparse.Namespace) -> None:
     pending_duplicate_observations: dict[tuple[str, str], list[int]] = {}
     pending_identities: set[tuple[str, str]] = set()
     publication_lock = threading.RLock()
-    scanner_lock = threading.Lock()
     stop = threading.Event()
     scanner: ClamScanner | None = None
     progress = ProgressReporter(args.workers)
@@ -685,19 +681,6 @@ def ingest(args: argparse.Namespace) -> None:
         return int(message_pk)
 
     def scan_message(source: SourceMessage) -> bool:
-        nonlocal scanner
-        if scanner is None:
-            progress.record_worker(
-                CLAMAV_START_PHASE,
-                source.path,
-                source.bytes_done,
-                source.bytes_total,
-            )
-            with scanner_lock:
-                if scanner is None:
-                    candidate = ClamScanner()
-                    candidate.__enter__()
-                    scanner = candidate
         assert scanner is not None
         progress.record_worker("scanning", source.path, source.bytes_done, source.bytes_total)
         return scanner.infected(source.raw)
@@ -839,6 +822,9 @@ def ingest(args: argparse.Namespace) -> None:
         progress.set_phase(DISCOVERY_PHASE)
         inventory = source_inventory(roots, progress.record_inventory)
         progress.finish_inventory(inventory)
+        progress.set_phase(CLAMAV_START_PHASE)
+        scanner = ClamScanner(progress.refresh)
+        scanner.__enter__()
         progress.set_phase("checking sources")
         run_file_workers(
             discovered_sources(),
@@ -1118,6 +1104,9 @@ def main() -> int:
         return 130
     except DiskFullError as error:
         print(f"disk full: {error}; archive stopped cleanly", file=sys.stderr, flush=True)
+        return 1
+    except ClamScannerStartupError as error:
+        print(f"ClamAV startup failed: {error}", file=sys.stderr, flush=True)
         return 1
     except IncompleteAppleMailMessageError as error:
         print(f"unsupported source: {error}", file=sys.stderr, flush=True)

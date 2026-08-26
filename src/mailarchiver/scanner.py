@@ -6,8 +6,10 @@ import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import BinaryIO
 
 
 CLAMD = os.environ.get("MAILARCHIVER_CLAMD", "/opt/homebrew/sbin/clamd")
@@ -15,32 +17,65 @@ CLAMDSCAN = os.environ.get("MAILARCHIVER_CLAMDSCAN", "/opt/homebrew/bin/clamdsca
 CLAMD_CONFIG = os.environ.get("MAILARCHIVER_CLAMD_CONFIG", "/opt/homebrew/etc/clamav/clamd.conf")
 CLAMD_SOCKET = Path(os.environ.get("MAILARCHIVER_CLAMD_SOCKET", "/private/tmp/clamd.sock"))
 CLAMD_START_TIMEOUT_SECONDS = 120
+CLAMD_START_POLL_SECONDS = 0.25
+
+
+class ClamScannerStartupError(RuntimeError):
+    """The configured ClamAV daemon could not become ready."""
 
 
 class ClamScanner(AbstractContextManager["ClamScanner"]):
     """Use an existing daemon or one temporary daemon for one ingest run."""
 
-    def __init__(self) -> None:
+    def __init__(self, status_callback: Callable[[], None] | None = None) -> None:
         self.process: subprocess.Popen[bytes] | None = None
+        self.status_callback = status_callback
+        self.diagnostics: BinaryIO | None = None
 
     def __enter__(self) -> "ClamScanner":
         if CLAMD_SOCKET.exists() and self.available():
             return self
         CLAMD_SOCKET.unlink(missing_ok=True)
-        self.process = subprocess.Popen([CLAMD, "--foreground", f"--config-file={CLAMD_CONFIG}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.diagnostics = tempfile.TemporaryFile()
+        try:
+            self.process = subprocess.Popen(
+                [CLAMD, "--foreground", f"--config-file={CLAMD_CONFIG}"],
+                stdout=subprocess.DEVNULL,
+                stderr=self.diagnostics,
+            )
+        except OSError as error:
+            self.__exit__()
+            raise ClamScannerStartupError(f"cannot start {CLAMD}: {error}") from error
         try:
             deadline = time.monotonic() + CLAMD_START_TIMEOUT_SECONDS
             while time.monotonic() < deadline:
+                if self.status_callback is not None:
+                    self.status_callback()
                 if CLAMD_SOCKET.exists() and self.available():
                     return self
-                if self.process.poll() is not None:
-                    raise RuntimeError("clamd failed to start; inspect its configuration")
-                time.sleep(0.5 if CLAMD_SOCKET.exists() else 0.1)
+                returncode = self.process.poll()
+                if returncode is not None:
+                    raise self.startup_error(f"clamd exited with status {returncode}")
+                time.sleep(CLAMD_START_POLL_SECONDS)
         except BaseException:
             self.__exit__()
             raise
+        error = self.startup_error(f"clamd did not become ready within {CLAMD_START_TIMEOUT_SECONDS} seconds")
         self.__exit__()
-        raise RuntimeError("timed out waiting for clamd socket")
+        raise error
+
+    def startup_error(self, reason: str) -> ClamScannerStartupError:
+        """Include clamd's startup output when it is available."""
+        detail = ""
+        if self.diagnostics is not None:
+            self.diagnostics.flush()
+            self.diagnostics.seek(0)
+            detail = self.diagnostics.read().decode("utf-8", "replace").strip()
+        if detail:
+            return ClamScannerStartupError(f"{reason}: {detail[-4096:]}")
+        return ClamScannerStartupError(
+            f"{reason}; inspect the LogFile configured by {CLAMD_CONFIG}"
+        )
 
     def __exit__(self, *_: object) -> None:
         process, self.process = self.process, None
@@ -53,6 +88,9 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
                 process.kill()
                 process.wait()
             CLAMD_SOCKET.unlink(missing_ok=True)
+        diagnostics, self.diagnostics = self.diagnostics, None
+        if diagnostics is not None:
+            diagnostics.close()
 
     @staticmethod
     def available() -> bool:

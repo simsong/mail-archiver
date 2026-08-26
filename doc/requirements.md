@@ -120,8 +120,9 @@ requirement.
 
 * Each new message is streamed to ClamAV before normal archiving.
 * The local CLI currently requires the `--clamav` switch.  This starts one
-  foreground `clamd` for the ingest when the configured local socket is not
-  healthy, reuses a healthy existing daemon without stopping it, and never
+  foreground `clamd` on the main ingest thread when the configured local socket
+  is not healthy, waits for a successful health probe before starting mailfile
+  workers, reuses a healthy existing daemon without stopping it, and never
   enables on-access or scheduled scanning.
 * `ingest --workers N` controls the number of source mailfiles ingested
   simultaneously. Its default is the detected CPU count capped at eight, and
@@ -135,19 +136,20 @@ requirement.
   receives a redraw-in-place scoreboard with a numbered row for every
   configured worker and a white-on-blue top line reporting aggregate byte and file
   percentage and ETA; redirected output reports the same aggregate fields in
-  line-oriented text without terminal controls. Both report
-  worker phases including `checking`, `ingesting`, `waiting for ClamAV
-  startup`, `scanning`, `waiting to publish`, `publishing`, `checkpointing`,
-  and `idle`, plus elapsed time, processed message and completed source-file
-  counts, average message rate, resolved date range, current year/current-year
-  count, active and peak worker counts, source file, and byte completion
-  percentage. Lines must be fitted to the terminal width so redraws never
-  accumulate wrapped headings. It separately reports archived, duplicate
+  line-oriented text without terminal controls. Both report the main-thread
+  `waiting for ClamAV startup` preflight and worker phases including `checking`,
+  `ingesting`, `scanning`, `waiting to publish`, `publishing`, `checkpointing`,
+  and `idle`. They also report elapsed time, processed message and completed
+  source-file counts, average message rate, resolved date range, current
+  year/current-year count, active and peak worker counts, source file, and byte
+  completion percentage. Lines must be fitted to the terminal width so redraws
+  never accumulate wrapped headings. It separately reports archived, duplicate
   (previously-seen and skipped), autosave-excluded, and infected counts.
-  While ClamAV loads virus definitions, every refresh explicitly identifies
-  that wait and shows its increasing startup elapsed time instead of a stale
-  source-file status. A newly started daemon is ready only after the configured
-  scanner health probe succeeds, not merely when its socket appears.
+  While the main thread waits for ClamAV to load virus definitions, every
+  refresh explicitly identifies that wait and shows its increasing startup
+  elapsed time instead of a stale source-file status. A newly started daemon is
+  ready only after the configured scanner health probe succeeds, not merely when
+  its socket appears.
 * Control-C is a graceful stop: close scanner and MBOX resources, commit
   completed messages and observations, publish a complete BagIt/Mailbag
   checkpoint, report interruption,

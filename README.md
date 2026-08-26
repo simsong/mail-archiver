@@ -111,9 +111,10 @@ socket.
 
 `--clamav` is currently required on every ingest.  It scans each new
 message through the locally configured `clamd` socket before the message is
-written to a normal MBOX.  If no healthy daemon is listening, mailarchiver
-starts one foreground daemon for this ingest only, reusing its loaded
-signatures, and stops it afterward.  If a healthy local daemon already owns
+written to a normal MBOX. Before starting any mailfile workers, the main
+ingest thread verifies that ClamAV is ready. If no healthy daemon is listening,
+mailarchiver starts one foreground daemon for this ingest only, reusing its
+loaded signatures, and stops it afterward.  If a healthy local daemon already owns
 the socket, mailarchiver uses it and leaves it running.
 `MAILARCHIVER_CLAMD`, `MAILARCHIVER_CLAMDSCAN`,
 `MAILARCHIVER_CLAMD_CONFIG`, and `MAILARCHIVER_CLAMD_SOCKET` override the
@@ -136,7 +137,8 @@ MAIL_ARCHIVE_DIR="$HOME/arch-local/normalized-mail" uv run mailarchiver ingest -
 
 Mailfile workers default to the CPU count, capped at eight. Override the limit
 for a benchmark or a less capable machine with a positive `--workers N`.
-Independent source mailfiles are read, parsed, and scanned concurrently;
+After the ClamAV preflight succeeds, independent source mailfiles are read,
+parsed, and scanned concurrently;
 canonical MBOX and SQLite publication remains single-writer. Before workers
 start, mailarchiver makes a lightweight read-only pass to count recognized
 source files and bytes; it does not hash or retain the source tree during this
