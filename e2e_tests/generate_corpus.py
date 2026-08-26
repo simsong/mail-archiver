@@ -9,7 +9,7 @@ from pathlib import Path
 RICH_MESSAGE = (
     b"Message-ID: <rich-e2e@example>\n"
     b"Date: Tue, 31 Dec 2024 12:00:00 +0000\n"
-    b"From: curator@example.net\nTo: archive-owner@example.org\n"
+    b"From: curator@example.net\nTo: archive-owner@example.org\nCc: Beth Rosenberg <beth@example.org>\n"
     b"Subject: Rich UI message\nMIME-Version: 1.0\n"
     b"Content-Type: multipart/mixed; boundary=outer\n\n"
     b"--outer\nContent-Type: multipart/alternative; boundary=alternative\n\n"
@@ -68,7 +68,8 @@ def generate(destination: Path) -> None:
     )
     (destination / "Personal/Loose Mail/001-single.eml").write_bytes(
         b"Message-ID: <single-e2e@example>\nDate: Sun, 4 Feb 2024 12:00:00 +0000\n"
-        b"From: friend@example.net\nTo: archive-owner@example.org\nSubject: Loose single message\n\n"
+        b"From: Beth Rosenberg <beth@example.org>\nTo: archive-owner@example.org\n"
+        b"Subject: Your Flight Receipt - ELISABETH COUSIN\n\n"
         b"A folder containing only single-message files becomes one logical mailbox.\n"
     )
     (destination / "Personal/Duplicates/rich-duplicate.eml").write_bytes(RICH_MESSAGE)

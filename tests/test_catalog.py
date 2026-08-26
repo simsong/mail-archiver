@@ -69,6 +69,7 @@ def test_packaged_v1_schema_creates_current_catalog(tmp_path: Path) -> None:
         assert {
             "messages_sender_address_pk",
             "recipients_address_pk",
+            "recipients_message_role_address",
             "source_files_volume_path",
             "observations_message_pk",
             "observations_raw_sha256",
@@ -119,7 +120,15 @@ def test_packaged_search_schema_creates_current_disposable_index(tmp_path: Path)
     try:
         assert search.execute("SELECT version FROM schema_info").fetchone() == (SEARCH_SCHEMA_VERSION,)
         tables = {row[0] for row in search.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert {"message_fts", "attachment_fts", "message_metadata", "message_attachments"} <= tables
+        assert {
+            "message_fts",
+            "attachment_fts",
+            "message_metadata",
+            "message_attachments",
+            "address_suggestions",
+            "message_address_suggestions",
+            "address_suggestion_fts",
+        } <= tables
         columns = {row[1] for row in search.execute("PRAGMA table_info(message_metadata)")}
         assert {"message_fts_rowid", "attachment_fts_rowid"} <= columns
     finally:

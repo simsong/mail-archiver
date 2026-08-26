@@ -33,8 +33,11 @@ RESET = "\033[0m"
 class SearchTerms(BaseModel):
     """Structured selectors and free-text terms accepted by mailsearch."""
 
+    any_address: list[str] = Field(default_factory=list)
     to: list[str] = Field(default_factory=list)
     from_: list[str] = Field(default_factory=list)
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
     subject: list[str] = Field(default_factory=list)
     date: list[CalendarDate] = Field(default_factory=list)
     before: list[CalendarDate] = Field(default_factory=list)
@@ -72,7 +75,7 @@ def parse_terms(tokens: list[str]) -> SearchTerms:
     for token in tokens:
         key, separator, value = token.partition(":")
         key = key.lower()
-        if separator and key in {"to", "from", "subject", "date", "before", "after"}:
+        if separator and key in {"any", "to", "from", "cc", "bcc", "subject", "date", "before", "after"}:
             if not value:
                 raise ValueError(f"{key}: requires a value")
             if key in {"date", "before", "after"}:
@@ -81,7 +84,8 @@ def parse_terms(tokens: list[str]) -> SearchTerms:
                 except ValueError as error:
                     raise ValueError(f"{key}: requires a YYYY-MM-DD date") from error
             else:
-                getattr(terms, "from_" if key == "from" else key).append(value.casefold())
+                field = {"any": "any_address", "from": "from_"}.get(key, key)
+                getattr(terms, field).append(value.casefold())
         else:
             terms.text.append(token)
     return terms
@@ -116,12 +120,22 @@ def _search_statement(
 ) -> SearchStatement:
     clauses = ["m.category IN (?, ?)"]
     parameters: list[str | int] = list(SEARCH_CATEGORIES)
-    for address in terms.to:
+    for address in terms.any_address:
+        pattern = contains(address)
         clauses.append(
-            "EXISTS (SELECT 1 FROM recipients r JOIN email_addresses a ON a.address_pk = r.address_pk "
-            "WHERE r.message_pk = m.message_pk AND lower(a.address) LIKE ? ESCAPE '\\')"
+            "(lower(sender.address) LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM recipients r "
+            "JOIN email_addresses a ON a.address_pk = r.address_pk WHERE r.message_pk = m.message_pk "
+            "AND lower(a.address) LIKE ? ESCAPE '\\'))"
         )
-        parameters.append(contains(address))
+        parameters.extend((pattern, pattern))
+    for role, addresses in (("to", terms.to), ("cc", terms.cc), ("bcc", terms.bcc)):
+        for address in addresses:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM recipients r INDEXED BY recipients_message_role_address "
+                "JOIN email_addresses a ON a.address_pk = r.address_pk "
+                "WHERE r.message_pk = m.message_pk AND r.role = ? AND lower(a.address) LIKE ? ESCAPE '\\')"
+            )
+            parameters.extend((role, contains(address)))
     for address in terms.from_:
         clauses.append("lower(sender.address) LIKE ? ESCAPE '\\'")
         parameters.append(contains(address))
@@ -321,8 +335,11 @@ def terminal_width() -> int:
 def search_epilog() -> str:
     width = terminal_width()
     selectors = (
-        ("to:ADDRESS", "recipient address"),
+        ("any:ADDRESS", "sender or To, Cc, or Bcc recipient address"),
         ("from:ADDRESS", "sender address"),
+        ("to:ADDRESS", "To recipient address"),
+        ("cc:ADDRESS", "Cc recipient address"),
+        ("bcc:ADDRESS", "Bcc recipient address"),
         ("subject:TEXT", "subject text"),
         ("date:YYYY-MM-DD", "messages on that UTC calendar day"),
         ("before:YYYY-MM-DD", "messages before that UTC calendar day"),

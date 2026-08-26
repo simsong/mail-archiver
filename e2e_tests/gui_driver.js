@@ -38,8 +38,47 @@
     await waitFor(() => typeof window.pywebview?.api?.search === "function", "native bridge injected");
     await waitFor(() => rows().length === 100, "initial search displays first 100 results", 20000);
     assert(document.getElementById("archive-label").textContent.includes("archive"), "archive status displayed");
+    assert(document.title.includes("archive") && document.title.includes("(107 messages)"), "window title identifies archive and total message count");
     assert(!document.getElementById("load-more").hidden, "pagination control displayed");
     await waitFor(() => document.querySelector(".result-preview")?.textContent.length > 0, "background preview displayed");
+
+    const searchInput = document.getElementById("search");
+    searchInput.value = "beth";
+    searchInput.dispatchEvent(new Event("input", {bubbles: true}));
+    await waitFor(
+      () => !document.getElementById("search-suggestions").hidden && [...document.querySelectorAll(".suggestion-heading")].some(item => item.textContent === "Addresses"),
+      "typing opens grouped address and subject completions",
+    );
+    const bethAddress = [...document.querySelectorAll(".suggestion-option")]
+      .find(item => item.textContent.includes("beth@example.org"));
+    assert(bethAddress && bethAddress.textContent.includes("2"), "address completion shows deduplicated message count");
+    assert([...document.querySelectorAll(".suggestion-option")].some(item => item.textContent.includes("ELISABETH")), "subject completion uses substring matching");
+    bethAddress.dispatchEvent(new MouseEvent("mousedown", {bubbles: true, cancelable: true}));
+    await waitFor(() => document.querySelectorAll(".search-chip").length === 1 && rows().length === 2, "address completion creates an Any filter chip");
+    const role = document.querySelector(".search-chip select");
+    assert([...role.options].map(option => option.textContent).join(",") === "Any,From,To,Cc,Bcc", "address chip offers all recipient-role menus");
+    role.value = "from"; role.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => rows().length === 1, "From menu scopes the selected address");
+    role.value = "to"; role.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => rows().length === 0, "To menu excludes non-To occurrences");
+    role.value = "cc"; role.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => rows().length === 1, "Cc menu uses preserved recipient roles");
+    role.value = "bcc"; role.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => rows().length === 0, "Bcc menu uses preserved recipient roles");
+    role.value = "any"; role.dispatchEvent(new Event("change", {bubbles: true}));
+    await waitFor(() => rows().length === 2, "Any menu restores sender-or-recipient matching");
+    document.querySelector(".search-chip-remove").click();
+    await waitFor(() => !document.querySelector(".search-chip") && rows().length === 100, "address filter chip can be removed");
+
+    searchInput.value = "beth";
+    searchInput.dispatchEvent(new Event("input", {bubbles: true}));
+    await waitFor(() => [...document.querySelectorAll(".suggestion-option")].some(item => item.textContent.includes("ELISABETH")), "subject completions reopen");
+    const bethSubject = [...document.querySelectorAll(".suggestion-option")]
+      .find(item => item.textContent.includes("Your Flight Receipt - ELISABETH"));
+    bethSubject.dispatchEvent(new MouseEvent("mousedown", {bubbles: true, cancelable: true}));
+    await waitFor(() => document.querySelector(".search-chip")?.textContent.includes("Subject:") && rows().length === 1, "subject completion creates a subject filter chip");
+    document.querySelector(".search-chip-remove").click();
+    await waitFor(() => !document.querySelector(".search-chip") && rows().length === 100, "subject filter chip can be removed");
 
     document.getElementById("load-more").click();
     await waitFor(() => rows().length === 107, "Load More appends the second page");

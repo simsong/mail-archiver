@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from .mailsearch import MessageHeader, SortDirection, SortField, parse_query, read_message_bytes, search_headers
 from .mailbox_tree import MailboxSelection
 from .message import decoded_header
-from .search import decoded_part, is_attachment
+from .search import SEARCH_CATEGORIES, decoded_part, is_attachment
 
 PAGE_SIZE = 100
 RAW_PART_ID = -1
@@ -48,6 +48,23 @@ class SearchPage(BaseModel):
     results: list[MessageHeader]
     offset: int
     has_more: bool
+
+
+class AddressSuggestion(BaseModel):
+    address: str
+    display_name: str
+    message_count: int
+
+
+class SubjectSuggestion(BaseModel):
+    subject: str
+    message_count: int
+
+
+class SearchSuggestions(BaseModel):
+    query: str
+    addresses: list[AddressSuggestion]
+    subjects: list[SubjectSuggestion]
 
 
 class MessagePreview(BaseModel):
@@ -139,6 +156,57 @@ def search_page(
         SortDirection(direction), search_attachments, selections,
     )
     return SearchPage(results=found[:limit], offset=offset, has_more=len(found) > limit)
+
+
+def search_suggestions(archive: Path, query: str, limit: int = 20) -> SearchSuggestions:
+    """Return ranked completions; only email substrings use a derived accelerator."""
+    value = " ".join(query.split()).strip()
+    if not 1 <= limit <= 50:
+        raise ValueError("suggestion limit must be between 1 and 50")
+    if len(value) < 3:
+        return SearchSuggestions(query=value, addresses=[], subjects=[])
+    match = f'"{value.replace(chr(34), chr(34) * 2)}"'
+    database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
+    try:
+        database.execute("ATTACH DATABASE ? AS search", (f"file:{archive / 'search.sqlite3'}?mode=ro",))
+        address_rows = database.execute(
+            "WITH matching(suggestion_pk) AS ("
+            "SELECT rowid FROM search.address_suggestion_fts WHERE address_suggestion_fts MATCH ? "
+            "UNION SELECT suggestion_pk FROM search.address_suggestions "
+            "WHERE instr(lower(display_name), lower(?)) > 0) "
+            "SELECT suggestions.address, suggestions.display_name, suggestions.message_count "
+            "FROM matching JOIN search.address_suggestions suggestions USING (suggestion_pk) "
+            "ORDER BY suggestions.message_count DESC, lower(suggestions.address) LIMIT ?",
+            (match, value, limit),
+        )
+        subject_rows = database.execute(
+            "SELECT subject, count(*) AS message_count FROM messages "
+            "WHERE category IN (?, ?) AND subject <> '' AND instr(lower(subject), lower(?)) > 0 "
+            "GROUP BY subject ORDER BY message_count DESC, lower(subject) LIMIT ?",
+            (*SEARCH_CATEGORIES, value, limit),
+        )
+        return SearchSuggestions(
+            query=value,
+            addresses=[
+                AddressSuggestion(address=address, display_name=name, message_count=count)
+                for address, name, count in address_rows
+            ],
+            subjects=[SubjectSuggestion(subject=subject, message_count=count) for subject, count in subject_rows],
+        )
+    finally:
+        database.close()
+
+
+def searchable_message_count(archive: Path) -> int:
+    """Count deduplicated canonical messages visible to search."""
+    database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
+    try:
+        row = database.execute(
+            "SELECT count(*) FROM messages WHERE category IN (?, ?)", SEARCH_CATEGORIES
+        ).fetchone()
+        return 0 if row is None else int(row[0])
+    finally:
+        database.close()
 
 
 def message_previews(archive: Path, message_pks: list[int]) -> list[MessagePreview]:

@@ -1,10 +1,11 @@
-.PHONY: check fixture-bagit fixture-e2e gui gui-smoke pylint run search summary-smoke test test-bagit test-e2e test-gui test-mailsearch test-headers test-progress test-provenance verify install-mac install-linux install-tika
+.PHONY: check fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika pylint run search summary-smoke test test-bagit test-e2e test-gui test-headers test-mailsearch test-native-gui test-progress test-provenance verify
 
 TIKA_VERSION ?= 3.3.2
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
 TIKA_JAR := $(TIKA_DIR)/tika-app-$(TIKA_VERSION).jar
 TIKA_SHA512 := $(TIKA_JAR).sha512
 TIKA_URL := https://downloads.apache.org/tika/$(TIKA_VERSION)/tika-app-$(TIKA_VERSION).jar
+PLAYWRIGHT_INSTALL_ARGS ?= chromium
 
 check: test test-e2e
 
@@ -40,7 +41,10 @@ test:
 	uv run pytest -q
 
 test-e2e:
-	uv run pytest -q e2e_tests
+	uv run pytest -q --browser chromium --tracing=retain-on-failure e2e_tests
+
+test-native-gui:
+	MAILARCHIVER_NATIVE_GUI_E2E=1 uv run pytest -q e2e_tests/test_ingest_verify.py::test_native_search_ui_end_to_end
 
 test-bagit:
 	uv run pytest -q tests/test_bagit.py tests/test_standalone_verify.py
@@ -67,6 +71,9 @@ install-mac:
 install-linux:
 	@test "$$(uname -s)" = Linux || { echo "install-linux must run on Linux"; exit 1; }
 	@$(MAKE) install-tika
+
+install-test-browser:
+	uv run playwright install $(PLAYWRIGHT_INSTALL_ARGS)
 
 install-tika:
 	@command -v java >/dev/null || { echo "Apache Tika needs a Java runtime (Java 17 or newer)."; exit 1; }

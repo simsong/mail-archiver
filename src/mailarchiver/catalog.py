@@ -81,6 +81,7 @@ def _require_archive_layout(database: sqlite3.Connection, tables: set[str]) -> N
             "messages_category_date_message",
             "messages_category_sender_address",
             "recipients_address_pk",
+            "recipients_message_role_address",
             "locations_generation_pk",
             "locations_generation_offset",
             "source_files_volume_path",
@@ -93,6 +94,7 @@ def _require_archive_layout(database: sqlite3.Connection, tables: set[str]) -> N
         (
             ("source_files", ("source_file_pk", "source_volume_pk", "source_path", "sha256")),
             ("observations", ("source_file_pk", "raw_sha256", "semantic_sha256")),
+            ("recipients", ("message_pk", "address_pk", "role")),
             ("locations", ("generation_pk", "byte_offset", "byte_length")),
         ),
     )
@@ -103,7 +105,15 @@ def _require_search_layout(database: sqlite3.Connection, tables: set[str]) -> No
         database,
         "search",
         tables,
-        ("message_fts", "attachment_fts", "message_metadata", "message_attachments"),
+        (
+            "message_fts",
+            "attachment_fts",
+            "message_metadata",
+            "message_attachments",
+            "address_suggestions",
+            "message_address_suggestions",
+            "address_suggestion_fts",
+        ),
         ("message_attachments_mime_type",),
         (
             ("message_fts", ("sha256", "content")),
@@ -113,6 +123,8 @@ def _require_search_layout(database: sqlite3.Connection, tables: set[str]) -> No
                 ("sha256", "message_fts_rowid", "attachment_fts_rowid", "attachment_count", "preview"),
             ),
             ("message_attachments", ("sha256", "attachment_ordinal", "part_id", "filename", "mime_type")),
+            ("address_suggestions", ("suggestion_pk", "address", "display_name", "message_count")),
+            ("message_address_suggestions", ("sha256", "suggestion_pk")),
         ),
     )
 

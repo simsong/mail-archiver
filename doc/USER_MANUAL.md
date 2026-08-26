@@ -135,19 +135,41 @@ make gui ARGS='--archive "/path/to/mail-archive"'
 ```
 
 If no archive was supplied, choose one with **Choose Archive…**.
+The window title shows the archive path and the total number of deduplicated,
+searchable messages.
 
 Type ordinary words to search indexed headers and message text. The result
 list is on the left and the selected message is on the right. The message view
 also shows its canonical archive mailbox and every remembered source location.
 Search and viewing do not modify the archive.
 
+After three characters, the search box suggests matching addresses and
+subjects. Each suggestion shows the number of deduplicated messages in which
+it occurs. Address matching includes display names and email addresses, though
+only email-address substrings have a dedicated accelerator. Subject matching
+finds the characters anywhere in the subject, so `beth` also finds `ELISABETH`.
+Use the arrow keys and Return, or click a suggestion.
+
+Selecting an address creates a filter in the search box. Its pop-up menu
+controls where that address must occur:
+
+* **Any** searches From, To, Cc, and Bcc;
+* **From** searches senders;
+* **To**, **Cc**, and **Bcc** search only that header role.
+
+Select **×** or press Delete with an empty search field to remove the last
+filter. Selecting a subject completion creates a removable **Subject** filter.
+
 Useful search forms include:
 
 | Search | Meaning |
 |---|---|
 | `budget` | indexed headers and message text contain budget |
+| `any:alice@example.org` | sender, To, Cc, or Bcc contains this address |
 | `from:alice@example.org` | sender address contains this value |
-| `to:bob@example.org` | a recipient address contains this value |
+| `to:bob@example.org` | a To recipient contains this value |
+| `cc:bob@example.org` | a Cc recipient contains this value |
+| `bcc:bob@example.org` | a Bcc recipient contains this value |
 | `subject:"annual report"` | subject contains this phrase |
 | `date:2024-03-15` | message date is this UTC calendar day |
 | `before:2024-01-01` | message is earlier than this date |

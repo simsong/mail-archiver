@@ -342,7 +342,7 @@ email_addresses(address_pk, address UNIQUE)
 messages(message_pk, message_id_normalized, sha256, sender_address_pk, subject,
          date_utc, date_source, category,
          UNIQUE(message_id_normalized, sha256))
-recipients(message_pk, address_pk)
+recipients(message_pk, address_pk, role)
 mbox_generations(generation_pk, filename, sha256, message_count, byte_count)
 locations(message_pk, generation_pk, byte_offset, byte_length)
 source_volumes(source_volume_pk, identity_json, metadata_json,
@@ -366,8 +366,10 @@ are still reviewable. Each observation directly stores raw (`h2`) and semantic
 `messages.sha256` has a separate index for the missing-Message-ID exception and
 FTS result lookup.  Do not make
 Message-ID unique.  `email_addresses.address`, `messages.sender_address_pk`,
-and `recipients.address_pk` are indexed; recipient role and ordering are not
-preserved. The catalog also indexes `(date_utc DESC, message_pk DESC)` for
+and `recipients.address_pk` are indexed. Recipient role preserves To, Cc, or
+Bcc; ordering within a header is not preserved. The catalog also indexes
+`(message_pk, role, address_pk)` for scoped address filters and
+`(date_utc DESC, message_pk DESC)` for
 bounded search pages, `(source_file_pk, source_offset DESC)` for ingest resume,
 `(run_pk, observation_pk)` for run review, and
 `(generation_pk, byte_offset, byte_length)` for ordered, covering location
@@ -397,7 +399,12 @@ searchable headers and selected body text: `text/plain` first, otherwise rendere
 `text/html`, otherwise a safe single-part fallback. A second FTS5 table stores
 text-attachment content only when requested, allowing the GUI to include it
 without changing default body-search semantics. Binary attachment bytes are
-excluded. Ordinary `message_metadata.sha256` is the indexed lookup key for the
+excluded. An external-content trigram FTS5 table covers unique normalized email
+addresses. Its aggregate source table retains one display name and a
+deduplicated message count, while a SHA-256 mapping table permits exact count
+updates and replacement. Display-name matches scan that bounded aggregate table;
+subject matches scan the canonical subject column rather than creating
+a second subject store. Ordinary `message_metadata.sha256` is the indexed lookup key for the
 corresponding FTS row IDs; updates and recovery delete FTS rows by row ID rather
 than filtering the virtual tables on their unindexed SHA-256 columns. The
 Makefile's `install-mac` and `install-linux` targets
@@ -594,10 +601,12 @@ installed standard-library-only verifier under isolated Python.
 
 `make test` runs the ordinary test tree, while `make check` runs it followed by
 the separate end-to-end suite. The tracked source corpus has enough messages to
-exercise real result pagination and rich MIME behavior. On macOS, the same target drives the actual
-pywebview/WKWebView application through its Python bridge and tests all shipped
-search-interface behavior. Linux runs the complete ingest and verification
-portion and explicitly skips the native macOS UI portion. `make test-bagit`
+exercise real result pagination and rich MIME behavior. `make test-e2e` drives
+the complete interface in headless Chromium while binding every bridge method
+to the real Python service and disposable test archive. It therefore works
+without a visible desktop on macOS and Linux. `make test-native-gui` separately
+drives a hidden Cocoa/WKWebView window on macOS to retain the native bridge
+boundary. `make test-bagit`
 validates the database-independent three-message fixture and corruption cases.
 The installed `verify_mail_archive.py
 DIRECTORY` performs read-only validation of a supplied bag. The first acceptance run is against a copied

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -10,15 +12,22 @@ import sys
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import Page
 from pydantic import BaseModel
 
-from mailarchiver.gui_app import GuiE2EReport
+from mailarchiver.gui_app import E2E_DRIVER, GUI_DIRECTORY, GuiApi, GuiE2EClientResult, GuiE2EReport
 from e2e_tests.eicar_fixture import write_eicar_emlx
 
 
 DATA = Path(__file__).parent / "data"
 NORMAL_MESSAGE_COUNT = 107
 PROCESSED_MESSAGE_COUNT = 110
+GUI_API_METHODS = (
+    "attachment", "choose_archive", "delete_filter_set", "mailbox_tree", "message",
+    "open_attachment", "open_message_window", "part", "prepare_drag", "rename_filter_set",
+    "request_previews", "save_attachment", "save_filter_set", "save_message",
+    "saved_filter_sets", "search", "status", "suggestions", "take_previews",
+)
 
 
 class BuiltArchive(BaseModel):
@@ -139,7 +148,46 @@ def test_fresh_ingest_builds_an_independently_verifiable_archive(built_archive: 
     assert verified.stdout.endswith("Archive integrity verified.\n")
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="native UI E2E requires macOS WKWebView")
+def test_search_ui_end_to_end_without_a_window(
+    built_archive: BuiltArchive, tmp_path: Path, page: Page
+) -> None:
+    """Drive the shipped UI headlessly while every bridge call reaches the real service."""
+    export_directory = tmp_path / "gui-e2e-exports"
+    export_directory.mkdir()
+    api = GuiApi(
+        built_archive.archive, export_directory, export_directory,
+        export_directory / "filter-sets.json",
+    )
+    try:
+        for name in GUI_API_METHODS:
+            page.expose_function(f"mailarchive_{name}", getattr(api, name))
+        names = json.dumps(GUI_API_METHODS)
+        page.add_init_script(
+            f"const names = {names}; window.pywebview = {{api: {{}}}}; "
+            "for (const name of names) window.pywebview.api[name] = "
+            "(...args) => window[`mailarchive_${name}`](...args); "
+            "window.addEventListener('DOMContentLoaded', () => "
+            "window.dispatchEvent(new Event('pywebviewready')));",
+        )
+        page.goto((GUI_DIRECTORY / "index.html").as_uri())
+        page.evaluate(E2E_DRIVER.read_text(encoding="utf-8"))
+        page.wait_for_function("window.__mailarchiveE2E", timeout=90_000)
+        result = GuiE2EClientResult.model_validate(page.evaluate("window.__mailarchiveE2E"))
+    finally:
+        api.close()
+
+    assert result.passed, result.error
+    assert len(result.checks) >= 30
+    exports = {path.name for path in export_directory.iterdir()}
+    assert {"saved-tiny.png", "saved-review.command", "filter-sets.json"} <= exports
+    assert any(name.startswith("saved-Rich UI message-") and name.endswith(".eml") for name in exports)
+    assert any(name.startswith("Rich UI message-") and name.endswith(".eml") for name in exports)
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or os.environ.get("MAILARCHIVER_NATIVE_GUI_E2E") != "1",
+    reason="set MAILARCHIVER_NATIVE_GUI_E2E=1 to exercise the native macOS WKWebView",
+)
 def test_native_search_ui_end_to_end(built_archive: BuiltArchive, tmp_path: Path) -> None:
     """Drive the shipped HTML/JavaScript through the real pywebview Python bridge."""
     report = tmp_path / "gui-e2e.json"

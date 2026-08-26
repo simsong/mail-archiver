@@ -74,7 +74,8 @@ CREATE TABLE metadata_defects (
 CREATE TABLE recipients (
     message_pk INTEGER NOT NULL REFERENCES messages(message_pk),
     address_pk INTEGER NOT NULL REFERENCES email_addresses(address_pk),
-    PRIMARY KEY (message_pk, address_pk)
+    role TEXT NOT NULL CHECK (role IN ('to', 'cc', 'bcc')),
+    PRIMARY KEY (message_pk, address_pk, role)
 );
 
 CREATE TABLE mbox_generations (
@@ -98,7 +99,8 @@ CREATE INDEX messages_date_message ON messages(date_utc DESC, message_pk DESC);
 CREATE INDEX messages_subject_message ON messages(lower(subject), message_pk);
 CREATE INDEX messages_category_date_message ON messages(category, date_utc DESC, message_pk DESC);
 CREATE INDEX messages_category_sender_address ON messages(category, sender_address_pk);
-CREATE INDEX recipients_address_pk ON recipients(address_pk);
+CREATE INDEX recipients_address_pk ON recipients(address_pk, role, message_pk);
+CREATE INDEX recipients_message_role_address ON recipients(message_pk, role, address_pk);
 CREATE INDEX locations_generation_pk ON locations(generation_pk);
 CREATE INDEX locations_generation_offset ON locations(generation_pk, byte_offset, byte_length);
 CREATE INDEX source_files_volume_path ON source_files(source_volume_pk, source_path);

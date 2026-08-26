@@ -66,6 +66,8 @@ jobs:
           rm -f "$MAILARCHIVER_CLAMD_SOCKET" /run/clamav/clamd.pid
       - name: Install dependencies
         run: uv sync --locked --all-groups
+      - name: Install headless test browser
+        run: make install-test-browser PLAYWRIGHT_INSTALL_ARGS="--with-deps chromium"
       - name: Pytest
         run: make check
 
@@ -127,4 +129,4 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-groups
       - name: Full lifecycle and native UI E2E
-        run: make test-e2e
+        run: make test-native-gui

@@ -11,6 +11,9 @@ Run it only through the Makefile:
 make test-e2e
 ```
 
+Install the pinned Chromium build once with `make install-test-browser`.
+`make test-e2e` is headless and does not create or flash a desktop window.
+
 `make check` runs the ordinary tests first and then this suite. The end-to-end
 test uses the committed, non-sensitive corpus under `e2e_tests/data/source`.
 `make fixture-e2e` regenerates that corpus deterministically after an intentional
@@ -41,13 +44,13 @@ in for the other.
 
 ### Browser acceptance test
 
-The comprehensive interface test should use
+The comprehensive interface test uses
 [`pytest-playwright`](https://playwright.dev/python/docs/intro), Playwright's
-official pytest integration. A pytest fixture will construct the real
+official pytest integration. A pytest fixture constructs the real
 `GuiApi` against the archive created by the lifecycle test. Playwright's
 [`expose_function`](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-expose-function)
-will bind those Python methods into the browser, and an initialization script
-will present them under the same promise-returning `window.pywebview.api`
+binds those Python methods into the browser, and an initialization script
+presents them under the same promise-returning `window.pywebview.api`
 interface used by the application.
 
 This is a test adapter, not a mock: searches, mailbox counts, message reads,
@@ -56,9 +59,11 @@ and SQLite code. Chromium is the required CI browser. Playwright WebKit is a
 useful additional rendering-engine run, but it is not Apple's Cocoa WKWebView
 host.
 
-Playwright should exercise the complete HTML interface:
+Playwright exercises the complete HTML interface:
 
 * initial search, sorting, pagination, and attachment search;
+* grouped substring completions, suggestion counts, address-role menus,
+  subject filters, and the archive/message-count title;
 * message selection, keyboard navigation, and search error display;
 * MIME alternatives, raw source, safe HTML, and remote-content opt-in;
 * attachment previews, risky-file confirmation, exports, and print dispatch;
@@ -68,24 +73,20 @@ Playwright should exercise the complete HTML interface:
 * hiding and restoring the tree, merged and explicit source volumes; and
 * saving, cloning, selecting, renaming, and deleting filter sets.
 
-Use Playwright locators and web-first assertions rather than fixed sleeps.
-Retain a Playwright trace, screenshot, and browser console output on failure.
+The test retains a Playwright trace on failure.
 
 ### Native macOS smoke test
 
-A small macOS job must still launch the real pywebview application using its
+A macOS job still launches the real pywebview application using its
 Cocoa/WKWebView backend. It verifies that the window loads, pywebview injects
 the JavaScript-to-Python bridge, one real search completes, and the application
 closes cleanly. This is the boundary Chromium cannot test.
 
-The current suite predates the Playwright layer and therefore drives nearly the
-entire interface inside the real WKWebView. In an unattended hosted macOS
-session, creating a second Cocoa message window can leave the process alive
-after the primary window is destroyed. E2E mode consequently validates the
-double-click handler and real message lookup without creating that second OS
-window. Normal application behavior is unchanged. Once the browser acceptance
-test is installed, the native job should be narrowed to the deterministic
-launch, bridge, search, and shutdown smoke test.
+Run it explicitly with `make test-native-gui`. The native test window is created
+hidden, so it does not flash during local or hosted execution. The driver still
+exercises the interface through the real WKWebView, but E2E mode validates the
+double-click handler and message lookup without creating a second OS window.
+Normal application behavior is unchanged.
 
 Testing actual multiwindow Cocoa lifecycle, system dialogs, Finder drag-out,
 and native menus requires XCUITest/XCUIAutomation in a logged-in macOS session.
@@ -102,6 +103,11 @@ pywebview's Cocoa backend creates these native defaults:
 * the application menu: About, Services, Hide, Hide Others, Show All, and Quit;
 * Edit: Cut, Copy, Paste, and Select All; and
 * View: Enter Full Screen.
+
+Before Cocoa creates those menus, the application sets its process and bundle
+identity to **Mail Archiver**, including version and copyright metadata and a
+mail-archive system icon. Consequently the application menu and standard About
+panel no longer identify the host Python interpreter.
 
 There is currently no native File, Search, Window, or Help menu. Choose Archive,
 Save Message, Print, mailbox filtering, and filter-set management are HTML

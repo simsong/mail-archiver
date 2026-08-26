@@ -7,6 +7,7 @@ import hashlib
 import json
 import mailbox
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -22,11 +23,13 @@ from mailarchiver.gui_service import (
     is_risky,
     message_previews,
     render_part,
+    searchable_message_count,
     search_page,
+    search_suggestions,
     write_attachment,
     write_message,
 )
-from mailarchiver.gui_app import GuiApi
+from mailarchiver.gui_app import GuiApi, application_metadata, configure_macos_application
 from mailarchiver.mailsearch import _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, MailboxTreeNode, mailbox_tree
@@ -78,7 +81,10 @@ def make_gui_archive(tmp_path: Path) -> Path:
                 (message_id, hashlib.sha256(raw).hexdigest(), sender, subject, timestamp),
             )
             message_pks.append(int(cursor.lastrowid))
-            catalog.execute("INSERT INTO recipients(message_pk, address_pk) VALUES (?, ?)", (cursor.lastrowid, recipient))
+            catalog.execute(
+                "INSERT INTO recipients(message_pk, address_pk, role) VALUES (?, ?, 'to')",
+                (cursor.lastrowid, recipient),
+            )
             index_message(search, raw, True)
         catalog.commit()
         search.commit()
@@ -138,6 +144,30 @@ def test_gui_search_field_preserves_selector_and_quote_semantics(tmp_path: Path)
     assert [result.subject for result in search_page(archive, 'subject:"annual plan" report').results] == ["annual plan"]
 
 
+def test_gui_application_metadata_names_the_product() -> None:
+    """Requirement: native menus and the About panel identify Mail Archiver, not Python."""
+    metadata = application_metadata()
+
+    assert metadata.name == "Mail Archiver"
+    assert metadata.version == "0.0.0"
+    assert "Mail Archiver" in metadata.copyright
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Cocoa metadata is macOS-specific")
+def test_gui_applies_application_metadata_to_cocoa() -> None:
+    """Requirement: the live Cocoa process and bundle receive the product metadata."""
+    from AppKit import NSApplication  # pylint: disable=import-outside-toplevel,no-name-in-module
+    from Foundation import NSBundle, NSProcessInfo  # pylint: disable=import-outside-toplevel,no-name-in-module
+
+    configure_macos_application()
+    info = NSBundle.mainBundle().localizedInfoDictionary() or NSBundle.mainBundle().infoDictionary()
+
+    assert NSProcessInfo.processInfo().processName() == "Mail Archiver"
+    assert info["CFBundleName"] == "Mail Archiver"
+    assert info["CFBundleShortVersionString"] == "0.0.0"
+    assert NSApplication.sharedApplication().applicationIconImage() is not None
+
+
 def test_gui_search_sorting_is_whitelisted_and_stable(tmp_path: Path) -> None:
     """Requirement: GUI results sort by date, subject, or sender in either direction."""
     archive = make_gui_archive(tmp_path)
@@ -167,6 +197,47 @@ def test_gui_attachment_checkbox_expands_full_text_search(tmp_path: Path) -> Non
     assert search_page(archive, "Appendixquartz").results == []
     assert [result.message_pk for result in search_page(archive, "Appendixquartz", search_attachments=True).results] == [2]
     assert [result.message_pk for result in search_page(archive, "Plain Appendixquartz", search_attachments=True).results] == [2]
+
+
+def test_gui_suggestions_use_trigram_substrings_and_deduplicated_message_counts(tmp_path: Path) -> None:
+    """Requirement: partial names, addresses, and subject substrings produce ranked completions."""
+    archive = make_gui_archive(tmp_path)
+    search = create_search(archive / "search.sqlite3")
+    catalog = create_catalog(archive / "archive.sqlite3")
+    raw_messages: list[bytes] = []
+    try:
+        sender = address_pk(catalog, "beth@example.org")
+        for number, subject in enumerate(("Flight for ELISABETH", "Ordinary subject"), 1):
+            raw = "".join((
+                f"Message-ID: <suggestion-{number}@example>\n"
+                "From: Beth Rosenberg <beth@example.org>\n",
+                "Cc: Beth Rosenberg <beth@example.org>\n" if number == 1 else "",
+                f"Subject: {subject}\n\nbody\n",
+            )).encode()
+            raw_messages.append(raw)
+            index_message(search, raw, False)
+            catalog.execute(
+                "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, "
+                "date_source, category) VALUES (?, ?, ?, ?, '2024-01-01T00:00:00+00:00', 'date', 'Archive')",
+                (f"suggestion-{number}@example", hashlib.sha256(raw).hexdigest(), sender, subject),
+            )
+        index_message(search, raw_messages[0], False)
+        search.commit()
+        catalog.commit()
+    finally:
+        search.close()
+        catalog.close()
+
+    suggestions = search_suggestions(archive, "beth")
+
+    assert [(item.address, item.display_name, item.message_count) for item in suggestions.addresses] == [
+        ("beth@example.org", "Beth Rosenberg", 2)
+    ]
+    assert [(item.subject, item.message_count) for item in suggestions.subjects] == [
+        ("Flight for ELISABETH", 1)
+    ]
+    assert search_suggestions(archive, "be").addresses == []
+    assert searchable_message_count(archive) == 4
 
 
 def test_gui_loads_indexed_previews_on_its_background_worker(tmp_path: Path) -> None:

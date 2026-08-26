@@ -6,9 +6,11 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from importlib.metadata import version
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -28,7 +30,9 @@ from .gui_service import (
     message_previews,
     render_part,
     safe_filename,
+    searchable_message_count,
     search_page,
+    search_suggestions,
     write_attachment,
     write_message,
 )
@@ -37,11 +41,19 @@ from .mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, mailbox_t
 GUI_DIRECTORY = Path(__file__).parents[2] / "gui"
 E2E_DRIVER = Path(__file__).parents[2] / "e2e_tests" / "gui_driver.js"
 DEFAULT_PAGE_SIZE = 100
+APPLICATION_NAME = "Mail Archiver"
+
+
+class ApplicationMetadata(BaseModel):
+    name: str
+    version: str
+    copyright: str
 
 
 class GuiStatus(BaseModel):
     archive: str | None
     ready: bool
+    message_count: int = 0
 
 
 class DragExport(BaseModel):
@@ -91,13 +103,20 @@ class GuiApi:
         self._preview_error: str | None = None
         self._preview_generation = 0
         self._tree_cache: dict[bool, list[dict[str, object]]] = {}
+        self._message_count: int | None = None
 
     def set_window(self, window: Any) -> None:
         self.window = window
 
     def status(self) -> dict[str, object]:
         ready = self.archive is not None and _is_archive(self.archive)
-        return GuiStatus(archive=str(self.archive) if self.archive else None, ready=ready).model_dump()
+        if ready and self._message_count is None:
+            self._message_count = searchable_message_count(self._archive())
+        return GuiStatus(
+            archive=str(self.archive) if self.archive else None,
+            ready=ready,
+            message_count=self._message_count or 0,
+        ).model_dump()
 
     def choose_archive(self) -> dict[str, object]:
         if self.e2e_directory is not None:
@@ -114,7 +133,10 @@ class GuiApi:
                 self._preview_pending.clear()
                 self._preview_error = None
             self._tree_cache.clear()
-        return self.status()
+            self._message_count = None
+        status = self.status()
+        self.window.set_title(_window_title(self.archive, int(status["message_count"])))
+        return status
 
     def search(
         self,
@@ -129,6 +151,9 @@ class GuiApi:
             self._archive(), query, offset, DEFAULT_PAGE_SIZE, sort_by, direction,
             search_attachments, mailbox_selections,
         ).model_dump(mode="json")
+
+    def suggestions(self, query: str, limit: int = 20) -> dict[str, object]:
+        return search_suggestions(self._archive(), query, limit).model_dump(mode="json")
 
     def mailbox_tree(self, show_volumes: bool = False) -> list[dict[str, object]]:
         if show_volumes not in self._tree_cache:
@@ -307,6 +332,42 @@ def _is_archive(path: Path) -> bool:
     return path.is_dir() and (path / "archive.sqlite3").is_file() and (path / "search.sqlite3").is_file()
 
 
+def _window_title(archive: Path | None, message_count: int = 0) -> str:
+    if archive is None:
+        return APPLICATION_NAME
+    return f"{APPLICATION_NAME} — {archive} ({message_count:,} messages)"
+
+
+def application_metadata() -> ApplicationMetadata:
+    """Return the identity shown by the native application menu and About panel."""
+    return ApplicationMetadata(
+        name=APPLICATION_NAME,
+        version=version("mailarchiver"),
+        copyright="Copyright © 2026 The Mail Archiver contributors.",
+    )
+
+
+def configure_macos_application() -> None:
+    """Replace the bare Python process identity before pywebview builds Cocoa menus."""
+    if sys.platform != "darwin":
+        return
+    from AppKit import NSApplication, NSImage  # pylint: disable=import-outside-toplevel,no-name-in-module
+    from Foundation import NSBundle, NSProcessInfo  # pylint: disable=import-outside-toplevel,no-name-in-module
+
+    metadata = application_metadata()
+    bundle = NSBundle.mainBundle()
+    info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+    info["CFBundleName"] = metadata.name
+    info["CFBundleDisplayName"] = metadata.name
+    info["CFBundleShortVersionString"] = metadata.version
+    info["CFBundleVersion"] = metadata.version
+    info["NSHumanReadableCopyright"] = metadata.copyright
+    NSProcessInfo.processInfo().setProcessName_(metadata.name)
+    icon = NSImage.imageWithSystemSymbolName_accessibilityDescription_("archivebox", metadata.name)
+    if icon is not None:
+        NSApplication.sharedApplication().setApplicationIconImage_(icon)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only graphical search of a mailarchiver archive.")
     parser.add_argument("--archive", type=Path, help="directory containing archive.sqlite3 and search.sqlite3")
@@ -363,6 +424,7 @@ def run_e2e_driver(window: Any, result: list[GuiE2EClientResult]) -> None:
 
 def main() -> int:
     args = build_parser().parse_args()
+    configure_macos_application()
     archive_value = os.environ.get("MAIL_ARCHIVE_DIR")
     archive = args.archive or (Path(archive_value) if archive_value else None)
     if archive is not None and not _is_archive(archive):
@@ -370,13 +432,15 @@ def main() -> int:
     e2e_directory = args.e2e_test.parent / "gui-e2e-exports" if args.e2e_test else None
     preferences_file = e2e_directory / "filter-sets.json" if e2e_directory else None
     api = GuiApi(archive, e2e_directory, e2e_directory, preferences_file)
+    initial_status = api.status()
     window = webview.create_window(
-        "Mail Archive",
+        _window_title(archive, int(initial_status["message_count"])),
         str(GUI_DIRECTORY / "index.html"),
         js_api=api,
         width=1400,
         height=900,
         min_size=(900, 560),
+        hidden=bool(args.smoke_test or args.e2e_test),
         text_select=True,
         draggable=True,
     )

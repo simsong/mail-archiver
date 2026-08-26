@@ -21,6 +21,11 @@ const state = {
   filterSets: [],
   activeFilterSet: "",
   treeRequest: 0,
+  searchFilters: [],
+  suggestionRequest: 0,
+  suggestionTimer: null,
+  suggestionItems: [],
+  suggestionIndex: -1,
 };
 
 const elements = {};
@@ -36,7 +41,7 @@ window.setTimeout(() => {
 async function initialize() {
   if (initialized) return;
   initialized = true;
-  for (const id of ["choose-archive", "search-form", "search", "archive-label", "result-status", "result-list", "load-more",
+  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "load-more",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
     "message-content", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
@@ -47,7 +52,14 @@ async function initialize() {
     await chooseArchive();
     elements["choose-archive"].dataset.completed = String(Number(elements["choose-archive"].dataset.completed || 0) + 1);
   });
-  elements["search-form"].addEventListener("submit", event => { event.preventDefault(); runSearch(false); });
+  elements["search-form"].addEventListener("submit", event => {
+    event.preventDefault();
+    if (state.suggestionIndex >= 0) acceptSuggestion(state.suggestionIndex);
+    else { closeSuggestions(); runSearch(false); }
+  });
+  elements.search.addEventListener("input", scheduleSuggestions);
+  elements.search.addEventListener("keydown", navigateSuggestions);
+  elements.search.addEventListener("blur", () => window.setTimeout(closeSuggestions, 150));
   elements["load-more"].addEventListener("click", () => runSearch(true));
   elements["sort-by"].addEventListener("change", () => runSearch(false));
   elements["sort-direction"].addEventListener("click", toggleSortDirection);
@@ -100,7 +112,10 @@ function resetArchiveView() {
   state.selectionRequest = null;
   state.view = null;
   state.mailboxTree = [];
+  state.searchFilters = [];
   state.dragExports.clear();
+  renderSearchFilters();
+  closeSuggestions();
   clearAttachmentPreview();
   elements["result-list"].replaceChildren();
   elements["message-content"].hidden = true;
@@ -108,6 +123,9 @@ function resetArchiveView() {
 
 function applyStatus(status) {
   elements["archive-label"].textContent = status.archive || "No archive selected";
+  document.title = status.ready
+    ? `Mail Archiver — ${status.archive} (${status.message_count.toLocaleString()} messages)`
+    : "Mail Archiver";
   elements.search.disabled = !status.ready;
   elements["result-status"].textContent = status.ready ? "Enter a search or press Return for newest mail." : "Choose an archive to begin.";
   if (status.ready) elements.search.focus();
@@ -346,8 +364,171 @@ async function openFilterManager() {
   elements["manage-filter-dialog"].showModal();
 }
 
-async function runSearch(append) {
+function quotedSearchValue(value) {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function effectiveQuery() {
+  const filters = state.searchFilters.map(filter => {
+    const selector = filter.kind === "address" ? filter.role : "subject";
+    return `${selector}:${quotedSearchValue(filter.value)}`;
+  });
+  const text = elements.search.value.trim();
+  if (text) filters.push(text);
+  return filters.join(" ");
+}
+
+function scheduleSuggestions() {
+  window.clearTimeout(state.suggestionTimer);
   const query = elements.search.value.trim();
+  if (query.length < 3) { closeSuggestions(); return; }
+  const request = ++state.suggestionRequest;
+  state.suggestionTimer = window.setTimeout(() => loadSuggestions(query, request), 120);
+}
+
+async function loadSuggestions(query, request) {
+  const suggestions = await call(() => window.pywebview.api.suggestions(query, 20));
+  if (!suggestions || request !== state.suggestionRequest || elements.search.value.trim() !== query) return;
+  renderSuggestions(suggestions);
+}
+
+function renderSuggestions(suggestions) {
+  state.suggestionItems = [];
+  state.suggestionIndex = -1;
+  const contents = [];
+  const heading = label => {
+    const item = document.createElement("div"); item.className = "suggestion-heading"; item.textContent = label; return item;
+  };
+  const option = (icon, label, count, accept) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "suggestion-option";
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", "false");
+    const iconNode = document.createElement("span"); iconNode.className = "suggestion-icon"; iconNode.textContent = icon;
+    const labelNode = document.createElement("span"); labelNode.className = "suggestion-label"; labelNode.textContent = label;
+    const countNode = document.createElement("span"); countNode.className = "suggestion-count";
+    countNode.textContent = count === null ? "" : count.toLocaleString();
+    if (count !== null) countNode.title = `${count.toLocaleString()} message${count === 1 ? "" : "s"}`;
+    button.append(iconNode, labelNode, countNode);
+    const index = state.suggestionItems.length;
+    button.addEventListener("mouseenter", () => selectSuggestion(index));
+    button.addEventListener("mousedown", event => { event.preventDefault(); accept(); });
+    state.suggestionItems.push({element: button, accept});
+    return button;
+  };
+  if (suggestions.addresses.length) {
+    contents.push(heading("Addresses"));
+    for (const address of suggestions.addresses) {
+      const label = address.display_name ? `${address.display_name} — ${address.address}` : address.address;
+      contents.push(option("◎", label, address.message_count, () => addAddressFilter(address)));
+    }
+  }
+  contents.push(heading("Subjects"));
+  contents.push(option("✉", `Subject contains “${suggestions.query}”`, null, () => addSubjectFilter(suggestions.query)));
+  for (const subject of suggestions.subjects) {
+    contents.push(option("✉", subject.subject, subject.message_count, () => addSubjectFilter(subject.subject)));
+  }
+  elements["search-suggestions"].replaceChildren(...contents);
+  elements["search-suggestions"].hidden = false;
+  elements.search.setAttribute("aria-expanded", "true");
+}
+
+function selectSuggestion(index) {
+  if (!state.suggestionItems.length) return;
+  state.suggestionIndex = Math.max(0, Math.min(index, state.suggestionItems.length - 1));
+  state.suggestionItems.forEach((item, itemIndex) => {
+    const active = itemIndex === state.suggestionIndex;
+    item.element.classList.toggle("active", active);
+    item.element.setAttribute("aria-selected", String(active));
+    if (active) item.element.scrollIntoView({block: "nearest"});
+  });
+}
+
+function navigateSuggestions(event) {
+  if (event.key === "Backspace" && !elements.search.value && state.searchFilters.length) {
+    state.searchFilters.pop(); renderSearchFilters(); runSearch(false); return;
+  }
+  if (elements["search-suggestions"].hidden) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const delta = event.key === "ArrowDown" ? 1 : -1;
+    selectSuggestion(state.suggestionIndex < 0 ? (delta > 0 ? 0 : state.suggestionItems.length - 1) : state.suggestionIndex + delta);
+  } else if (event.key === "Enter" && state.suggestionIndex >= 0) {
+    event.preventDefault(); acceptSuggestion(state.suggestionIndex);
+  } else if (event.key === "Escape") {
+    event.preventDefault(); closeSuggestions();
+  }
+}
+
+function acceptSuggestion(index) {
+  state.suggestionItems[index]?.accept();
+}
+
+function closeSuggestions() {
+  window.clearTimeout(state.suggestionTimer);
+  state.suggestionRequest += 1;
+  state.suggestionItems = [];
+  state.suggestionIndex = -1;
+  if (elements["search-suggestions"]) {
+    elements["search-suggestions"].hidden = true;
+    elements["search-suggestions"].replaceChildren();
+  }
+  elements.search?.setAttribute("aria-expanded", "false");
+}
+
+function addAddressFilter(suggestion) {
+  state.searchFilters.push({
+    kind: "address", value: suggestion.address, label: suggestion.display_name || suggestion.address, role: "any",
+  });
+  elements.search.value = "";
+  closeSuggestions();
+  renderSearchFilters();
+  elements.search.focus();
+  runSearch(false);
+}
+
+function addSubjectFilter(subject) {
+  state.searchFilters.push({kind: "subject", value: subject, label: subject});
+  elements.search.value = "";
+  closeSuggestions();
+  renderSearchFilters();
+  elements.search.focus();
+  runSearch(false);
+}
+
+function renderSearchFilters() {
+  const roleOptions = [["any", "Any"], ["from", "From"], ["to", "To"], ["cc", "Cc"], ["bcc", "Bcc"]];
+  const chips = state.searchFilters.map((filter, index) => {
+    const chip = document.createElement("span"); chip.className = "search-chip";
+    if (filter.kind === "address") {
+      const role = document.createElement("select");
+      role.setAttribute("aria-label", `Address role for ${filter.value}`);
+      role.append(...roleOptions.map(([value, label]) => {
+        const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
+      }));
+      role.value = filter.role;
+      role.addEventListener("change", () => { filter.role = role.value; runSearch(false); });
+      chip.append(role);
+    }
+    const label = document.createElement("span");
+    label.className = "search-chip-label";
+    label.textContent = filter.kind === "subject" ? `Subject: ${filter.label}` : filter.label;
+    label.title = filter.value;
+    const remove = document.createElement("button");
+    remove.type = "button"; remove.className = "search-chip-remove"; remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove ${filter.label} filter`);
+    remove.addEventListener("click", () => {
+      state.searchFilters.splice(index, 1); renderSearchFilters(); runSearch(false); elements.search.focus();
+    });
+    chip.append(label, remove);
+    return chip;
+  });
+  elements["search-filters"]?.replaceChildren(...chips);
+}
+
+async function runSearch(append) {
+  const query = effectiveQuery();
   const sortBy = elements["sort-by"].value;
   const sortDirection = state.sortDirection;
   const searchAttachments = elements["search-attachments"].checked;

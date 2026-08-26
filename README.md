@@ -299,7 +299,11 @@ SHA-256; it does not alter canonical message bytes.
 The initial graphical search tool runs on macOS using pywebview and the system
 WKWebView. It has one search field with the same selectors and quoting rules as
 `mailsearch`, sortable results, message and MIME-part viewing, `.eml` export
-and drag-out, printing, and attachment viewing. Start it with:
+and drag-out, printing, and attachment viewing. Typing three characters offers
+ranked address and subject completions. Selected addresses become removable
+filters with **Any**, **From**, **To**, **Cc**, and **Bcc** role menus. The
+window title identifies the archive and its deduplicated searchable-message
+count. Start it with:
 
 ```console
 make gui ARGS="--archive /path/to/mail-archive"
@@ -335,8 +339,8 @@ generated source; no complete virus-test signature is tracked in Git. The
 separate end-to-end suite copies its tracked, virus-free source corpus, ingests
 110 discoveries, verifies deduplication, autosave exclusion, quarantine,
 newline preservation, attachment indexing, BagIt fixity, and the installed
-standalone verifier. On macOS it also drives the shipped HTML and JavaScript
-through the real pywebview/WKWebView bridge, including pagination, search,
+standalone verifier. Headless Chromium drives the shipped HTML and JavaScript
+through the real Python service bridge, including pagination, search,
 sorting, message and MIME views, provenance, remote-content blocking, previews,
 exports, printing, drag-out, keyboard navigation, and error display:
 
@@ -346,5 +350,8 @@ make test-e2e
 make check
 ```
 
-`make check` runs both suites. Regenerate the committed safe corpus after an
+Install the pinned headless Chromium once with `make install-test-browser`.
+`make check` then runs both suites without showing a window. On macOS,
+`make test-native-gui` additionally exercises the hidden Cocoa/WKWebView bridge.
+Regenerate the committed safe corpus after an
 intentional fixture change with `make fixture-e2e`.

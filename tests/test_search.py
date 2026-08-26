@@ -169,4 +169,4 @@ def test_index_failure_is_recorded_without_raising() -> None:
 
     field, detail = catalog.execute("SELECT field, detail FROM metadata_defects").fetchone()
     assert field == "search-index"
-    assert "no such table: message_metadata" in detail
+    assert "no such table:" in detail

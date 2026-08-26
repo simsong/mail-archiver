@@ -68,6 +68,8 @@ def test_raw_8bit_recipient_header_preserves_address() -> None:
             b"Message-ID: <raw-recipient@example>",
             b"From: sender@example.net",
             b"To: Jos\xe9 <recipient@example.net>",
+            b"Cc: Copy <copy@example.net>",
+            b"Bcc: Blind <blind@example.net>",
             b"Date: Thu, 1 Feb 2024 12:00:00 +0000",
             b"",
             b"body",
@@ -77,7 +79,11 @@ def test_raw_8bit_recipient_header_preserves_address() -> None:
 
     parsed = parse_message(raw, Path("/input/2020/message.eml"), None)
 
-    assert parsed.recipients == ["recipient@example.net"]
+    assert [(recipient.address, recipient.role.value) for recipient in parsed.recipients] == [
+        ("blind@example.net", "bcc"),
+        ("copy@example.net", "cc"),
+        ("recipient@example.net", "to"),
+    ]
     assert parsed.sha256 == hashlib.sha256(raw).hexdigest()
 
 

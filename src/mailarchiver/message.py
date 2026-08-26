@@ -10,6 +10,7 @@ from email.message import Message
 from email import policy
 from email.parser import BytesParser
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -29,11 +30,22 @@ class MetadataDefect(BaseModel):
     detail: str
 
 
+class RecipientRole(StrEnum):
+    TO = "to"
+    CC = "cc"
+    BCC = "bcc"
+
+
+class RecipientIdentity(BaseModel):
+    address: str
+    role: RecipientRole
+
+
 class ParsedMessage(BaseModel):
     message_id: str
     sha256: str
     sender: str
-    recipients: list[str]
+    recipients: list[RecipientIdentity]
     subject: str
     date_utc: str
     date_source: str
@@ -155,6 +167,18 @@ def sender_identity(message: Message, defects: list[MetadataDefect], raw: bytes 
     return SenderIdentity(value="", source="missing")
 
 
+def recipient_identities(message: Message, defects: list[MetadataDefect]) -> list[RecipientIdentity]:
+    """Return normalized recipients without losing their RFC header role."""
+    recipients: set[tuple[str, RecipientRole]] = set()
+    try:
+        for role in RecipientRole:
+            values = header_values(message, role.value, defects)
+            recipients.update((address.lower(), role) for _, address in getaddresses(values) if address)
+    except Exception as error:
+        defects.append(MetadataDefect(field="recipients", detail=f"{type(error).__name__}: {error}"))
+    return [RecipientIdentity(address=address, role=role) for address, role in sorted(recipients)]
+
+
 def parse_message(raw: bytes, path: Path, prior_date: datetime | None) -> ParsedMessage:
     message = BytesParser(policy=policy.compat32).parsebytes(raw)
     digest = hashlib.sha256(raw).hexdigest()
@@ -162,12 +186,7 @@ def parse_message(raw: bytes, path: Path, prior_date: datetime | None) -> Parsed
     message_id_values = header_values(message, "Message-ID", defects)
     message_id = (message_id_values[0] if message_id_values else "").strip().strip("<>").lower() or digest
     sender = sender_identity(message, defects, raw).value
-    recipient_headers = [value for name in ("To", "Cc", "Bcc") for value in header_values(message, name, defects)]
-    try:
-        recipients = sorted({address.lower() for _, address in getaddresses(recipient_headers) if address})
-    except Exception as error:
-        defects.append(MetadataDefect(field="recipients", detail=f"{type(error).__name__}: {error}"))
-        recipients = []
+    recipients = recipient_identities(message, defects)
     date_values = header_values(message, "Date", defects)
     date_value = date_values[0] if date_values else None
     date = parse_date(date_value)

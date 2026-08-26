@@ -28,7 +28,11 @@ where = ["src"]
 mailarchiver = ["*.swift", "sql/*.sql"]
 
 [dependency-groups]
-dev = ["pylint>=3.3", "pytest>=8.0"]
+dev = [
+    "pylint>=3.3",
+    "pytest>=8.0",
+    "pytest-playwright>=0.9.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

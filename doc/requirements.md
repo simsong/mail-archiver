@@ -215,7 +215,7 @@ sorted or repacked.
 
 Email address text is normalized into `email_addresses(address_pk, address)`.
 `messages.sender_address_pk` and `recipients.address_pk` reference that table;
-recipient role and header order are intentionally not retained. The address
+`recipients.role` retains To, Cc, or Bcc while header order is not retained. The address
 table also stores explicitly labeled non-email Google Chat identities.
 
 ## Search database
@@ -223,7 +223,11 @@ table also stores explicitly labeled non-email Google Chat identities.
 `search.sqlite3` is a separate, disposable SQLite FTS5 database.  It indexes
 normal Sent and Archive message SHA-256, normalized headers, `text/plain` body text when present,
 otherwise rendered `text/html`, otherwise safe single-part message text.  It
-parses XML-looking content declared as `text/html` with the same forgiving HTML
+also maintains a replaceable trigram index for email-address substring
+completion; ordinary mapping rows provide deduplicated message counts. Display
+names are retained as suggestion metadata but are not trigram-indexed. Subject
+completion reads the canonical subject column and requires no second copy.
+It parses XML-looking content declared as `text/html` with the same forgiving HTML
 rules without emitting parser diagnostics. Body/header text and attachment
 text occupy separate FTS5 tables so callers can exclude attachments from the
 default search. It does not index attachment bytes by default.
@@ -258,8 +262,9 @@ An indexing failure is recorded as a metadata defect and does not reject mail;
 `refresh-index` repairs missing disposable content.
 
 `mailsearch` is a read-only command-line consumer of both databases.  It
-accepts ordinary full-text terms plus `to:ADDRESS` recipient, `from:ADDRESS`
-sender, `subject:TEXT`, `date:YYYY-MM-DD`, `before:YYYY-MM-DD`, and
+accepts ordinary full-text terms plus `any:ADDRESS`, `from:ADDRESS`,
+role-specific `to:ADDRESS`, `cc:ADDRESS`, and `bcc:ADDRESS`, `subject:TEXT`,
+`date:YYYY-MM-DD`, `before:YYYY-MM-DD`, and
 `after:YYYY-MM-DD` filters, intersecting every supplied term. `date:` selects
 the specified UTC calendar day; `before:` and `after:` exclude the specified
 day. Results default to ten
@@ -286,6 +291,14 @@ the CLI selectors and ordinary ANDed terms; shell-style quotes group spaces,
 so `subject:"annual report"` is one selector while `subject:annual report`
 retains the CLI meaning of a subject selector plus a free-text term.  It loads
 the newest 100 results at a time without changing the CLI's ten-result default.
+After three characters, the GUI suggests matching addresses and subjects with
+deduplicated message counts. Email-address substrings use the disposable
+trigram accelerator; display-name and subject substring matching do not. Selecting an
+address creates a removable filter whose menu scopes it to Any, From, To, Cc,
+or Bcc; recipient roles are the original RFC header roles retained at ingest.
+Selecting a subject creates a removable subject filter. The native window title
+contains the active archive path and total deduplicated searchable-message
+count.
 Selecting a result shows it beside the list; double-clicking opens an
 independent message window. The result list can sort by date, subject, or
 sender in either direction. When it has keyboard focus, Up Arrow and Down

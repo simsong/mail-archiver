@@ -491,8 +491,8 @@ def test_report_counts_years_people_and_correspondents(source_mail: tuple[Path, 
     catalog = sqlite3.connect(archive / "archive.sqlite3")
     try:
         catalog.execute(
-            "INSERT OR IGNORE INTO recipients(message_pk, address_pk) "
-            "SELECT message_pk, sender_address_pk FROM messages WHERE category = 'Sent'"
+            "INSERT OR IGNORE INTO recipients(message_pk, address_pk, role) "
+            "SELECT message_pk, sender_address_pk, 'to' FROM messages WHERE category = 'Sent'"
         )
         catalog.commit()
     finally:

@@ -641,7 +641,13 @@ def ingest(args: argparse.Namespace) -> None:
             catalog.execute("BEGIN")
             sender_pk = address_pk(catalog, parsed.sender)
             message_pk = catalog.execute("INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) VALUES (?, ?, ?, ?, ?, ?, ?)", (parsed.message_id, parsed.sha256, sender_pk, parsed.subject, parsed.date_utc, parsed.date_source, category)).lastrowid
-            catalog.executemany("INSERT INTO recipients(message_pk, address_pk) VALUES (?, ?)", ((message_pk, address_pk(catalog, address)) for address in parsed.recipients))
+            catalog.executemany(
+                "INSERT INTO recipients(message_pk, address_pk, role) VALUES (?, ?, ?)",
+                (
+                    (message_pk, address_pk(catalog, recipient.address), recipient.role.value)
+                    for recipient in parsed.recipients
+                ),
+            )
             catalog.executemany(
                 "INSERT OR IGNORE INTO metadata_defects(message_pk, field, detail) VALUES (?, ?, ?)",
                 ((message_pk, defect.field, defect.detail) for defect in parsed.defects),
