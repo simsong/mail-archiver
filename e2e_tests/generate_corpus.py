@@ -9,6 +9,10 @@ from pathlib import Path
 RICH_MESSAGE = (
     b"Message-ID: <rich-e2e@example>\n"
     b"Date: Tue, 31 Dec 2024 12:00:00 +0000\n"
+    b"Received: by old-outlier.example; Wed, 31 Jan 2024 12:00:00 +0000\n"
+    b"Received: by first.example; Thu, 1 Feb 2024 12:00:00 +0000\n"
+    b"Received: by second.example; Fri, 2 Feb 2024 12:00:00 +0000\n"
+    b"Received: by new-outlier.example; Sun, 4 Feb 2024 12:00:00 +0000\n"
     b"From: curator@example.net\nTo: archive-owner@example.org\nCc: Beth Rosenberg <beth@example.org>\n"
     b"Subject: Rich UI message\nMIME-Version: 1.0\n"
     b"Content-Type: multipart/mixed; boundary=outer\n\n"

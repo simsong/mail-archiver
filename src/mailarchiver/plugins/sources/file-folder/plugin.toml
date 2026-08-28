@@ -1,0 +1,7 @@
+api_version = 1
+plugin_type = "source"
+kind = "file-folder"
+name = "Local file and folder source"
+implementation_version = "1"
+priority = 100
+entrypoint = "mailarchiver.sources:LocalSourcePlugin"

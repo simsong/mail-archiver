@@ -14,17 +14,19 @@ import sqlite3
 import sys
 import threading
 import time
+from collections import Counter, deque
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, TypeVar
+from urllib.parse import quote
 
 from pydantic import BaseModel, Field
 from tabulate import tabulate
 
+from .archive_integrity import MailbagArchiveIntegrityControls
 from .archive_path import add_archive_argument, require_archive
-from .bagit import initialize_bag, write_bag_checkpoint
 from .catalog import address_pk, create_catalog, create_search, owner_tokens
 from .layout import mbox_directory, mbox_path
 from .message import ParsedMessage, parse_message
@@ -42,20 +44,25 @@ from .mbox import (
 )
 from .scanner import ClamScanner, ClamScannerStartupError
 from .search import QUARANTINE_MAILBOX, SEARCH_CATEGORIES, index_message, index_message_safely
+from .plugin_api import (
+    ArchiveReference,
+    IntegrityDecision,
+    IntegrityEvidence,
+    LoadedPlugin,
+    MailContainer,
+    MailObject,
+    ProgressEvent,
+    SkippedInput,
+    SourceSpec,
+)
+from .plugin_loader import PluginDiscoveryError, load_plugins
 from .sources import (
     IncompleteAppleMailMessageError,
+    LocalSourcePlugin,
     SourceFile,
     SourceInventory,
-    SourceMessage,
-    SourcePlan,
-    has_mbox_append_boundary,
-    sha256_file,
-    sha256_file_with_prefix,
-    source_files,
-    source_inventory,
-    source_messages,
 )
-from .standalone_verify import install_archive_verifier, semantic_bytes
+from .standalone_verify import semantic_bytes
 
 DEFAULT_REPORT_TOP = 10
 PROGRESS_REFRESH_SECONDS = 0.25
@@ -91,43 +98,69 @@ class IngestCounts(BaseModel):
     archived: int = 0
     duplicates: int = 0
     autosaves: int = 0
+    metadata_excluded: int = 0
     infected: int = 0
+    skipped_files: int = 0
+    unchanged_sources: int = 0
 
 
 class PendingScan(BaseModel):
-    source: SourceMessage
+    source: MailObject
     parsed: ParsedMessage
 
 
-WorkerPhase = Literal[
-    "idle",
-    "checking",
-    "ingesting",
-    "deduplicating",
-    "scanning",
-    "waiting to publish",
-    "publishing",
-    "checkpointing",
-]
+class ContainerWork(BaseModel):
+    plugin: LoadedPlugin
+    container: MailContainer
+
+
+class ContainerIntegrityResult(BaseModel):
+    decision: IntegrityDecision
+    evidence: tuple[IntegrityEvidence, ...]
+
+
+class SourceOriginIdentity(BaseModel):
+    plugin_kind: str
+    source_id: str
+
+
+class SourceOriginMetadata(BaseModel):
+    plugin_kind: str
+    volume_label: str
+
+
+class SourceContainerMetadata(BaseModel):
+    display_name: str
+    hierarchy: tuple[str, ...]
+    provenance_json: str
 
 
 class WorkerProgress(BaseModel):
     worker: int
-    phase: WorkerPhase = "idle"
+    phase: str = "idle"
     path: str | None = None
     bytes_done: int = 0
     bytes_total: int = 0
+    activity_done: int | None = None
+    activity_total: int | None = None
+    activity_unit: str | None = None
 
 
 class ProgressUpdate(BaseModel):
     worker: int
-    phase: WorkerPhase | None = None
+    phase: str | None = None
     path: str | None = None
     bytes_done: int | None = None
     bytes_total: int | None = None
+    activity_done: int | None = None
+    activity_total: int | None = None
+    activity_unit: str | None = None
     message_date: datetime | None = None
     disposition: str | None = None
     file_complete: bool = False
+    notice_kind: Literal["skipped input", "skipped unchanged"] | None = None
+    notice_path: str | None = None
+    notice_reason: str | None = None
 
 
 class ProgressState(BaseModel):
@@ -142,6 +175,7 @@ class ProgressState(BaseModel):
     source_files_total: int = 0
     source_bytes_completed: int = 0
     source_bytes_total: int = 0
+    skipped_files_total: int = 0
     inventory_complete: bool = False
     byte_progress_started_monotonic: float | None = None
     peak_active_files: int = 0
@@ -174,11 +208,27 @@ def formatted_duration(seconds: float) -> str:
     return " ".join(fields)
 
 
+def safe_status_text(value: str) -> str:
+    """Collapse untrusted plug-in status text to one bounded printable line."""
+    return " ".join(value.split())[:80] or "working"
+
+
 def overall_progress(state: ProgressState, now: float) -> OverallProgress:
     active_bytes = sum(min(worker.bytes_done, worker.bytes_total) for worker in state.workers)
     done = min(state.source_bytes_completed + active_bytes, state.source_bytes_total)
     total = state.source_bytes_total
-    percent = 0.0 if not state.inventory_complete else 100.0 if total == 0 else 100 * done / total
+    if not state.inventory_complete:
+        percent = 0.0
+    elif total == 0:
+        percent = (
+            100.0
+            if state.source_files_total == 0
+            else 100 * state.files_processed / state.source_files_total
+        )
+    else:
+        percent = 100 * done / total
+        if state.files_processed < state.source_files_total:
+            percent = min(percent, 99.9)
     if not state.inventory_complete:
         eta = "calculating"
     elif total == 0:
@@ -222,6 +272,8 @@ class ProgressReporter:
         self.phase = "started"
         self.phase_started_monotonic = self.state.started_monotonic
         self.last_display_monotonic = self.state.started_monotonic
+        self.notices: set[tuple[str, str, str]] = set()
+        self.emitted_notices: set[tuple[str, str, str]] = set()
 
     def start(self) -> None:
         self.display(self.phase)
@@ -233,29 +285,51 @@ class ProgressReporter:
         self.phase_started_monotonic = time.monotonic()
         self.display(phase)
 
-    def record(self, parsed: ParsedMessage, source: SourceMessage) -> None:
-        self._send(
+    def record(self, parsed: ParsedMessage, source: MailObject) -> None:
+        self._record_source_progress(source, datetime.fromisoformat(parsed.date_utc))
+
+    def record_source(self, source: MailObject) -> None:
+        self._record_source_progress(source)
+
+    def _record_source_progress(self, source: MailObject, message_date: datetime | None = None) -> None:
+        path = source.source.display_name
+        if source.completed_bytes is not None or source.total_bytes is not None:
+            self._send(
+                "ingesting",
+                path,
+                source.completed_bytes or 0,
+                source.total_bytes or 0,
+                message_date=message_date,
+            )
+            return
+        self._send_activity(
             "ingesting",
-            source.path,
-            source.bytes_done,
-            source.bytes_total,
-            message_date=datetime.fromisoformat(parsed.date_utc),
+            path,
+            source.completed_messages,
+            source.total_messages,
+            "messages",
+            message_date=message_date,
         )
 
-    def record_source(self, source: SourceMessage) -> None:
-        self._send("ingesting", source.path, source.bytes_done, source.bytes_total)
-
-    def record_file(self, path: Path, bytes_done: int, bytes_total: int) -> None:
+    def record_file(self, path: Path | str, bytes_done: int, bytes_total: int) -> None:
         self._send("checking", path, bytes_done, bytes_total)
 
     def record_worker(
         self,
-        phase: WorkerPhase,
-        path: Path,
+        phase: str,
+        path: Path | str,
         bytes_done: int,
         bytes_total: int,
     ) -> None:
         self._send(phase, path, bytes_done, bytes_total)
+
+    def record_plugin_event(self, event: ProgressEvent, path: Path | str) -> None:
+        """Render a typed plug-in event without letting plug-ins print directly."""
+        phase = safe_status_text(event.phase)
+        if event.unit == "bytes" and event.completed is not None and event.total is not None:
+            self._send(phase, path, event.completed, event.total)
+            return
+        self._send_activity(phase, path, event.completed, event.total, event.unit)
 
     def record_inventory(self, file_count: int, byte_count: int) -> None:
         self._assert_driver_thread()
@@ -269,7 +343,9 @@ class ProgressReporter:
         self._assert_driver_thread()
         self.state.source_files_total = inventory.file_count
         self.state.source_bytes_total = inventory.byte_count
+        self.state.skipped_files_total = inventory.skipped_file_count
         self.state.inventory_complete = True
+        self._emit_notices({"skipped input"})
         self.display(DISCOVERY_PHASE)
 
     def completed_inventory(self) -> SourceInventory:
@@ -277,12 +353,33 @@ class ProgressReporter:
         return SourceInventory(
             file_count=self.state.files_processed,
             byte_count=self.state.source_bytes_completed,
+            skipped_file_count=self.state.skipped_files_total,
         )
 
-    def record_file_complete(self, path: Path, byte_count: int) -> None:
+    def record_skipped_file(self, path: Path | str, reason: str) -> None:
+        """Record one unrecognized discovery candidate for main-thread rendering."""
+        self._assert_driver_thread()
+        notice = ("skipped input", str(path), reason)
+        if notice not in self.notices:
+            self.notices.add(notice)
+            self.state.counts.skipped_files += 1
+
+    def record_unchanged_source(self, path: Path | str, reason: str) -> None:
+        """Queue one integrity skip from a worker without printing from that worker."""
+        self.updates.put(
+            ProgressUpdate(
+                worker=self._worker_number(),
+                disposition="unchanged-source",
+                notice_kind="skipped unchanged",
+                notice_path=str(path),
+                notice_reason=reason,
+            )
+        )
+
+    def record_file_complete(self, path: Path | str, byte_count: int) -> None:
         self._send("idle", path, byte_count, byte_count, file_complete=True)
 
-    def record_file_inactive(self, path: Path) -> None:
+    def record_file_inactive(self, path: Path | str) -> None:
         self._send("idle", path, 0, 0)
 
     def record_disposition(self, disposition: str) -> None:
@@ -290,8 +387,8 @@ class ProgressReporter:
 
     def _send(
         self,
-        phase: WorkerPhase,
-        path: Path,
+        phase: str,
+        path: Path | str,
         bytes_done: int,
         bytes_total: int,
         *,
@@ -307,6 +404,28 @@ class ProgressReporter:
                 bytes_total=bytes_total,
                 message_date=message_date,
                 file_complete=file_complete,
+            )
+        )
+
+    def _send_activity(
+        self,
+        phase: str,
+        path: Path | str,
+        completed: int | None,
+        total: int | None,
+        unit: str | None,
+        *,
+        message_date: datetime | None = None,
+    ) -> None:
+        self.updates.put(
+            ProgressUpdate(
+                worker=self._worker_number(),
+                phase=phase,
+                path=str(path),
+                activity_done=completed,
+                activity_total=total,
+                activity_unit=unit,
+                message_date=message_date,
             )
         )
 
@@ -337,23 +456,41 @@ class ProgressReporter:
                 worker.path = None
                 worker.bytes_done = 0
                 worker.bytes_total = 0
+                worker.activity_done = None
+                worker.activity_total = None
+                worker.activity_unit = None
             elif update.phase == "idle":
                 worker.phase = "idle"
                 worker.path = None
                 worker.bytes_done = 0
                 worker.bytes_total = 0
+                worker.activity_done = None
+                worker.activity_total = None
+                worker.activity_unit = None
             else:
                 if update.phase is not None:
                     worker.phase = update.phase
                 if update.path is not None and update.path != worker.path:
                     worker.path = update.path
                     worker.bytes_done = 0
+                    worker.activity_done = None
+                    worker.activity_total = None
+                    worker.activity_unit = None
                 if update.bytes_done is not None:
+                    worker.activity_done = None
+                    worker.activity_total = None
+                    worker.activity_unit = None
                     worker.bytes_done = max(worker.bytes_done, update.bytes_done)
                 if update.bytes_total is not None:
                     worker.bytes_total = update.bytes_total
                 if worker.bytes_done > 0 and self.state.byte_progress_started_monotonic is None:
                     self.state.byte_progress_started_monotonic = time.monotonic()
+                if update.activity_done is not None:
+                    worker.activity_done = update.activity_done
+                if update.activity_total is not None:
+                    worker.activity_total = update.activity_total
+                if update.activity_unit is not None:
+                    worker.activity_unit = update.activity_unit
             if update.message_date is not None:
                 self._record_message(update.message_date)
             if update.disposition == "archived":
@@ -362,8 +499,15 @@ class ProgressReporter:
                 self.state.counts.duplicates += 1
             elif update.disposition == "autosave-excluded":
                 self.state.counts.autosaves += 1
+            elif update.disposition == "source-metadata-excluded":
+                self.state.counts.metadata_excluded += 1
             elif update.disposition == "infected":
                 self.state.counts.infected += 1
+            elif update.disposition == "unchanged-source":
+                self.state.counts.unchanged_sources += 1
+            if update.notice_kind is not None:
+                assert update.notice_path is not None and update.notice_reason is not None
+                self.notices.add((update.notice_kind, update.notice_path, update.notice_reason))
             active = sum(item.phase != "idle" for item in self.state.workers)
             self.state.peak_active_files = max(self.state.peak_active_files, active)
 
@@ -382,6 +526,22 @@ class ProgressReporter:
     def refresh(self) -> None:
         self.display(None)
 
+    def _emit_notices(self, kinds: set[str] | None = None) -> None:
+        self._assert_driver_thread()
+        selected = [
+            notice
+            for notice in self.notices - self.emitted_notices
+            if kinds is None or notice[0] in kinds
+        ]
+        if not selected:
+            return
+        if self.tty and self.rendered_lines:
+            sys.stderr.write("\n")
+            self.rendered_lines = 0
+        for kind, path, reason in sorted(selected):
+            print(f"{kind}: {path} ({reason})", file=sys.stderr)
+        self.emitted_notices.update(selected)
+
     def _worker_phase(self) -> str:
         phases = {worker.phase for worker in self.state.workers}
         if phases != {"idle"}:
@@ -393,8 +553,13 @@ class ProgressReporter:
         prefix = f"Thread {worker.worker:>2}: [{worker.phase}]"
         if worker.phase == "idle" or worker.path is None:
             return prefix
-        percent = 0 if worker.bytes_total == 0 else 100 * worker.bytes_done / worker.bytes_total
-        suffix = f" ({percent:.1f}%)"
+        if worker.activity_unit is not None:
+            amount = "" if worker.activity_done is None else f" {worker.activity_done:,}"
+            total = "" if worker.activity_total is None else f"/{worker.activity_total:,}"
+            suffix = f"{amount}{total} {worker.activity_unit}".rstrip()
+        else:
+            percent = 0 if worker.bytes_total == 0 else 100 * worker.bytes_done / worker.bytes_total
+            suffix = f" ({percent:.1f}%)"
         available = max(columns - len(prefix) - len(suffix) - 2, 1)
         path = worker.path
         if len(path) > available:
@@ -434,7 +599,10 @@ class ProgressReporter:
                 f"Workers:   {active:,} active; peak {state.peak_active_files:,}; {len(state.workers):,} configured",
                 *(self._worker_line(worker, self.terminal_columns) for worker in state.workers),
                 f"Dates:     {dates}  Current year: {year} ({state.current_year_messages:,} messages)",
-                f"Archived:  {state.counts.archived:,}  Seen/skipped: {state.counts.duplicates:,}  Autosaved: {state.counts.autosaves:,}  Infected: {state.counts.infected:,}",
+                f"Archived:  {state.counts.archived:,}  Seen/skipped: {state.counts.duplicates:,}  "
+                f"Autosaved: {state.counts.autosaves:,}  Metadata: {state.counts.metadata_excluded:,}  "
+                f"Infected: {state.counts.infected:,}  Files skipped: {state.counts.skipped_files:,}  "
+                f"Unchanged: {state.counts.unchanged_sources:,}",
             ]
             lines = [lines[0], *(self._fit(line, self.terminal_columns) for line in lines[1:])]
             rewind = f"\x1b[{self.rendered_lines}A" if self.rendered_lines else ""
@@ -454,12 +622,16 @@ class ProgressReporter:
                 f"rate={state.processed / elapsed:.2f}/s "
                 f"workers={workers} dates={dates} current_year={year} year_messages={state.current_year_messages} "
                 f"archived={state.counts.archived} seen_skipped={state.counts.duplicates} "
-                f"autosaved={state.counts.autosaves} infected={state.counts.infected}",
+                f"autosaved={state.counts.autosaves} metadata_excluded={state.counts.metadata_excluded} "
+                f"infected={state.counts.infected} skipped_files={state.counts.skipped_files} "
+                f"unchanged_sources={state.counts.unchanged_sources}",
                 file=sys.stderr,
             )
         sys.stderr.flush()
 
     def finish(self, status: str) -> None:
+        self._drain_updates()
+        self._emit_notices()
         self.display(status)
 
 
@@ -469,18 +641,24 @@ def run_file_workers(
     process: Callable[[WorkerItem], None],
     stop: threading.Event,
     status_driver: Callable[[], None],
+    concurrency: Callable[[WorkerItem], tuple[str, int | None]] | None = None,
 ) -> None:
-    """Process at most ``worker_count`` source files concurrently and defer discovery errors."""
+    """Run framework workers with optional source-declared per-key concurrency limits."""
     iterator = iter(items)
     pool = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="mailfile")
-    pending: set[Future[None]] = set()
+    pending: dict[Future[None], str | None] = {}
+    active: Counter[str] = Counter()
+    waiting_items: deque[tuple[WorkerItem, str | None, int | None]] = deque()
+    lookahead = max(worker_count * 4, worker_count)
     exhausted = False
     discovery_error: BaseException | None = None
+
     try:
-        while pending or not exhausted:
+        while pending or waiting_items or not exhausted:
             if stop.is_set():
                 exhausted = True
-            while not exhausted and len(pending) < worker_count:
+                waiting_items.clear()
+            while not exhausted and len(waiting_items) < lookahead:
                 try:
                     item = next(iterator)
                 except StopIteration:
@@ -489,17 +667,45 @@ def run_file_workers(
                     discovery_error = error
                     exhausted = True
                 else:
-                    pending.add(pool.submit(process, item))
+                    key = None
+                    limit = None
+                    if concurrency is not None:
+                        key, limit = concurrency(item)
+                        if limit is not None and limit < 1:
+                            raise ValueError(f"invalid concurrency limit for {key}: {limit}")
+                    waiting_items.append((item, key, limit))
+            while len(pending) < worker_count and waiting_items:
+                selected = None
+                for _ in range(len(waiting_items)):
+                    candidate = waiting_items.popleft()
+                    _item, key, limit = candidate
+                    if key is None or limit is None or active[key] < limit:
+                        selected = candidate
+                        break
+                    waiting_items.append(candidate)
+                if selected is None:
+                    break
+                item, key, _limit = selected
+                if key is not None:
+                    active[key] += 1
+                pending[pool.submit(process, item)] = key
             if not pending:
-                break
-            completed, pending = wait(
-                pending,
+                if exhausted:
+                    break
+                continue
+            completed, _unfinished = wait(
+                pending.keys(),
                 timeout=PROGRESS_REFRESH_SECONDS,
                 return_when=FIRST_COMPLETED,
             )
             status_driver()
             for future in completed:
-                future.result()
+                key = pending.pop(future)
+                try:
+                    future.result()
+                finally:
+                    if key is not None:
+                        active[key] -= 1
         if discovery_error is not None:
             raise discovery_error
     except BaseException:
@@ -513,6 +719,26 @@ def run_file_workers(
 
 
 def ingest(args: argparse.Namespace) -> None:
+    plugins = load_plugins(args.plugin_dir)
+    source_specs = [SourceSpec(locator=root) for root in args.roots]
+    selected_sources: list[tuple[SourceSpec, LoadedPlugin]] = []
+    selected_source_keys: set[tuple[str, str, str | None]] = set()
+    for source_spec in source_specs:
+        matches = [
+            plugin
+            for plugin in plugins.sources
+            if plugin.implementation.recognizes(source_spec)
+        ]
+        if not matches:
+            raise ValueError(f"no source plug-in recognized {source_spec.locator}")
+        if len(matches) > 1:
+            kinds = ", ".join(plugin.manifest.kind for plugin in matches)
+            raise ValueError(f"ambiguous source plug-ins for {source_spec.locator}: {kinds}")
+        key = (matches[0].manifest.kind, source_spec.locator, source_spec.configuration_json)
+        if key not in selected_source_keys:
+            selected_sources.append((source_spec, matches[0]))
+            selected_source_keys.add(key)
+    progress = ProgressReporter(args.workers)
     archive = Path(args.archive)
     archive.mkdir(parents=True, exist_ok=True)
     catalog_path = archive / "archive.sqlite3"
@@ -525,104 +751,367 @@ def ingest(args: argparse.Namespace) -> None:
     )
     if not catalog_path.exists() and existing_output:
         raise RuntimeError("cannot create a fresh catalog beside existing archive output; use a new empty archive directory")
-    initialize_bag(archive)
+    archive_reference = ArchiveReference(
+        format_id="mailbag-1.0",
+        archive_id=str(archive.resolve()),
+        root=archive,
+    )
+    archive_integrity = MailbagArchiveIntegrityControls()
     catalog = create_catalog(catalog_path, check_same_thread=False)
-    search = create_search(archive / "search.sqlite3", check_same_thread=False)
-    install_archive_verifier(archive)
+    try:
+        search = create_search(archive / "search.sqlite3", check_same_thread=False)
+    except BaseException:
+        catalog.close()
+        raise
+    try:
+        list(archive_integrity.initialize(archive_reference))
+    except BaseException:
+        search.close()
+        catalog.close()
+        raise
+    progress_started = False
+
+    def checkpoint_archive() -> None:
+        for event in archive_integrity.checkpoint(archive_reference, catalog):
+            if not isinstance(event, ProgressEvent) or not progress_started:
+                continue
+            if re.fullmatch(r"mailfile_\d+", threading.current_thread().name):
+                progress.record_plugin_event(event, archive)
+            else:
+                progress.display(safe_status_text(event.phase))
+
     recovery = recover_publication(archive, catalog, search)
     if recovery is not PublicationRecovery.NONE:
-        write_bag_checkpoint(archive, catalog)
+        checkpoint_archive()
         print(f"recovered: pending message publication {recovery.value}", file=sys.stderr)
     owners = owner_tokens(Path(args.owner_names_file))
     run_pk = catalog.execute("INSERT INTO ingest_runs(started_at) VALUES (?)", (datetime.now(timezone.utc).isoformat(),)).lastrowid
     catalog.commit()
     boxes: dict[Path, mailbox.mbox] = {}
-    source_file_pks: dict[Path, int] = {}
+    source_file_pks: dict[tuple[str, str, str], int] = {}
     source_volume_pks: dict[str, int] = {}
     pending_duplicate_observations: dict[tuple[str, str], list[int]] = {}
     pending_identities: set[tuple[str, str]] = set()
     publication_lock = threading.RLock()
     stop = threading.Event()
     scanner: ClamScanner | None = None
-    progress = ProgressReporter(args.workers)
+    discovery = sqlite3.connect("")
+    discovery.executescript(
+        "CREATE TABLE containers ("
+        "sequence INTEGER PRIMARY KEY, plugin_kind TEXT NOT NULL, source_id TEXT NOT NULL, "
+        "work_id TEXT NOT NULL, concurrency_key TEXT NOT NULL, stable INTEGER NOT NULL, "
+        "payload_json TEXT NOT NULL, UNIQUE(plugin_kind, source_id, work_id));"
+        "CREATE TABLE stable_verification ("
+        "plugin_kind TEXT NOT NULL, source_id TEXT NOT NULL, work_id TEXT NOT NULL, "
+        "payload_json TEXT NOT NULL, UNIQUE(plugin_kind, source_id, work_id));"
+    )
     succeeded = False
     interrupted = False
     disk_full = False
     failure_detail: str | None = None
-    progress.start()
 
-    def source_volume_pk(source: SourceFile) -> int:
-        cached = source_volume_pks.get(source.volume.identity_json)
+    def source_origin_pk(identity_json: str, metadata_json: str) -> int:
+        cached = source_volume_pks.get(identity_json)
         if cached is not None:
             return cached
         now = datetime.now(timezone.utc).isoformat()
         catalog.execute(
             "INSERT INTO source_volumes(identity_json, metadata_json, first_observed_at, last_observed_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(identity_json) DO UPDATE SET metadata_json = excluded.metadata_json, last_observed_at = excluded.last_observed_at",
-            (source.volume.identity_json, source.volume.metadata_json, now, now),
+            (identity_json, metadata_json, now, now),
         )
         row = catalog.execute(
-            "SELECT source_volume_pk FROM source_volumes WHERE identity_json = ?", (source.volume.identity_json,)
+            "SELECT source_volume_pk FROM source_volumes WHERE identity_json = ?", (identity_json,)
         ).fetchone()
         assert row is not None
         volume_pk = int(row[0])
-        source_volume_pks[source.volume.identity_json] = volume_pk
+        source_volume_pks[identity_json] = volume_pk
         return volume_pk
 
-    def register_source_file(source: SourceFile) -> None:
-        volume_pk = source_volume_pk(source)
+    def local_source_file(work: ContainerWork) -> SourceFile | None:
+        implementation = work.plugin.implementation
+        return implementation.source_file(work.container) if isinstance(implementation, LocalSourcePlugin) else None
+
+    def register_source_file(work: ContainerWork) -> int:
+        source = local_source_file(work)
+        if source is None:
+            identity_json = SourceOriginIdentity(
+                plugin_kind=work.plugin.manifest.kind,
+                source_id=work.container.source.source_id,
+            ).model_dump_json()
+            metadata_json = SourceOriginMetadata(
+                plugin_kind=work.plugin.manifest.kind,
+                volume_label=work.container.source.source_id,
+            ).model_dump_json()
+            container_metadata_json = SourceContainerMetadata(
+                display_name=work.container.source.display_name,
+                hierarchy=work.container.source.hierarchy,
+                provenance_json=work.container.source.provenance_json,
+            ).model_dump_json()
+            source_path = work.container.source.native_id
+            hierarchy_path = (
+                "/".join(work.container.source.hierarchy)
+                if work.container.source.hierarchy
+                else quote(work.container.source.native_id, safe="")
+            )
+            path_kind = "provider"
+            source_kind = work.container.parser_kind or work.plugin.manifest.kind
+            modified_at_ns = None
+            byte_length = work.container.estimated_bytes
+        else:
+            identity_json = source.volume.identity_json
+            metadata_json = source.volume.metadata_json
+            container_metadata_json = SourceContainerMetadata(
+                display_name=work.container.source.display_name,
+                hierarchy=work.container.source.hierarchy,
+                provenance_json=work.container.source.provenance_json,
+            ).model_dump_json()
+            source_path = source.source_path
+            hierarchy_path = source.source_path
+            path_kind = "file"
+            source_kind = source.kind
+            modified_at_ns = source.modified_at_ns
+            byte_length = source.byte_length
+        volume_pk = source_origin_pk(identity_json, metadata_json)
         row = catalog.execute(
-            "INSERT INTO source_files(source_volume_pk, source_path, path_kind, source_kind, modified_at_ns, byte_length) "
-            "VALUES (?, ?, 'file', ?, ?, ?) ON CONFLICT(source_volume_pk, source_path) DO UPDATE SET "
-            "source_kind = excluded.source_kind, modified_at_ns = excluded.modified_at_ns, byte_length = excluded.byte_length "
+            "INSERT INTO source_files(source_volume_pk, source_plugin, work_id, source_path, hierarchy_path, "
+            "metadata_json, path_kind, source_kind, modified_at_ns, byte_length) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(source_volume_pk, source_path) DO UPDATE SET source_plugin = excluded.source_plugin, "
+            "work_id = excluded.work_id, hierarchy_path = excluded.hierarchy_path, "
+            "metadata_json = excluded.metadata_json, source_kind = excluded.source_kind, "
+            "modified_at_ns = excluded.modified_at_ns, byte_length = excluded.byte_length, "
+            "path_kind = excluded.path_kind "
             "RETURNING source_file_pk",
-            (volume_pk, source.source_path, source.kind, source.modified_at_ns, source.byte_length),
+            (
+                volume_pk,
+                work.plugin.manifest.kind,
+                work.container.work_id,
+                source_path,
+                hierarchy_path,
+                container_metadata_json,
+                path_kind,
+                source_kind,
+                modified_at_ns,
+                byte_length,
+            ),
         ).fetchone()
         assert row is not None
-        source_file_pks[source.path] = int(row[0])
+        source_file_pk = int(row[0])
+        source_file_pks[
+            (
+                work.plugin.manifest.kind,
+                work.container.source.source_id,
+                work.container.work_id,
+            )
+        ] = source_file_pk
+        return source_file_pk
 
-    def observe(source: SourceMessage, disposition: str, detail: str, sha256: str, message_pk: int | None = None) -> int:
-        source_file_pk = source_file_pks[source.path]
+    def observe(source: MailObject, disposition: str, detail: str, sha256: str, message_pk: int | None = None) -> int:
+        source_file_pk = source_file_pks[
+            (source.source.plugin_kind, source.source.source_id, source.work_id)
+        ]
+        try:
+            source_offset = int(source.cursor)
+        except ValueError:
+            source_offset = None
         cursor = catalog.execute(
-            "INSERT INTO observations(run_pk, message_pk, source_file_pk, source_offset, raw_sha256, semantic_sha256, disposition, detail) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (run_pk, message_pk, source_file_pk, source.source_offset, sha256,
+            "INSERT INTO observations(run_pk, message_pk, source_file_pk, source_offset, source_cursor, raw_sha256, "
+            "semantic_sha256, disposition, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_pk, message_pk, source_file_pk, source_offset, source.cursor, sha256,
              hashlib.sha256(semantic_bytes(source.raw)).hexdigest(), disposition, detail),
         )
         return int(cursor.lastrowid)
 
-    def checkpoint(source: SourceFile, sha256: str) -> None:
-        progress.record_worker("checkpointing", source.path, source.byte_length, source.byte_length)
-        current = source.path.stat()
-        if current.st_size != source.byte_length or current.st_mtime_ns != source.modified_at_ns:
-            raise RuntimeError(f"source changed during ingest: {source.path}")
-        catalog.execute(
-            "UPDATE source_files SET modified_at_ns = ?, byte_length = ?, sha256 = ?, checked_at = ?, completed_run = ? "
-            "WHERE source_file_pk = ?",
-            (source.modified_at_ns, source.byte_length, sha256, datetime.now(timezone.utc).isoformat(), run_pk,
-             source_file_pks[source.path]),
+    def prior_source_evidence(source_file_pk: int, control_id: str) -> tuple[IntegrityEvidence, ...]:
+        row = catalog.execute(
+            "SELECT integrity_check_pk FROM source_integrity_checks WHERE source_file_pk = ? AND control_id = ? "
+            "AND completed_at IS NOT NULL ORDER BY integrity_check_pk DESC LIMIT 1",
+            (source_file_pk, control_id),
+        ).fetchone()
+        if row is None:
+            return ()
+        return tuple(
+            IntegrityEvidence(
+                control_id=item[0],
+                subject_id=item[1],
+                evidence_kind=item[2],
+                algorithm=item[3],
+                value=item[4],
+                byte_length=item[5],
+            )
+            for item in catalog.execute(
+                "SELECT control_id, subject_id, evidence_kind, algorithm, value, byte_length "
+                "FROM source_integrity_evidence WHERE integrity_check_pk = ? ORDER BY ordinal",
+                (row[0],),
+            )
         )
-        catalog.commit()
-        progress.record_file_complete(source.path, source.byte_length)
 
-    def plan_source(source: SourceFile, prior: tuple[int | None, str | None] | None) -> SourcePlan:
-        progress.record_file(source.path, 0, source.byte_length)
-        report_hash = lambda done, _total: progress.record_file(source.path, done, source.byte_length)
-        if prior is None:
-            return SourcePlan(source=source)
-        prior_length, prior_sha256 = prior
-        if prior_length is None or prior_sha256 is None:
-            return SourcePlan(source=source, sha256=sha256_file(source.path, progress=report_hash))
-        if source.byte_length == prior_length:
-            sha256 = sha256_file(source.path, progress=report_hash)
-            return SourcePlan(source=source, sha256=sha256, skip=sha256 == prior_sha256)
-        start_offset = 0
-        if source.byte_length > prior_length:
-            hashes = sha256_file_with_prefix(source.path, prior_length, report_hash)
-            if hashes.prefix_sha256 == prior_sha256 and source.kind == "mbox" and has_mbox_append_boundary(source.path, prior_length):
-                start_offset = prior_length
-            return SourcePlan(source=source, sha256=hashes.sha256, start_offset=start_offset)
-        return SourcePlan(source=source, sha256=sha256_file(source.path, progress=report_hash))
+    def evaluate_integrity(work: ContainerWork, prior: tuple[IntegrityEvidence, ...]) -> ContainerIntegrityResult:
+        decision: IntegrityDecision | None = None
+        evidence: list[IntegrityEvidence] = []
+        controls = work.plugin.implementation.integrity_controls
+        for event in controls.plan(work.container, prior):
+            if isinstance(event, ProgressEvent):
+                progress.record_plugin_event(event, work.container.source.display_name)
+            elif isinstance(event, IntegrityEvidence):
+                evidence.append(event)
+            elif isinstance(event, IntegrityDecision) and decision is None:
+                decision = event
+            elif isinstance(event, IntegrityDecision):
+                raise RuntimeError(f"source integrity control emitted multiple decisions for {work.container.work_id}")
+            else:
+                raise TypeError(
+                    f"source integrity control emitted unsupported {type(event).__name__}"
+                )
+        if decision is None:
+            raise RuntimeError(f"source integrity control emitted no decision for {work.container.work_id}")
+        if decision.action == "resume" and not work.plugin.implementation.capabilities.resumable:
+            raise RuntimeError(
+                f"non-resumable source plug-in {work.plugin.manifest.kind} emitted a resume decision"
+            )
+        if decision.action in {"skip", "resume"} and not any(
+            item.control_id == controls.control_id for item in evidence
+        ):
+            raise RuntimeError(
+                f"source integrity control emitted {decision.action} without current evidence "
+                f"for {work.container.work_id}"
+            )
+        subjects = {item.subject_id for item in evidence if item.control_id == controls.control_id}
+        if len(subjects) > 1:
+            raise RuntimeError(
+                f"source integrity control emitted inconsistent subjects for {work.container.work_id}"
+            )
+        return ContainerIntegrityResult(decision=decision, evidence=tuple(evidence))
+
+    def begin_integrity_check(source_file_pk: int, work: ContainerWork, result: ContainerIntegrityResult) -> int:
+        controls = work.plugin.implementation.integrity_controls
+        subject = next(
+            (
+                item.subject_id
+                for item in result.evidence
+                if item.control_id == controls.control_id
+            ),
+            f"{work.plugin.manifest.kind}:{work.container.source.source_id}:{work.container.work_id}",
+        )
+        cursor = catalog.execute(
+            "INSERT INTO source_integrity_checks(source_file_pk, run_pk, control_id, subject_id, action, resume_cursor, "
+            "reason, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                source_file_pk,
+                run_pk,
+                controls.control_id,
+                subject,
+                result.decision.action,
+                result.decision.resume_cursor,
+                result.decision.reason,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        integrity_check_pk = int(cursor.lastrowid)
+        record_integrity_evidence(integrity_check_pk, result.evidence)
+        catalog.commit()
+        return integrity_check_pk
+
+    def record_integrity_evidence(
+        integrity_check_pk: int, evidence: Iterable[IntegrityEvidence]
+    ) -> None:
+        row = catalog.execute(
+            "SELECT COALESCE(MAX(ordinal), -1) FROM source_integrity_evidence WHERE integrity_check_pk = ?",
+            (integrity_check_pk,),
+        ).fetchone()
+        ordinal = int(row[0]) + 1
+        catalog.executemany(
+            "INSERT INTO source_integrity_evidence(integrity_check_pk, ordinal, control_id, subject_id, "
+            "evidence_kind, algorithm, value, byte_length) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                (
+                    integrity_check_pk,
+                    ordinal + index,
+                    item.control_id,
+                    item.subject_id,
+                    item.evidence_kind,
+                    item.algorithm,
+                    item.value,
+                    item.byte_length,
+                )
+                for index, item in enumerate(evidence)
+            ),
+        )
+
+    def checkpoint(
+        work: ContainerWork,
+        source_file_pk: int,
+        integrity_check_pk: int,
+        planned: tuple[IntegrityEvidence, ...],
+    ) -> None:
+        path = work.container.source.display_name
+        catalog_byte_length = work.container.estimated_bytes
+        progress_length = catalog_byte_length or 0
+        progress.record_worker("checkpointing", path, progress_length, progress_length)
+        controls = work.plugin.implementation.integrity_controls
+        evidence: list[IntegrityEvidence] = []
+        for item in controls.complete(work.container, planned):
+            if isinstance(item, ProgressEvent):
+                progress.record_plugin_event(item, path)
+            elif isinstance(item, IntegrityEvidence):
+                evidence.append(item)
+            else:
+                raise TypeError(
+                    f"source integrity completion emitted unsupported {type(item).__name__}"
+                )
+        subjects = {item.subject_id for item in evidence if item.control_id == controls.control_id}
+        if not subjects:
+            raise RuntimeError(
+                f"source integrity control emitted no completion evidence for {work.container.work_id}"
+            )
+        if len(subjects) > 1:
+            raise RuntimeError(
+                f"source integrity completion emitted inconsistent subjects for {work.container.work_id}"
+            )
+        planned_subjects = {
+            item.subject_id for item in planned if item.control_id == controls.control_id
+        }
+        if planned_subjects and planned_subjects != subjects:
+            raise RuntimeError(
+                f"source integrity completion changed subject for {work.container.work_id}"
+            )
+        local = local_source_file(work)
+        modified_at_ns = None if local is None else local.modified_at_ns
+        digest = None
+        if local is not None:
+            catalog_byte_length = local.byte_length
+            progress_length = local.byte_length
+            digest = next(
+                (
+                    item.value
+                    for item in reversed(evidence)
+                    if item.control_id == controls.control_id
+                    and item.evidence_kind == "cryptographic-digest"
+                    and item.algorithm == "sha256"
+                    and item.byte_length == local.byte_length
+                ),
+                None,
+            )
+        with publication_lock:
+            record_integrity_evidence(integrity_check_pk, evidence)
+            catalog.execute(
+                "UPDATE source_integrity_checks SET subject_id = ?, completed_at = ? WHERE integrity_check_pk = ?",
+                (next(iter(subjects)), datetime.now(timezone.utc).isoformat(), integrity_check_pk),
+            )
+            catalog.execute(
+                "UPDATE source_files SET modified_at_ns = ?, byte_length = ?, sha256 = ?, checked_at = ?, "
+                "completed_run = ? WHERE source_file_pk = ?",
+                (
+                    modified_at_ns,
+                    catalog_byte_length,
+                    digest,
+                    datetime.now(timezone.utc).isoformat(),
+                    run_pk,
+                    source_file_pk,
+                ),
+            )
+            catalog.commit()
+        progress.record_file_complete(path, progress_length)
 
     def archive_scanned(candidate: PendingScan, infected: bool) -> int:
         raw, parsed = candidate.source.raw, candidate.parsed
@@ -677,7 +1166,7 @@ def ingest(args: argparse.Namespace) -> None:
                 box.close()
                 boxes.pop(destination, None)
             if recover_publication(archive, catalog, search) is not PublicationRecovery.NONE:
-                write_bag_checkpoint(archive, catalog)
+                checkpoint_archive()
             raise
         if category in SEARCH_CATEGORIES:
             index_message_safely(catalog, search, message_pk, raw, args.index_attachments)
@@ -686,65 +1175,109 @@ def ingest(args: argparse.Namespace) -> None:
             progress.record_disposition("infected")
         return int(message_pk)
 
-    def scan_message(source: SourceMessage) -> bool:
+    def scan_message(source: MailObject) -> bool:
         assert scanner is not None
-        progress.record_worker("scanning", source.path, source.bytes_done, source.bytes_total)
+        progress.record_worker(
+            "scanning",
+            source.source.display_name,
+            source.completed_bytes or 0,
+            source.total_bytes or 0,
+        )
         return scanner.infected(source.raw)
 
-    def ingest_source_file(source_file: SourceFile) -> None:
+    def ingest_container(work: ContainerWork) -> None:
+        source_plugin = work.plugin.implementation
+        source_file = local_source_file(work)
+        display_path = work.container.source.display_name
+        byte_length = work.container.estimated_bytes or 0
         try:
             if stop.is_set():
                 return
-            progress.record_worker("checking", source_file.path, 0, source_file.byte_length)
+            progress.record_worker("checking", display_path, 0, byte_length)
+            controls = source_plugin.integrity_controls
             with publication_lock:
-                volume_pk = source_volume_pk(source_file)
-                prior = catalog.execute(
-                    "SELECT byte_length, sha256 FROM source_files WHERE source_volume_pk = ? AND source_path = ?",
-                    (volume_pk, source_file.source_path),
-                ).fetchone()
-                register_source_file(source_file)
+                source_file_pk = register_source_file(work)
+                prior = prior_source_evidence(source_file_pk, controls.control_id)
                 catalog.commit()
-            plan = plan_source(source_file, prior)
+            progress.record_file(display_path, 0, byte_length)
+            integrity_result = evaluate_integrity(work, prior)
+            decision = integrity_result.decision
+            with publication_lock:
+                integrity_check_pk = begin_integrity_check(source_file_pk, work, integrity_result)
             if stop.is_set():
                 return
-            if plan.skip:
-                assert plan.sha256 is not None
-                with publication_lock:
-                    checkpoint(source_file, plan.sha256)
+            if decision.action == "skip":
+                checkpoint(work, source_file_pk, integrity_check_pk, integrity_result.evidence)
+                progress.record_unchanged_source(display_path, decision.reason)
                 return
 
             prior_date: datetime | None = None
-            if plan.start_offset:
+            numeric_resume = None
+            if decision.action == "resume" and decision.resume_cursor is not None:
+                try:
+                    numeric_resume = int(decision.resume_cursor)
+                except ValueError:
+                    numeric_resume = None
+            if numeric_resume is not None:
                 with publication_lock:
                     row = catalog.execute(
                         "SELECT messages.date_utc FROM observations JOIN messages USING (message_pk) "
                         "JOIN source_files USING (source_file_pk) WHERE source_file_pk = ? AND source_offset < ? "
                         "ORDER BY source_offset DESC LIMIT 1",
-                        (source_file_pks[source_file.path], plan.start_offset),
+                        (source_file_pk, numeric_resume),
                     ).fetchone()
                 if row is not None:
                     prior_date = datetime.fromisoformat(row[0])
 
-            for source in source_messages(plan.source, plan.start_offset):
+            for item in source_plugin.messages(work.container, decision.resume_cursor):
                 if stop.is_set():
                     return
+                if isinstance(item, ProgressEvent):
+                    progress.record_plugin_event(item, display_path)
+                    continue
+                if not isinstance(item, MailObject):
+                    raise TypeError(
+                        f"source plug-in {work.plugin.manifest.kind} yielded unsupported "
+                        f"{type(item).__name__}"
+                    )
+                source = item
+                if source.work_id != work.container.work_id or source.source != work.container.source:
+                    raise RuntimeError(
+                        f"source plug-in {work.plugin.manifest.kind} yielded a mail object for the wrong container"
+                    )
                 raw = source.raw
                 progress.record_source(source)
+                if source.exclusion_reason is not None:
+                    digest = hashlib.sha256(raw).hexdigest()
+                    with publication_lock:
+                        observe(source, "source-metadata-excluded", source.exclusion_reason, digest)
+                        catalog.commit()
+                    progress.record_disposition("source-metadata-excluded")
+                    continue
                 try:
-                    parsed = parse_message(raw, source.path, prior_date)
+                    parsed = parse_message(
+                        raw,
+                        None if source_file is None else source_file.path,
+                        prior_date,
+                        source.source_date_utc,
+                        args.earliest_year,
+                    )
                 except Exception as error:
                     digest = hashlib.sha256(raw).hexdigest()
                     with publication_lock:
                         observe(source, "error", f"{type(error).__name__}: {error}", digest)
                         catalog.commit()
                     raise RuntimeError(
-                        f"failed to parse {source.path} at source offset {source.source_offset}; sha256={digest}"
+                        f"failed to parse {source.source.display_name} at source offset {source.cursor}; sha256={digest}"
                     ) from error
                 prior_date = datetime.fromisoformat(parsed.date_utc)
                 progress.record(parsed, source)
                 if parsed.autosave:
                     progress.record_worker(
-                        "publishing", source.path, source.bytes_done, source.bytes_total
+                        "publishing",
+                        source.source.display_name,
+                        source.completed_bytes or 0,
+                        source.total_bytes or 0,
                     )
                     with publication_lock:
                         observe(source, "autosave-excluded", "X-Apple-Auto-Saved", parsed.sha256)
@@ -754,7 +1287,10 @@ def ingest(args: argparse.Namespace) -> None:
 
                 identity = (parsed.message_id, parsed.sha256)
                 progress.record_worker(
-                    "deduplicating", source.path, source.bytes_done, source.bytes_total
+                    "deduplicating",
+                    source.source.display_name,
+                    source.completed_bytes or 0,
+                    source.total_bytes or 0,
                 )
                 with publication_lock:
                     existing = catalog.execute(
@@ -785,11 +1321,17 @@ def ingest(args: argparse.Namespace) -> None:
                 if stop.is_set():
                     return
                 progress.record_worker(
-                    "waiting to publish", source.path, source.bytes_done, source.bytes_total
+                    "waiting to publish",
+                    source.source.display_name,
+                    source.completed_bytes or 0,
+                    source.total_bytes or 0,
                 )
                 with publication_lock:
                     progress.record_worker(
-                        "publishing", source.path, source.bytes_done, source.bytes_total
+                        "publishing",
+                        source.source.display_name,
+                        source.completed_bytes or 0,
+                        source.total_bytes or 0,
                     )
                     message_pk = archive_scanned(candidate, infected)
                     catalog.executemany(
@@ -802,47 +1344,137 @@ def ingest(args: argparse.Namespace) -> None:
                     catalog.commit()
                     pending_identities.remove(identity)
 
-            source_sha256 = plan.sha256 or sha256_file(
-                plan.source.path,
-                progress=lambda done, _total: progress.record_file(
-                    plan.source.path, done, plan.source.byte_length
-                ),
-            )
             if stop.is_set():
                 return
-            with publication_lock:
-                checkpoint(plan.source, source_sha256)
+            checkpoint(work, source_file_pk, integrity_check_pk, integrity_result.evidence)
         except BaseException:
             stop.set()
             raise
         finally:
-            progress.record_file_inactive(source_file.path)
+            progress.record_file_inactive(display_path)
 
-    roots = [Path(root) for root in args.roots]
+    def capture_discovery(
+        selections: Iterable[tuple[SourceSpec, LoadedPlugin]],
+        table: str,
+        *,
+        report_skipped: bool,
+    ) -> SourceInventory:
+        inventory = SourceInventory()
+        for source_spec, plugin in selections:
+            for item in plugin.implementation.discover(source_spec):
+                if isinstance(item, MailContainer):
+                    if item.source.plugin_kind != plugin.manifest.kind:
+                        raise RuntimeError(
+                            f"source plug-in {plugin.manifest.kind} yielded a container "
+                            f"owned by {item.source.plugin_kind}"
+                        )
+                    payload = item.model_dump_json()
+                    columns = "plugin_kind, source_id, work_id, payload_json"
+                    parameters: tuple[object, ...]
+                    if table == "containers":
+                        columns += ", concurrency_key, stable"
+                        parameters = (
+                            plugin.manifest.kind,
+                            item.source.source_id,
+                            item.work_id,
+                            payload,
+                            item.concurrency_key,
+                            int(plugin.implementation.capabilities.stable_inventory),
+                        )
+                    else:
+                        parameters = (
+                            plugin.manifest.kind,
+                            item.source.source_id,
+                            item.work_id,
+                            payload,
+                        )
+                    try:
+                        discovery.execute(
+                            f"INSERT INTO {table}({columns}) VALUES ({', '.join('?' for _ in parameters)})",
+                            parameters,
+                        )
+                    except sqlite3.IntegrityError as error:
+                        existing = discovery.execute(
+                            f"SELECT payload_json FROM {table} WHERE plugin_kind = ? AND source_id = ? AND work_id = ?",
+                            (plugin.manifest.kind, item.source.source_id, item.work_id),
+                        ).fetchone()
+                        if existing is None or existing[0] != payload:
+                            raise RuntimeError(
+                                f"conflicting duplicate container identity: {plugin.manifest.kind}:"
+                                f"{item.source.source_id}:{item.work_id}"
+                            ) from error
+                        continue
+                    inventory.file_count += 1
+                    inventory.byte_count += item.estimated_bytes or 0
+                    if table == "containers":
+                        progress.record_inventory(inventory.file_count, inventory.byte_count)
+                elif isinstance(item, SkippedInput):
+                    if report_skipped:
+                        progress.record_skipped_file(item.source.display_name, item.detail)
+                elif isinstance(item, ProgressEvent):
+                    progress.display(safe_status_text(item.phase))
+                else:
+                    raise TypeError(
+                        f"source plug-in {plugin.manifest.kind} yielded unsupported {type(item).__name__}"
+                    )
+        inventory.skipped_file_count = progress.state.counts.skipped_files
+        return inventory
 
-    def discovered_sources() -> Iterable[SourceFile]:
-        for root in roots:
-            yield from source_files(root)
+    def verify_stable_discovery() -> None:
+        stable_sources = (
+            selection
+            for selection in selected_sources
+            if selection[1].implementation.capabilities.stable_inventory
+        )
+        capture_discovery(stable_sources, "stable_verification", report_skipped=False)
+        mismatch = discovery.execute(
+            "SELECT c.plugin_kind, c.source_id, c.work_id FROM containers AS c WHERE c.stable = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM stable_verification AS v WHERE v.plugin_kind = c.plugin_kind "
+            "AND v.source_id = c.source_id AND v.work_id = c.work_id AND v.payload_json = c.payload_json) "
+            "UNION ALL SELECT v.plugin_kind, v.source_id, v.work_id FROM stable_verification AS v "
+            "WHERE NOT EXISTS (SELECT 1 FROM containers AS c WHERE c.stable = 1 "
+            "AND c.plugin_kind = v.plugin_kind AND c.source_id = v.source_id "
+            "AND c.work_id = v.work_id AND c.payload_json = v.payload_json) LIMIT 1"
+        ).fetchone()
+        if mismatch is not None:
+            raise RuntimeError(
+                "stable source inventory changed during preflight; rerun after stabilizing the source"
+            )
 
+    def snapshotted_containers() -> Iterable[ContainerWork]:
+        plugin_by_kind = {plugin.manifest.kind: plugin for plugin in plugins.sources}
+        rows = discovery.execute(
+            "SELECT plugin_kind, payload_json FROM containers ORDER BY "
+            "row_number() OVER (PARTITION BY plugin_kind, concurrency_key ORDER BY sequence), sequence"
+        )
+        for plugin_kind, payload_json in rows:
+            yield ContainerWork(
+                plugin=plugin_by_kind[str(plugin_kind)],
+                container=MailContainer.model_validate_json(payload_json),
+            )
+
+    progress.start()
+    progress_started = True
     try:
         progress.set_phase(DISCOVERY_PHASE)
-        inventory = source_inventory(roots, progress.record_inventory)
+        inventory = capture_discovery(selected_sources, "containers", report_skipped=True)
+        verify_stable_discovery()
         progress.finish_inventory(inventory)
         progress.set_phase(CLAMAV_START_PHASE)
         scanner = ClamScanner(progress.refresh)
         scanner.__enter__()
         progress.set_phase("checking sources")
         run_file_workers(
-            discovered_sources(),
+            snapshotted_containers(),
             args.workers,
-            ingest_source_file,
+            ingest_container,
             stop,
             progress.refresh,
+            concurrency=lambda work: (
+                f"{work.plugin.manifest.kind}:{work.container.concurrency_key}",
+                work.plugin.implementation.capabilities.max_concurrency,
+            ),
         )
-        if progress.completed_inventory() != inventory:
-            raise RuntimeError(
-                "recognized source files changed between discovery and ingest; rerun after stabilizing the source"
-            )
         catalog.commit()
         search.commit()
         succeeded = True
@@ -867,6 +1499,7 @@ def ingest(args: argparse.Namespace) -> None:
         stop.set()
         if scanner is not None:
             scanner.__exit__()
+        discovery.close()
         for box in boxes.values():
             box.close()
         result = "completed" if succeeded else "interrupted" if interrupted else "disk-full" if disk_full else "failed"
@@ -878,7 +1511,7 @@ def ingest(args: argparse.Namespace) -> None:
         integrity_error: Exception | None = None
         if boxes or succeeded or interrupted:
             try:
-                write_bag_checkpoint(archive, catalog)
+                checkpoint_archive()
                 catalog.commit()
             except Exception as error:
                 integrity_error = error
@@ -1085,8 +1718,21 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     ingest_parser = commands.add_parser("ingest")
     ingest_parser.add_argument("--owner-names-file", required=True)
+    ingest_parser.add_argument(
+        "--earliest-year",
+        type=positive_integer,
+        default=1900,
+        help="reject earlier message dates and use normal fallbacks (default: 1900)",
+    )
     ingest_parser.add_argument("--clamav", action="store_true", required=True, help="scan new messages with on-demand ClamAV")
     ingest_parser.add_argument("--workers", type=positive_integer, default=min(os.cpu_count() or 1, 8), help="source mailfiles ingested concurrently (default: cores, capped at 8)")
+    ingest_parser.add_argument(
+        "--plugin-dir",
+        action="append",
+        type=Path,
+        default=[],
+        help="trusted plug-in root to load (repeatable; Python code in this directory will execute)",
+    )
     ingest_parser.add_argument("--index-attachments", action="store_true", help="index text attachments; non-text attachments require the planned Tika extractor")
     ingest_parser.add_argument("roots", nargs="+", metavar="ROOT")
     ingest_parser.set_defaults(function=ingest)
@@ -1114,7 +1760,13 @@ def main() -> int:
     except ClamScannerStartupError as error:
         print(f"ClamAV startup failed: {error}", file=sys.stderr, flush=True)
         return 1
+    except PluginDiscoveryError as error:
+        print(f"plug-in discovery failed: {error}", file=sys.stderr, flush=True)
+        return 1
     except IncompleteAppleMailMessageError as error:
+        print(f"unsupported source: {error}", file=sys.stderr, flush=True)
+        return 1
+    except NotImplementedError as error:
         print(f"unsupported source: {error}", file=sys.stderr, flush=True)
         return 1
     except PermissionError as error:

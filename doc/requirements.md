@@ -9,10 +9,10 @@ mail, non-destructive redacted derivatives, and reproducible research reports
 from structured metadata.
 
 The system must harvest backup drives and active sources, including Outlook
-`.pst` and `.ost`, Eudora backups, working IMAP client-cache directories, MBOX,
-EML, Maildir, Apple Mail, Gmail exports, and live read-only IMAP accounts. It
-must be safe to rerun an ingest operation on the same source without
-duplicating or rescanning messages already archived.
+`.pst` and `.ost`, Eudora backups, Emacs RMAIL Babyl, working IMAP client-cache
+directories, MBOX, EML, Maildir, Apple Mail, Gmail exports, and live read-only
+IMAP accounts. It must be safe to rerun an ingest operation on the same source
+without duplicating or rescanning messages already archived.
 
 ## Canonical archive layout
 
@@ -34,16 +34,36 @@ directory, and a `data/mbox/` payload directory.
 * A message's category is **Sent** if the parsed `From:` address contains,
   case-insensitively, one of names in owner-names.txt; otherwise it is **Archive**.  The aliases are
   configurable, and the matched address is retained.
-* The date is the valid RFC 5322 `Date:` value; otherwise use the earliest
-  valid `Received:` timestamp.  Years before 1900 or more than one year in the
-  future are implausible and invalid.  A message lacking both inherits the prior
-  resolved date in the same input mailbox stream.  If it is the only message
-  in that file and the only file in its containing directory, derive the year
-  from a four-digit year in the source path and record that fallback.  Never
-  route ordinary input to a `0000` mailbox merely because its date is absent.
+* Normalize the valid RFC 5322 `Date:` and every valid timestamp suffix in a
+  `Received:` header to UTC. Sort the Received dates, discard one minimum and
+  one maximum when at least three exist, and compute the median (the midpoint
+  for an even retained count). With only one or two valid Received dates,
+  compute their untrimmed median. If `Date:` differs from that result by more
+  than two days, route with the Received median and store `received-median` as
+  `date_source`; otherwise retain `Date:`. If `Date:` is absent or invalid,
+  use that same Received median with `received` as `date_source`. The ingest
+  option `--earliest-year` defines the first plausible year for both header
+  sources (default 1900); more than one year in the future is also implausible
+  and invalid. When
+  neither header supplies a date, use the message-specific typed
+  `MailObject.source_date_utc` when present and store `source-fallback` as
+  `date_source`. It must be timezone-aware and is normalized to UTC at the
+  plug-in boundary. Otherwise inherit the prior resolved date in the same
+  input mailbox stream. For a filesystem message with no prior resolved date,
+  derive the year from a four-digit year in the source path and record that
+  fallback. Never route ordinary input to a `0000` mailbox merely because its
+  date is absent.
 * `X-Apple-Auto-Saved` messages are excluded entirely.  Their source and
   exclusion reason are retained in the primary database, but no MBOX copy is
   created.
+* An MBOX record whose envelope sender is exactly
+  `mbcp@s.eecs.harvard.edu`, whose only headers are `X-UID`, `Status`, and
+  `X-MBCP-Flags` (with both X-headers present), and whose body is empty is
+  source metadata, not an email. Record a `source-metadata-excluded`
+  observation and do not publish it. An envelope sender of `XXX` is unwrapped
+  only when the outer record contains only status headers and its body starts
+  with a quoted nested MBOX envelope; publish the nested RFC 5322 message while
+  retaining the outer source offset as provenance.
 * Each finished `data/mbox/NAME.mbox` has one
   `integrity/NAME.mbox.integrity` BagIt tag in the versioned hybrid format
   specified by [INTEGRITY_CONTROLS.md](INTEGRITY_CONTROLS.md).
@@ -89,34 +109,73 @@ requirement.
   program saved a deduplicated canonical copy. Every source observation links
   to one source file and source volume, records its source/forensic path,
   offset where applicable, ingest run, raw RFC 5322 SHA-256, semantic (`h3`)
-  SHA-256, and disposition (`archived`, `duplicate`, `autosave-excluded`, or
-  error). One archived message can retain many source observations.
+  SHA-256, and disposition (`archived`, `duplicate`, `autosave-excluded`,
+  `source-metadata-excluded`, or error). One archived message can retain many
+  source observations.
 * A source volume has a stable identity plus normalized JSON metadata. Local
   ingest records the complete OS volume report available at ingest time,
   including label, format information when available, and current mount path.
-  Cloud adapters use a provider/account/container identity and provider JSON.
+  Cloud adapters use a provider/account origin identity plus per-container
+  native ID, hierarchy, display name, and non-secret provider JSON.
   Source evidence is retained in the private archive catalog and excluded from
   redacted or public derivative packages by default.
 * Idempotence is at message level.  After a raw message hash and Message-ID
   have been obtained, a matching stored identity is skipped before ClamAV,
   text extraction, and MBOX writing.  A deliberate rescan/reindex mode is
   separate from normal ingest.
+* Every source plug-in declares source integrity controls appropriate to its
+  source. The framework executes those controls, displays their progress, and
+  persists typed evidence and resume decisions. Cryptographic hashes,
+  provider version tokens, immutable identifiers, and cursors are distinct
+  evidence kinds and must not be mislabeled. Source integrity controls are
+  separate from the canonical archive controls in `INTEGRITY_CONTROLS.md`.
+  Integrity-control generators run outside the publisher lock so source
+  hashing and provider I/O do not serialize unrelated workers, and their typed
+  progress is forwarded as yielded. Only the catalog transaction that records
+  validated evidence and marks the checkpoint complete is publisher-serialized.
 * Every recognized local source file records its absolute path, nanosecond
   modification time, byte length, complete-file SHA-256, last check time, and
-  completing ingest run.  Reingest always verifies content: a matching full
+  completing ingest run. Those file columns are a local display cache; skip
+  and resume decisions use only typed evidence from the last completed
+  `source_integrity_checks` record. Reingest always verifies content: a matching full
   SHA-256 skips the file without parsing its messages.  If a file grew, ingest
   first compares the SHA-256 of the old length.  A matching MBOX prefix followed
   by a valid `From ` boundary resumes at that byte offset; all other changes
   reprocess the whole file.  The checkpoint is updated only after the selected
   region finishes and the source metadata remains stable.
-  A lightweight preliminary pass counts recognized source files and their byte
-  lengths without hashing or retaining the tree. It must finish before any
-  message is published and provides stable overall file/byte totals. The
-  second pass is bounded by the configured worker count: each worker plans,
-  reads, parses, scans, and checkpoints one source mailfile at a time. A new
+  A lightweight preliminary pass counts recognized source containers and their
+  available byte estimates without hashing or retaining message contents. It
+  stores typed container metadata in a temporary SQLite work snapshot, prints
+  every unrecognized regular file once with its path and reason, and finishes
+  before any message is published. Duplicate scoped container identities are
+  scheduled once; conflicting definitions fail. Sources declaring stable
+  inventory are verified by a second preflight discovery; live sources are
+  discovered once. Worker execution is bounded by the configured count: each
+  worker plans, reads, parses, scans, and checkpoints one container at a time. A new
   file's complete fingerprint is calculated before its checkpoint is committed. A later source failure or
   interruption retains committed messages; any in-flight file without a
   checkpoint remains safely rerunnable.
+* Emacs RMAIL Babyl files are recognized from their case-insensitive
+  `BABYL OPTIONS:` header rather than a filename extension. Both LF and CRLF
+  containers are streamed read-only. Each record's original header block and
+  body become one RFC 5322 message. If the original-header block is empty, the
+  visible headers are the record's only headers and are used instead. Babyl
+  labels and redundant visible-header copies are source-container metadata and
+  are not added to the canonical message.
+* Source and physical file parsing use separate versioned, immutable plug-in
+  registries. The production file registry contains MBOX, Babyl, EMLX, and
+  single-message EML/Maildir generators. The production local source generator
+  delegates each recognized filename to that registry. Packaged reserved
+  source stubs name Gmail, IMAP, O365, Microsoft Exchange, and standard input;
+  the standard-input contract is RFC 5322 messages separated by a NUL byte.
+  Reserved stubs must fail clearly and must not be exposed as working ingest.
+* Built-in and explicitly configured trusted plug-in directories use API-v1
+  manifests. All manifests are validated before any external Python is
+  imported; duplicate kinds, incompatible APIs, unsafe entrypoints, ambiguous
+  source selection, and ambiguous file recognition fail before workers start.
+  Plug-in registries are frozen before inventory. Mail source trees and the
+  archive are never searched for executable plug-ins. Typed boundaries are
+  strict: in particular, text cannot be coerced into RFC 5322 bytes.
 
 ## Malware handling
 
@@ -126,12 +185,15 @@ requirement.
   is not healthy, waits for a successful health probe before starting mailfile
   workers, reuses a healthy existing daemon without stopping it, and never
   enables on-access or scheduled scanning.
-* `ingest --workers N` controls the number of source mailfiles ingested
+* `ingest --workers N` controls the number of source containers ingested
   simultaneously. Its default is the detected CPU count capped at eight, and
   `N` must be positive. Each worker reads and parses its mailfile and submits
   one ClamAV request at a time. Duplicate admission, SQLite commits, the
   publication journal, and canonical MBOX appends remain serialized through
-  one publisher.
+  one publisher. A source plug-in may declare a lower concurrency limit for
+  each source-native `concurrency_key`; the framework enforces it and fairly
+  interleaves captured keys. A shared plug-in instance must be reentrant. A
+  resume decision is accepted only from a source declaring resumable support.
 * Mailfile workers send typed status updates to a main-thread status driver;
   worker threads never write progress output. The driver writes standard error
   at startup, every 250 milliseconds, and completion. An interactive terminal
@@ -144,9 +206,13 @@ requirement.
   and `idle`. They also report elapsed time, processed message and completed
   source-file counts, average message rate, resolved date range, current
   year/current-year count, active and peak worker counts, source file, and byte
-  completion percentage. Lines must be fitted to the terminal width so redraws
+  or provider-message progress. Unknown-byte sources use completed containers
+  rather than reporting 100% prematurely. Lines must be fitted to the terminal width so redraws
   never accumulate wrapped headings. It separately reports archived, duplicate
-  (previously-seen and skipped), autosave-excluded, and infected counts.
+  previously-seen duplicates, autosave-excluded, source-metadata-excluded,
+  infected, unrecognized-file, and integrity-skipped-container counts. A
+  worker never prints a skipped-container diagnostic itself; the main status
+  driver prints each queued path and reason once.
   While the main thread waits for ClamAV to load virus definitions, every
   refresh explicitly identifies that wait and shows its increasing startup
   elapsed time instead of a stale source-file status. A newly started daemon is
@@ -162,7 +228,8 @@ requirement.
 * Every ingest run records its completion time, result, and failure detail.
   An unexpected parser failure preserves earlier published messages, closes
   resources, refreshes the BagIt/Mailbag checkpoint for committed MBOX changes, and leaves a
-  rerunnable error observation containing the source offset and raw SHA-256.
+  rerunnable error observation containing the source cursor (and numeric offset
+  when available) plus raw SHA-256.
 * Before each MBOX append, ingest durably records the target, prior length,
   message identity, and whether the target already existed. Catalog changes
   remain uncommitted until the append is complete. On an exception or the next
@@ -322,6 +389,9 @@ explicit action with an additional warning for executable or container types.
 At the bottom of every message view, the GUI displays the archive mailbox path
 separately from every source volume and source/forensic path where the message
 was found.
+When `date_source` is `received-median`, the GUI shows a warning banner across
+the message and gives the message well a slight red tint. The original `Date:`
+header remains visible and unchanged.
 Command-1 through Command-9 select the MIME part having that numeric part ID;
 Command-0 and Command-Shift-U select the raw RFC 5322 source.
 

@@ -102,7 +102,7 @@ class AttachmentInfo(BaseModel):
 class SourceLocation(BaseModel):
     volume: str
     path: str
-    offset: int
+    offset: int | None
     raw_sha256: str
     semantic_sha256: str | None
 
@@ -110,6 +110,7 @@ class SourceLocation(BaseModel):
 class MessageView(BaseModel):
     message_pk: int
     subject: str
+    date_source: str
     headers: list[HeaderField]
     body_parts: list[BodyPart]
     preferred_part_id: int
@@ -271,9 +272,11 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
     html_part = next((part.part_id for part in body_parts if part.content_type == "text/html"), None)
     text_part = next((part.part_id for part in body_parts if part.content_type == "text/plain"), RAW_PART_ID)
     archive_path, source_locations = message_locations(archive, message_pk)
+    date_source = message_date_source(archive, message_pk)
     return MessageView(
         message_pk=message_pk,
         subject=decoded_header(str(message.get("Subject", "(no subject)"))),
+        date_source=date_source,
         headers=headers,
         body_parts=body_parts,
         preferred_part_id=html_part if html_part is not None else text_part,
@@ -281,6 +284,17 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
         archive_path=archive_path,
         source_locations=source_locations,
     )
+
+
+def message_date_source(archive: Path, message_pk: int) -> str:
+    database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
+    try:
+        row = database.execute("SELECT date_source FROM messages WHERE message_pk = ?", (message_pk,)).fetchone()
+        if row is None:
+            raise ValueError(f"unknown message {message_pk}")
+        return str(row[0])
+    finally:
+        database.close()
 
 
 def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[SourceLocation]]:
@@ -293,7 +307,8 @@ def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[
             (message_pk,),
         ).fetchone()
         rows = database.execute(
-            "SELECT source_volumes.metadata_json, source_files.source_path, observations.source_offset, "
+            "SELECT source_volumes.metadata_json, source_files.metadata_json, source_files.source_path, "
+            "source_files.path_kind, observations.source_offset, "
             "observations.raw_sha256, observations.semantic_sha256 FROM observations "
             "JOIN source_files USING (source_file_pk) JOIN source_volumes USING (source_volume_pk) "
             "WHERE observations.message_pk = ? ORDER BY observations.observation_pk",
@@ -303,10 +318,13 @@ def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[
             None if archive_row is None else str(archive_row[0]),
             [
                 SourceLocation(
-                    volume=_volume_label(metadata_json), path=source_path, offset=source_offset,
+                    volume=_volume_label(volume_metadata),
+                    path=_source_display_path(container_metadata, source_path, path_kind),
+                    offset=source_offset,
                     raw_sha256=raw_sha256, semantic_sha256=semantic_sha256,
                 )
-                for metadata_json, source_path, source_offset, raw_sha256, semantic_sha256 in rows
+                for volume_metadata, container_metadata, source_path, path_kind, source_offset,
+                raw_sha256, semantic_sha256 in rows
             ],
         )
     finally:
@@ -320,6 +338,15 @@ def _volume_label(metadata_json: str) -> str:
     label = metadata.get("volume_label")
     mount_path = metadata.get("current_mount_path")
     return str(label or mount_path or "Unknown source volume")
+
+
+def _source_display_path(metadata_json: str, source_path: str, path_kind: str) -> str:
+    if path_kind != "provider":
+        return source_path
+    metadata = json.loads(metadata_json)
+    if not isinstance(metadata, dict):
+        return source_path
+    return str(metadata.get("display_name") or source_path)
 
 
 def render_part(archive: Path, message_pk: int, part_id: int, allow_remote: bool = False) -> PartContent:

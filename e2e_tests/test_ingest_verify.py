@@ -116,6 +116,9 @@ def test_fresh_ingest_builds_an_independently_verifiable_archive(built_archive: 
         assert catalog.execute(
             "SELECT count(*) FROM observations WHERE disposition = 'autosave-excluded'"
         ).fetchone() == (1,)
+        assert catalog.execute(
+            "SELECT date_utc, date_source FROM messages WHERE message_id_normalized = 'rich-e2e@example'"
+        ).fetchone() == ("2024-02-02T00:00:00+00:00", "received-median")
         infected_hash = catalog.execute(
             "SELECT sha256 FROM messages WHERE message_id_normalized = 'infected-e2e@example'"
         ).fetchone()

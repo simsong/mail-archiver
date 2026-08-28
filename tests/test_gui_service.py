@@ -120,7 +120,8 @@ def make_gui_archive(tmp_path: Path) -> Path:
             ),
         ).lastrowid
         source_file = catalog.execute(
-            "INSERT INTO source_files(source_volume_pk, source_path, path_kind, source_kind) VALUES (?, 'mail/simple.eml', 'file', 'message')",
+            "INSERT INTO source_files(source_volume_pk, source_path, hierarchy_path, path_kind, source_kind) "
+            "VALUES (?, 'mail/simple.eml', 'mail/simple.eml', 'file', 'message')",
             (volume,),
         ).lastrowid
         catalog.execute(
@@ -303,6 +304,19 @@ def test_gui_displays_archive_and_source_locations(tmp_path: Path) -> None:
     ]
 
 
+def test_gui_exposes_computed_date_tag_for_warning_banner(tmp_path: Path) -> None:
+    """Requirement: the GUI identifies messages whose catalog date replaced the Date header."""
+    archive = make_gui_archive(tmp_path)
+    database = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        database.execute("UPDATE messages SET date_source = 'received-median' WHERE message_pk = 1")
+        database.commit()
+    finally:
+        database.close()
+
+    assert describe_message(archive, 1).date_source == "received-median"
+
+
 def test_gui_exports_exact_eml_and_decoded_attachment(tmp_path: Path) -> None:
     """Requirement: .eml export preserves RFC 5322 bytes and attachment export decodes the selected part."""
     archive = make_gui_archive(tmp_path)
@@ -354,9 +368,9 @@ def add_tree_source(
         ).fetchone()
         assert volume is not None
         source_file = database.execute(
-            "INSERT INTO source_files(source_volume_pk, source_path, path_kind, source_kind) "
-            "VALUES (?, ?, 'file', ?) RETURNING source_file_pk",
-            (volume[0], path, source_kind),
+            "INSERT INTO source_files(source_volume_pk, source_path, hierarchy_path, path_kind, source_kind) "
+            "VALUES (?, ?, ?, 'file', ?) RETURNING source_file_pk",
+            (volume[0], path, path, source_kind),
         ).fetchone()
         assert source_file is not None
         run_pk = database.execute("SELECT min(run_pk) FROM ingest_runs").fetchone()[0]
@@ -418,10 +432,10 @@ def test_original_mailbox_count_and_search_queries_use_provenance_indexes(tmp_pa
     try:
         count_plan = database.execute(
             "EXPLAIN QUERY PLAN SELECT count(DISTINCT observations.message_pk) "
-            "FROM source_files INDEXED BY source_files_path_volume "
+            "FROM source_files INDEXED BY source_files_hierarchy_volume "
             "JOIN observations INDEXED BY observations_source_file_offset USING (source_file_pk) "
-            "WHERE observations.message_pk IS NOT NULL AND (source_files.source_path = ? OR "
-            "(source_files.source_path >= ? AND source_files.source_path < ?))",
+            "WHERE observations.message_pk IS NOT NULL AND (source_files.hierarchy_path = ? OR "
+            "(source_files.hierarchy_path >= ? AND source_files.hierarchy_path < ?))",
             ("mail", "mail/", "mail0"),
         ).fetchall()
         database.execute("ATTACH DATABASE ? AS search", (str(archive / "search.sqlite3"),))
@@ -430,6 +444,6 @@ def test_original_mailbox_count_and_search_queries_use_provenance_indexes(tmp_pa
     finally:
         database.close()
 
-    assert any("source_files_path_volume" in detail for *_prefix, detail in count_plan)
+    assert any("source_files_hierarchy_volume" in detail for *_prefix, detail in count_plan)
     assert any("observations_source_file_offset" in detail for *_prefix, detail in count_plan)
     assert any("observations_message_pk" in detail for *_prefix, detail in search_plan)

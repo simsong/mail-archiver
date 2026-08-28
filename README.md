@@ -41,12 +41,19 @@ derived data, while the BagIt payload, Mailbag metadata, and versioned
 integrity tags are the portable durable record.
 
 This is the initial local-ingest implementation, not yet the complete email
-archiving system. It currently ingests local MBOX, EML, Maildir, and complete
-Apple Mail `.emlx` messages. Outlook `.pst`/`.ost`, Eudora, working IMAP cache
-directories, Gmail, live IMAP, redaction, richer research data, sorting/repacking,
-and rollover remain planned; see [doc/implementation.md](doc/implementation.md).
+archiving system. It currently ingests local MBOX, Emacs RMAIL Babyl, EML,
+Maildir, and complete Apple Mail `.emlx` messages. Outlook `.pst`/`.ost`,
+Eudora, working IMAP cache directories, Gmail, live IMAP, redaction, richer
+research data, sorting/repacking, and rollover remain planned; see
+[doc/implementation.md](doc/implementation.md).
 The [archivist-facing user manual](doc/USER_MANUAL.md) gives step-by-step
 instructions for ingest, verification, and search.
+The [plug-in architecture](doc/PLUGINS.md) documents the implemented
+source-neutral generator, trusted-directory discovery, threading, status, and
+integrity boundaries, plus the work required by real Gmail, O365, IMAP, and
+stream adapters.
+See [release notes](doc/RELEASE_NOTES.md) for changes not yet included in a
+release.
 The [current source-code audit](doc/source-code-audit.md) distinguishes completed
 tightening from the remaining architectural gaps.
 The [competitive analysis](doc/competitive_analysis.md) explains how this
@@ -104,7 +111,8 @@ make install-mac TIKA_VERSION=X.Y.Z
 
 ## Ingest local mail
 
-The following command recursively reads MBOX and `.emlx` files below
+The following command recursively reads MBOX, Emacs RMAIL Babyl, EML, Maildir,
+and `.emlx` files below
 `SOURCE`.  It never changes those source files.  It starts `clamd` temporarily
 for the ingest run if no daemon is already listening on the configured local
 socket.
@@ -137,20 +145,40 @@ For example, with the project's supplied owner-token list and a new archive:
 MAIL_ARCHIVE_DIR="$HOME/arch-local/normalized-mail" uv run mailarchiver ingest --owner-names-file owner-names.txt --clamav "$HOME/arch-local/SLG Mail"
 ```
 
-Mailfile workers default to the CPU count, capped at eight. Override the limit
+Framework workers default to the CPU count, capped at eight. Override the limit
 for a benchmark or a less capable machine with a positive `--workers N`.
-After the ClamAV preflight succeeds, independent source mailfiles are read,
+After the ClamAV preflight succeeds, independent source containers are read,
 parsed, and scanned concurrently;
 canonical MBOX and SQLite publication remains single-writer. Before workers
 start, mailarchiver makes a lightweight read-only pass to count recognized
-source files and bytes; it does not hash or retain the source tree during this
-inventory.
+source files and bytes; it does not hash or retain message contents during this
+inventory. It spools only typed container metadata to a temporary work
+snapshot. Every ordinary file that no parser recognizes is printed once with
+its path and reason.
 
 Messages are classified as `Sent` when their parsed `From:` address contains a
 case-insensitive token in `owner-names.txt`; they go to the year's
 `{YEAR}-Sent1.mbox` series. Other clean messages go to the year's
 `{YEAR}-Archive1.mbox` series. `X-Apple-Auto-Saved` messages are logged but not
 copied.
+
+Routing dates compare the original `Date:` with the trimmed median of all valid
+UTC-normalized `Received:` timestamps. A difference of more than two days uses
+the median and records `received-median` in the catalog without changing the
+message bytes. The graphical viewer then shows a warning banner and a slight
+red tint. Use `--earliest-year YEAR` when an archive has a known start date;
+earlier header dates become implausible and normal Received/stream/path
+fallbacks apply. Exact empty Eudora MBCP metadata records are logged as
+exclusions, and narrow `From XXX` status wrappers are unwrapped to expose their
+nested message.
+
+Source and file-format generators have separate immutable, manifest-loaded
+registries. Local file/folder traversal and MBOX, Babyl, EMLX, EML, and Maildir
+parsing are active. Gmail, IMAP, O365, Microsoft Exchange, and NUL-delimited
+standard input are reserved stubs, not supported ingest modes yet. Repeatable
+`--plugin-dir DIRECTORY` options load an explicit external plug-in root; Python
+code there executes, so only name directories you trust. See
+[doc/PLUGINS.md](doc/PLUGINS.md).
 
 The archive directory is a native BagIt/Mailbag package containing:
 
@@ -209,7 +237,8 @@ current mailfile, byte-completion percentage, and phase. Workers send status
 events to the main thread, which alone renders the terminal. Long paths are
 fitted to the terminal width so the dashboard does not scroll. Redirected
 output stays line-oriented for logs. It also counts archived mail,
-previously-seen duplicate skips, autosave exclusions, and infected messages.
+previously-seen duplicates, autosave exclusions, infected messages,
+unrecognized files, and unchanged containers skipped by source integrity.
 
 ## Interrupts and disk space
 
@@ -225,7 +254,8 @@ assume an integrity file can be refreshed when the filesystem is full.
 ## Review ingest observations
 
 Every ingest receives a sequential run number and records one observation for
-each source message: `archived`, `duplicate`, or `autosave-excluded`.  `review`
+each source record: `archived`, `duplicate`, `autosave-excluded`, or
+`source-metadata-excluded`. `review`
 is the audit-log viewer; it does not reindex or refresh anything.  Without a
 selector it prints all observations.  Use `--run` only to restrict the output
 to one numbered ingest run:

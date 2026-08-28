@@ -1,4 +1,4 @@
-.PHONY: check fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika pylint run search summary-smoke test test-bagit test-e2e test-gui test-headers test-mailsearch test-native-gui test-progress test-provenance verify
+.PHONY: check fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika pylint run search summary-smoke test test-bagit test-e2e test-gui test-headers test-mailsearch test-native-gui test-plugins test-progress test-provenance verify
 
 TIKA_VERSION ?= 3.3.2
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
@@ -63,6 +63,9 @@ test-headers:
 
 test-progress:
 	uv run pytest -q tests/test_progress.py tests/test_sources.py
+
+test-plugins:
+	uv run pytest -q tests/test_plugin_loader.py tests/test_source_integrity.py tests/test_archive_integrity.py
 
 install-mac:
 	@test "$$(uname -s)" = Darwin || { echo "install-mac must run on macOS"; exit 1; }

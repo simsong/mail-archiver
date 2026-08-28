@@ -1,0 +1,7 @@
+api_version = 1
+plugin_type = "file"
+kind = "babyl"
+name = "Emacs RMAIL Babyl"
+implementation_version = "1"
+priority = 200
+entrypoint = "mailarchiver.sources:BabylFileParser"

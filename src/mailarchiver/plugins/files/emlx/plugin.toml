@@ -1,0 +1,7 @@
+api_version = 1
+plugin_type = "file"
+kind = "emlx"
+name = "Apple Mail EMLX"
+implementation_version = "1"
+priority = 100
+entrypoint = "mailarchiver.sources:EmlxFileParser"

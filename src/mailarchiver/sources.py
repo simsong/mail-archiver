@@ -1,17 +1,47 @@
-"""Discover and stream MBOX, EMLX, EML, and Maildir source messages read-only."""
+"""Discover and stream MBOX, Babyl, EMLX, EML, and Maildir messages read-only."""
 
 from __future__ import annotations
 
 import hashlib
 import mailbox
 import os
+import re
+import stat as stat_module
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
-from typing import Literal
 
 from pydantic import BaseModel
 
+from .plugin_api import (
+    FileProbe,
+    MailContainer,
+    MailObject,
+    PluginCapabilities,
+    PluginContext,
+    PluginManifest,
+    ProgressEvent,
+    SkippedInput,
+    SourcePlugin,
+    SourceReference,
+    SourceSpec,
+)
 from .source_volume import SourceVolume, local_mount_path, local_source_volume
+
+
+SourceKind = str
+BABYL_OPTIONS = b"babyl options:"
+BABYL_RECORD = b"\x1f\x0c"
+BABYL_END = b"\x1f"
+BABYL_EOOH = b"*** EOOH ***"
+MBCP_ENVELOPE_SENDER = b"mbcp@s.eecs.harvard.edu"
+MBCP_HEADERS = {"status", "x-mbcp-flags", "x-uid"}
+XXX_ENVELOPE_SENDER = b"XXX"
+XXX_WRAPPER_HEADERS = {"status", "x-keywords", "x-status"}
+HEADER_SEPARATOR = re.compile(br"\r?\n\r?\n")
+MBOXRD_QUOTED_FROM = re.compile(br"(?m)^>(?=>*From )")
 
 
 class SourceMessage(BaseModel):
@@ -20,13 +50,14 @@ class SourceMessage(BaseModel):
     source_offset: int
     bytes_done: int
     bytes_total: int
+    exclusion_reason: str | None = None
 
 
 class SourceFile(BaseModel):
     path: Path
     volume: SourceVolume
     source_path: str
-    kind: Literal["emlx", "mbox", "message"]
+    kind: SourceKind
     modified_at_ns: int
     byte_length: int
 
@@ -38,18 +69,86 @@ class SourcePlan(BaseModel):
     skip: bool = False
 
 
-class SourceHashes(BaseModel):
-    prefix_sha256: str
-    sha256: str
-
-
 class SourceInventory(BaseModel):
     file_count: int = 0
     byte_count: int = 0
+    skipped_file_count: int = 0
+
+
+class LocalContainerData(BaseModel):
+    """Local-only state carried opaquely through the source-neutral framework."""
+
+    source: SourceFile
 
 
 class IncompleteAppleMailMessageError(ValueError):
     """An Apple Mail partial message cannot preserve detached attachment bytes."""
+
+
+class FileParser(ABC):
+    """Extension point for recognizing and streaming one source-file format."""
+
+    kind: SourceKind
+
+    @abstractmethod
+    def recognizes(self, path: Path) -> bool:
+        """Return whether this parser owns the source path."""
+
+    @abstractmethod
+    def messages(self, source: SourceFile, start_offset: int = 0) -> Iterator[SourceMessage]:
+        """Stream source records in forensic order."""
+
+
+class MailboxHierarchyParser(ABC):
+    """Extension point for enumerating provider-specific mailbox containers."""
+
+    kind: str
+    available = True
+
+    @abstractmethod
+    def paths(self, source: Path) -> Iterator[Path]:
+        """Yield candidate mail files or stream endpoints in hierarchy order."""
+
+
+class FileFolderHierarchyParser(MailboxHierarchyParser):
+    kind = "file-folder"
+
+    def paths(self, source: Path) -> Iterator[Path]:
+        if not source.exists():
+            raise FileNotFoundError(source)
+        if source.is_file():
+            yield source
+            return
+
+        def raise_walk_error(error: OSError) -> None:
+            raise error
+
+        for directory, subdirectories, filenames in os.walk(source, onerror=raise_walk_error):
+            subdirectories.sort()
+            for filename in sorted(filenames):
+                yield Path(directory) / filename
+
+
+_HIERARCHY_PARSERS: list[MailboxHierarchyParser] = [FileFolderHierarchyParser()]
+
+
+def mailbox_hierarchy_parsers() -> tuple[MailboxHierarchyParser, ...]:
+    """Return the legacy local hierarchy compatibility registry."""
+    return tuple(_HIERARCHY_PARSERS)
+
+
+def register_mailbox_hierarchy_parser(parser: MailboxHierarchyParser) -> None:
+    if any(candidate.kind == parser.kind for candidate in _HIERARCHY_PARSERS):
+        raise ValueError(f"mailbox hierarchy parser already registered: {parser.kind}")
+    _HIERARCHY_PARSERS.append(parser)
+
+
+def unregister_mailbox_hierarchy_parser(kind: str) -> None:
+    for index, parser in enumerate(_HIERARCHY_PARSERS):
+        if parser.kind == kind:
+            del _HIERARCHY_PARSERS[index]
+            return
+    raise ValueError(f"mailbox hierarchy parser is not registered: {kind}")
 
 
 def emlx_bytes(path: Path) -> bytes:
@@ -66,49 +165,343 @@ def is_mbox(path: Path) -> bool:
         return source.read(5) == b"From "
 
 
+def is_babyl(path: Path) -> bool:
+    """Recognize an Emacs RMAIL Babyl file without relying on its suffix."""
+    with path.open("rb") as source:
+        return source.readline(256).rstrip(b"\r\n").lower() == BABYL_OPTIONS
+
+
 def is_maildir_message(path: Path) -> bool:
     return path.parent.name in {"cur", "new"}
 
 
-def _source_paths(source: Path) -> Iterator[Path]:
-    if not source.exists():
-        raise FileNotFoundError(source)
-    if source.is_file():
-        yield source
-        return
+class EmlxFileParser(FileParser):
+    kind = "emlx"
 
-    def raise_walk_error(error: OSError) -> None:
-        raise error
+    def recognizes(self, path: Path) -> bool:
+        if path.name.lower().endswith(".partial.emlx"):
+            raise IncompleteAppleMailMessageError(
+                f"Apple Mail partial message omits detached attachment bytes: {path}; "
+                "export the mailbox from Apple Mail before ingest"
+            )
+        return path.suffix.lower() == ".emlx"
 
-    for directory, _subdirectories, filenames in os.walk(source, onerror=raise_walk_error):
-        for filename in filenames:
-            yield Path(directory) / filename
-
-
-def _source_kind(path: Path) -> Literal["emlx", "mbox", "message"] | None:
-    if path.name.lower().endswith(".partial.emlx"):
-        raise IncompleteAppleMailMessageError(
-            f"Apple Mail partial message omits detached attachment bytes: {path}; "
-            "export the mailbox from Apple Mail before ingest"
+    def messages(self, source: SourceFile, start_offset: int = 0) -> Iterator[SourceMessage]:
+        if start_offset:
+            raise ValueError(f"EMLX append resume is unsupported: {source.path}")
+        yield SourceMessage(
+            path=source.path,
+            raw=emlx_bytes(source.path),
+            source_offset=0,
+            bytes_done=source.byte_length,
+            bytes_total=source.byte_length,
         )
-    if path.suffix.lower() == ".emlx":
-        return "emlx"
-    if is_mbox(path):
-        return "mbox"
-    if path.suffix.lower() == ".eml" or is_maildir_message(path):
-        return "message"
+
+
+class BabylFileParser(FileParser):
+    kind = "babyl"
+
+    def recognizes(self, path: Path) -> bool:
+        return is_babyl(path)
+
+    def messages(self, source: SourceFile, start_offset: int = 0) -> Iterator[SourceMessage]:
+        if start_offset:
+            raise ValueError(f"Babyl append resume is unsupported: {source.path}")
+        yield from babyl_messages(source)
+
+
+class MboxFileParser(FileParser):
+    kind = "mbox"
+
+    def recognizes(self, path: Path) -> bool:
+        return is_mbox(path)
+
+    def messages(self, source: SourceFile, start_offset: int = 0) -> Iterator[SourceMessage]:
+        box = mailbox.mbox(source.path, factory=None, create=False)
+        try:
+            for key in box.iterkeys():
+                start, end = box._toc[key]
+                if start < start_offset:
+                    continue
+                envelope_record = box.get_bytes(key, from_=True)
+                envelope, _, _ = envelope_record.partition(b"\n")
+                envelope_sender = _mbox_envelope_sender(envelope.rstrip(b"\r"))
+                raw = box.get_bytes(key, from_=False)
+                exclusion = _mbcp_exclusion(envelope_sender, raw)
+                if envelope_sender == XXX_ENVELOPE_SENDER:
+                    raw = _unwrap_xxx_record(raw)
+                yield SourceMessage(
+                    path=source.path,
+                    raw=raw,
+                    source_offset=start,
+                    bytes_done=end,
+                    bytes_total=source.byte_length,
+                    exclusion_reason=exclusion,
+                )
+        finally:
+            box.close()
+
+
+class MessageFileParser(FileParser):
+    kind = "message"
+
+    def recognizes(self, path: Path) -> bool:
+        return path.suffix.lower() == ".eml" or is_maildir_message(path)
+
+    def messages(self, source: SourceFile, start_offset: int = 0) -> Iterator[SourceMessage]:
+        if start_offset:
+            raise ValueError(f"single-message append resume is unsupported: {source.path}")
+        raw = source.path.read_bytes()
+        yield SourceMessage(
+            path=source.path,
+            raw=raw,
+            source_offset=0,
+            bytes_done=len(raw),
+            bytes_total=len(raw),
+        )
+
+
+_FILE_PARSERS: list[FileParser] = [EmlxFileParser(), BabylFileParser(), MboxFileParser(), MessageFileParser()]
+
+
+class LocalSourcePlugin(SourcePlugin):
+    """Discover local files and delegate each container to a file-parser plug-in."""
+
+    kind = "file-folder"
+    manifest = PluginManifest(
+        api_version=1,
+        plugin_type="source",
+        kind=kind,
+        name="Local file and folder source",
+        implementation_version="1",
+        priority=100,
+        entrypoint="mailarchiver.sources:LocalSourcePlugin",
+    )
+    capabilities = PluginCapabilities(resumable=True, stable_inventory=True)
+
+    def __init__(self, context: PluginContext) -> None:
+        from .source_integrity import LocalContainerIntegrityControls
+
+        self.file_plugins = context.files
+        self.integrity_controls = LocalContainerIntegrityControls(self.source_file)
+        self.volumes: dict[tuple[int, Path], SourceVolume] = {}
+        self.mount_paths: dict[Path, Path] = {}
+
+    def recognizes(self, source: SourceSpec) -> bool:
+        return source.locator != "-" and source.kind in {None, self.kind} and "://" not in source.locator
+
+    def discover(self, source: SourceSpec) -> Iterator[MailContainer | ProgressEvent | SkippedInput]:
+        root = Path(source.locator)
+        for candidate in FileFolderHierarchyParser().paths(root):
+            path = candidate.resolve()
+            stat = path.stat()
+            if not stat_module.S_ISREG(stat.st_mode):
+                yield SkippedInput(
+                    source=SourceReference(
+                        plugin_kind=self.kind,
+                        source_id=str(root.resolve()),
+                        hierarchy=(),
+                        native_id=str(path),
+                        display_name=str(path),
+                    ),
+                    reason_code="not-regular-file",
+                    detail="not a regular file",
+                )
+                continue
+            parser = self._recognize_file(path, stat.st_size)
+            if parser is None:
+                yield SkippedInput(
+                    source=SourceReference(
+                        plugin_kind=self.kind,
+                        source_id=str(root.resolve()),
+                        hierarchy=(),
+                        native_id=str(path),
+                        display_name=str(path),
+                    ),
+                    reason_code="unrecognized-file",
+                    detail="no file parser recognized it",
+                )
+                continue
+            mount_path = self.mount_paths.get(path.parent)
+            if mount_path is None:
+                mount_path = local_mount_path(path)
+                self.mount_paths[path.parent] = mount_path
+            volume = self.volumes.get((stat.st_dev, mount_path))
+            if volume is None:
+                volume = local_source_volume(path)
+                self.volumes[(stat.st_dev, volume.mount_path)] = volume
+            local = SourceFile(
+                path=path,
+                volume=volume,
+                source_path=path.relative_to(volume.mount_path).as_posix(),
+                kind=parser.manifest.kind,
+                modified_at_ns=stat.st_mtime_ns,
+                byte_length=stat.st_size,
+            )
+            reference = _local_reference(local)
+            yield MailContainer(
+                work_id=_local_work_id(local),
+                source=reference,
+                parser_kind=local.kind,
+                estimated_bytes=local.byte_length,
+                concurrency_key=reference.source_id,
+                plugin_data_json=LocalContainerData(source=local).model_dump_json(),
+            )
+
+    def messages(
+        self, container: MailContainer, checkpoint: str | None
+    ) -> Iterator[MailObject | ProgressEvent]:
+        source = self.source_file(container)
+        parser = next(
+            (item for item in self.file_plugins if item.manifest.kind == container.parser_kind),
+            None,
+        )
+        if parser is None:
+            raise ValueError(f"file parser plug-in is not registered: {container.parser_kind}")
+        implementation = parser.implementation
+        if isinstance(implementation, FileParser):
+            start_offset = 0 if checkpoint is None else int(checkpoint)
+            for message in implementation.messages(source, start_offset):
+                yield MailObject(
+                    work_id=container.work_id,
+                    raw=message.raw,
+                    source=container.source,
+                    cursor=str(message.source_offset),
+                    completed_bytes=message.bytes_done,
+                    total_bytes=message.bytes_total,
+                    exclusion_reason=message.exclusion_reason,
+                )
+            return
+        yield from implementation.messages(container, checkpoint)
+
+    @staticmethod
+    def source_file(container: MailContainer) -> SourceFile:
+        return LocalContainerData.model_validate_json(container.plugin_data_json).source
+
+    def _recognize_file(self, path: Path, byte_length: int):
+        with path.open("rb") as source:
+            probe = FileProbe(path=path, byte_length=byte_length, prefix=source.read(4096))
+        matches = []
+        for plugin in self.file_plugins:
+            implementation = plugin.implementation
+            recognized = (
+                implementation.recognizes(path)
+                if isinstance(implementation, FileParser)
+                else implementation.recognizes(probe)
+            )
+            if recognized:
+                matches.append(plugin)
+        if len(matches) > 1:
+            kinds = ", ".join(plugin.manifest.kind for plugin in matches)
+            raise ValueError(f"ambiguous file parser plug-ins for {path}: {kinds}")
+        return None if not matches else matches[0]
+
+
+def _local_reference(source: SourceFile) -> SourceReference:
+    volume_id = hashlib.sha256(source.volume.identity_json.encode("utf-8")).hexdigest()
+    return SourceReference(
+        plugin_kind=LocalSourcePlugin.kind,
+        source_id=f"local-volume:{volume_id}",
+        hierarchy=tuple(Path(source.source_path).parts[:-1]),
+        native_id=source.source_path,
+        display_name=str(source.path),
+    )
+
+
+def _local_work_id(source: SourceFile) -> str:
+    digest = hashlib.sha256()
+    digest.update(source.volume.identity_json.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(source.source_path.encode("utf-8"))
+    return f"local-file:{digest.hexdigest()}"
+
+
+def file_parsers() -> tuple[FileParser, ...]:
+    """Return the ordered production parser registry."""
+    return tuple(_FILE_PARSERS)
+
+
+def register_file_parser(parser: FileParser, *, first: bool = False) -> None:
+    """Register a file parser, rejecting ambiguous duplicate kinds."""
+    if any(candidate.kind == parser.kind for candidate in _FILE_PARSERS):
+        raise ValueError(f"file parser already registered: {parser.kind}")
+    _FILE_PARSERS.insert(0 if first else len(_FILE_PARSERS), parser)
+
+
+def unregister_file_parser(kind: SourceKind) -> None:
+    """Remove a registered parser by kind; intended for plugin lifecycle management."""
+    for index, parser in enumerate(_FILE_PARSERS):
+        if parser.kind == kind:
+            del _FILE_PARSERS[index]
+            return
+    raise ValueError(f"file parser is not registered: {kind}")
+
+
+def _file_parser(path: Path) -> FileParser | None:
+    for parser in _FILE_PARSERS:
+        if parser.recognizes(path):
+            return parser
     return None
 
 
+def _mbox_envelope_sender(envelope: bytes) -> bytes:
+    fields = envelope.split(maxsplit=2)
+    return fields[1] if len(fields) >= 2 and fields[0] == b"From" else b""
+
+
+def _mbcp_exclusion(envelope_sender: bytes, raw: bytes) -> str | None:
+    if envelope_sender != MBCP_ENVELOPE_SENDER:
+        return None
+    message = BytesParser(policy=policy.compat32).parsebytes(raw)
+    names = {name.casefold() for name in message.keys()}
+    payload = message.get_payload()
+    if {"x-uid", "x-mbcp-flags"} <= names <= MBCP_HEADERS and str(payload).strip() == "":
+        return "Eudora MBCP metadata stub"
+    return None
+
+
+def _unwrap_xxx_record(raw: bytes) -> bytes:
+    separator = HEADER_SEPARATOR.search(raw)
+    if separator is None:
+        return raw
+    wrapper = BytesParser(policy=policy.compat32).parsebytes(raw[: separator.end()])
+    if not set(name.casefold() for name in wrapper.keys()) <= XXX_WRAPPER_HEADERS:
+        return raw
+    nested = MBOXRD_QUOTED_FROM.sub(b"", raw[separator.end():])
+    envelope, newline, message = nested.partition(b"\n")
+    if not newline or _mbox_envelope_sender(envelope.rstrip(b"\r")) == b"":
+        return raw
+    return message
+
+
+def _source_paths(source: Path, hierarchy: str = "file-folder") -> Iterator[Path]:
+    parser = next((candidate for candidate in _HIERARCHY_PARSERS if candidate.kind == hierarchy), None)
+    if parser is None:
+        raise ValueError(f"mailbox hierarchy parser is not registered: {hierarchy}")
+    yield from parser.paths(source)
+
+
+def _source_kind(path: Path) -> SourceKind | None:
+    parser = _file_parser(path)
+    return None if parser is None else parser.kind
+
+
 def source_inventory(
-    roots: Iterable[Path], progress: Callable[[int, int], None] | None = None
+    roots: Iterable[Path],
+    progress: Callable[[int, int], None] | None = None,
+    skipped: Callable[[Path, str], None] | None = None,
+    *,
+    hierarchy: str = "file-folder",
 ) -> SourceInventory:
     """Count recognized source files and bytes without hashing or retaining them."""
     inventory = SourceInventory()
     for root in roots:
-        for path in _source_paths(root):
+        for path in _source_paths(root, hierarchy):
             path = path.resolve()
             if _source_kind(path) is None:
+                inventory.skipped_file_count += 1
+                if skipped is not None:
+                    skipped(path, "no file parser recognized it")
                 continue
             inventory.file_count += 1
             inventory.byte_count += path.stat().st_size
@@ -117,10 +510,10 @@ def source_inventory(
     return inventory
 
 
-def source_files(source: Path) -> Iterator[SourceFile]:
+def source_files(source: Path, *, hierarchy: str = "file-folder") -> Iterator[SourceFile]:
     volumes: dict[tuple[int, Path], SourceVolume] = {}
     mount_paths: dict[Path, Path] = {}
-    for path in _source_paths(source):
+    for path in _source_paths(source, hierarchy):
         path = path.resolve()
         kind = _source_kind(path)
         if kind is not None:
@@ -144,65 +537,91 @@ def source_files(source: Path) -> Iterator[SourceFile]:
 
 
 def source_messages(source: SourceFile, start_offset: int = 0) -> Iterator[SourceMessage]:
-    path = source.path
-    if source.kind == "emlx":
-        raw = emlx_bytes(path)
-        yield SourceMessage(path=path, raw=raw, source_offset=0, bytes_done=source.byte_length, bytes_total=source.byte_length)
-    elif source.kind == "mbox":
-        box = mailbox.mbox(path, factory=None, create=False)
-        try:
-            for key in box.iterkeys():
-                start, end = box._toc[key]
-                if start >= start_offset:
-                    yield SourceMessage(path=path, raw=box.get_bytes(key, from_=False), source_offset=start, bytes_done=end, bytes_total=source.byte_length)
-        finally:
-            box.close()
-    else:
-        raw = path.read_bytes()
-        yield SourceMessage(path=path, raw=raw, source_offset=0, bytes_done=len(raw), bytes_total=len(raw))
+    parser = next((candidate for candidate in _FILE_PARSERS if candidate.kind == source.kind), None)
+    if parser is None:
+        raise ValueError(f"no file parser registered for source kind {source.kind}")
+    yield from parser.messages(source, start_offset)
 
 
-def sha256_file(path: Path, progress: Callable[[int, int], None] | None = None) -> str:
-    total = path.stat().st_size
-    remaining = total
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while remaining:
-            block = source.read(min(1024 * 1024, remaining))
-            if not block:
-                raise ValueError(f"source shortened while hashing: {path}")
-            digest.update(block)
-            remaining -= len(block)
-            if progress is not None:
-                progress(total - remaining, total)
-    return digest.hexdigest()
+def _without_container_newline(body: bytearray) -> bytes:
+    """Remove the one line ending Babyl adds before its record separator."""
+    if body.endswith(b"\r\n"):
+        return bytes(body[:-2])
+    if body.endswith(b"\n") or body.endswith(b"\r"):
+        return bytes(body[:-1])
+    return bytes(body)
 
 
-def sha256_file_with_prefix(
-    path: Path, prefix_length: int, progress: Callable[[int, int], None] | None = None
-) -> SourceHashes:
-    total = path.stat().st_size
-    if not 0 <= prefix_length <= total:
-        raise ValueError(f"invalid prefix length for {path}: {prefix_length}")
-    digest = hashlib.sha256()
-    prefix_sha256 = digest.hexdigest() if prefix_length == 0 else ""
-    done = 0
-    with path.open("rb") as source:
-        while done < total:
-            boundary = prefix_length if done < prefix_length else total
-            block = source.read(min(1024 * 1024, boundary - done))
-            if not block:
-                raise ValueError(f"source shortened while hashing: {path}")
-            digest.update(block)
-            done += len(block)
-            if done == prefix_length:
-                prefix_sha256 = digest.copy().hexdigest()
-            if progress is not None:
-                progress(done, total)
-    return SourceHashes(prefix_sha256=prefix_sha256, sha256=digest.hexdigest())
+def _header_separator(headers: bytearray) -> bytes:
+    if headers.endswith(b"\r\n"):
+        return b"\r\n"
+    if headers.endswith(b"\n"):
+        return b"\n"
+    if headers.endswith(b"\r"):
+        return b"\r"
+    return b"\n"
 
 
-def has_mbox_append_boundary(path: Path, offset: int) -> bool:
-    with path.open("rb") as source:
-        source.seek(offset)
-        return source.read(5) == b"From "
+def babyl_messages(source: SourceFile) -> Iterator[SourceMessage]:
+    """Stream RFC 5322 messages from CRLF- or LF-delimited RMAIL Babyl files."""
+    with source.path.open("rb") as mailbox_file:
+        if mailbox_file.readline(256).rstrip(b"\r\n").lower() != BABYL_OPTIONS:
+            raise ValueError(f"invalid Babyl header: {source.path}")
+        delimiter_offset = 0
+        for line in mailbox_file:
+            delimiter_offset = mailbox_file.tell() - len(line)
+            if line.rstrip(b"\r\n") == BABYL_RECORD:
+                break
+        else:
+            raise ValueError(f"Babyl file has no message records: {source.path}")
+
+        while True:
+            labels = mailbox_file.readline()
+            if not labels or labels[:1] not in {b"0", b"1"}:
+                raise ValueError(f"invalid Babyl label record at offset {delimiter_offset}: {source.path}")
+            headers = bytearray()
+            for line in mailbox_file:
+                if line.rstrip(b"\r\n") == BABYL_EOOH:
+                    break
+                headers.extend(line)
+            else:
+                raise ValueError(f"Babyl record has no EOOH marker at offset {delimiter_offset}: {source.path}")
+            visible_headers = bytearray()
+            for line in mailbox_file:
+                if not line.rstrip(b"\r\n"):
+                    break
+                visible_headers.extend(line)
+            else:
+                raise ValueError(f"Babyl record has no visible-header terminator at offset {delimiter_offset}: {source.path}")
+            selected_headers = headers if headers.rstrip(b"\r\n") else visible_headers
+
+            body = bytearray()
+            next_record = False
+            for line in mailbox_file:
+                marker = line.rstrip(b"\r\n")
+                if marker in {BABYL_RECORD, BABYL_END}:
+                    raw = bytes(selected_headers) + _header_separator(selected_headers) + _without_container_newline(body)
+                    yield SourceMessage(
+                        path=source.path,
+                        raw=raw,
+                        source_offset=delimiter_offset,
+                        bytes_done=mailbox_file.tell(),
+                        bytes_total=source.byte_length,
+                    )
+                    if marker == BABYL_END:
+                        return
+                    delimiter_offset = mailbox_file.tell() - len(line)
+                    next_record = True
+                    break
+                body.extend(line)
+            if not next_record:
+                if body:
+                    raw = bytes(selected_headers) + _header_separator(selected_headers) + bytes(body)
+                    yield SourceMessage(
+                        path=source.path,
+                        raw=raw,
+                        source_offset=delimiter_offset,
+                        bytes_done=source.byte_length,
+                        bytes_total=source.byte_length,
+                    )
+                return

@@ -8,12 +8,23 @@ creates integrity information that can be checked independently.
 Mail Archiver currently reads:
 
 * MBOX files;
+* Emacs RMAIL Babyl files, including extensionless files;
 * Maildir folders;
 * individual `.eml` files; and
 * complete Apple Mail `.emlx` files.
 
+Babyl files are recognized from their `BABYL OPTIONS:` header, not their
+filename. Both LF and CRLF RMAIL files are supported. Mail Archiver reads their
+original-header blocks and bodies without changing the source files. When an
+old record has no original-header block, its visible headers are used instead.
+RMAIL labels and redundant visible headers remain only in the source Babyl
+container and are not email content.
+
 Outlook PST and OST files, Gmail, Microsoft 365, and live IMAP accounts are
 planned but are not yet supported.
+The code has inactive integration points for Gmail, IMAP, Microsoft Exchange,
+and standard input containing NUL-separated messages; these are not CLI ingest
+modes yet.
 
 ## Before you begin
 
@@ -76,11 +87,14 @@ make run ARGS='ingest --owner-names-file owner-names.txt --clamav "/path/to/sour
 
 Mail Archiver:
 
-1. finds recognized source files and totals their sizes;
+1. loads the frozen plug-in registries, captures and deduplicates recognized
+   source containers, totals their available sizes, and prints every
+   unrecognized file and reason;
 2. checks that ClamAV is ready before starting the mail workers;
 3. reads, parses, and scans messages;
 4. stores one canonical copy of each message;
-5. records every source file and message observation in the private catalog;
+5. records every source container, typed source-integrity check, and message
+   observation in the private catalog;
 6. updates the BagIt, Mailbag, and message-integrity information; and
 7. prints a summary by year when ingest finishes.
 
@@ -90,10 +104,26 @@ stored once, but every source location is remembered. Infected messages are
 retained in the quarantine MBOX rather than silently discarded. Apple
 `X-Apple-Auto-Saved` messages are recorded but are not copied into the
 canonical mailboxes.
+Exact empty Eudora MBCP metadata stubs are likewise recorded but not copied.
+Legacy `From XXX` status wrappers are unwrapped and their nested email is
+archived with the wrapper's source location retained.
 
-The progress display shows overall bytes and files, processed messages,
-estimated time remaining, and each active worker. Publication to the canonical
-MBOX files and catalog remains single-writer.
+Mail Archiver compares a valid `Date:` with a trimmed median of all valid
+`Received:` dates after normalizing them to UTC. If they differ by more than
+two days, the median controls catalog date and year routing. The original
+header and message bytes remain unchanged. The graphical viewer identifies
+these messages with a banner and a subtle red background.
+
+If you know the first plausible year for an archive, add
+`--earliest-year YEAR` to `ingest`. The default is 1900. For an archive whose
+email history begins in 1983, use `--earliest-year 1983`; earlier `Date:` and
+`Received:` values are rejected and the remaining source, stream, or path-year
+fallbacks apply without rewriting the message.
+
+The progress display shows overall bytes or completed unknown-size containers,
+processed messages, estimated time remaining, provider phases, and each active
+worker. Publication to the canonical MBOX files and catalog remains
+single-writer.
 
 ### Stop and continue safely
 
@@ -101,9 +131,16 @@ Press Control-C once for a controlled stop. Mail Archiver closes its files,
 commits completed messages, writes an archive checkpoint, and prints a summary.
 
 It is safe to run the same ingest command again. An unchanged source file is
-verified by its complete-file hash and skipped. A safely appended MBOX can
+verified by its source plug-in's complete-file control and skipped; its path
+and reason are printed. A safely appended MBOX can
 resume at its append boundary. Other changes cause the source file to be read
 again; already archived messages remain deduplicated.
+
+Source and physical file readers are manifest-loaded generators. Additional
+plug-ins can be loaded with a repeatable `--plugin-dir DIRECTORY` option. That
+directory contains executable Python, so use this option only with code you
+trust. Gmail, IMAP, O365, Microsoft Exchange, and NUL-delimited stdin are
+currently reserved names rather than working adapters. See `doc/PLUGINS.md`.
 
 Do not edit files under `data/mbox/` while ingest is running.
 

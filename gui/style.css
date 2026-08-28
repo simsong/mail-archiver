@@ -82,6 +82,8 @@ button { min-height: 28px; }
 .message-actions { position: sticky; top: 0; z-index: 3; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, Canvas 92%, transparent); backdrop-filter: blur(16px); }
 #part-select { min-width: 180px; margin-right: auto; }
 #message-well { padding: 22px 30px 40px; min-height: 100%; }
+#message-well.computed-date { background: color-mix(in srgb, #d44 5%, Canvas); }
+.computed-date-banner { margin: -22px -30px 20px; padding: 9px 30px; border-bottom: 1px solid color-mix(in srgb, #b22 35%, transparent); color: color-mix(in srgb, #900 82%, CanvasText); background: color-mix(in srgb, #d44 13%, Canvas); font-weight: 650; }
 .message-summary { display: flex; align-items: flex-start; gap: 24px; }
 .message-heading { flex: 1; min-width: 0; user-select: text; cursor: text; }
 #message-subject { margin: 0 0 15px; font-size: 22px; line-height: 1.25; }

@@ -168,7 +168,7 @@ def mailbox_tree(archive: Path, show_volumes: bool = False) -> list[MailboxTreeN
                 source_kind=source_kind,
             )
             for identity, metadata, path, source_kind in database.execute(
-                "SELECT source_volumes.identity_json, source_volumes.metadata_json, source_files.source_path, "
+                "SELECT source_volumes.identity_json, source_volumes.metadata_json, source_files.hierarchy_path, "
                 "source_files.source_kind FROM source_files JOIN source_volumes USING (source_volume_pk) "
                 "WHERE EXISTS (SELECT 1 FROM observations INDEXED BY observations_source_file_offset "
                 "WHERE observations.source_file_pk = source_files.source_file_pk AND observations.message_pk IS NOT NULL) "
@@ -242,13 +242,16 @@ def _collapsible_single_message_folder(rows: list[SourceTreeFile], prefix: tuple
 def _count(database: sqlite3.Connection, selection: MailboxSelection) -> int:
     clauses = ["observations.message_pk IS NOT NULL"]
     parameters: list[str] = []
-    index = "source_files_path_volume"
+    index = "source_files_hierarchy_volume"
     if selection.volume_identity is not None:
         clauses.append("source_volumes.identity_json = ?")
         parameters.append(selection.volume_identity)
-        index = "source_files_volume_path"
+        index = "source_files_volume_hierarchy"
     if selection.path:
-        clauses.append("(source_files.source_path = ? OR (source_files.source_path >= ? AND source_files.source_path < ?))")
+        clauses.append(
+            "(source_files.hierarchy_path = ? OR "
+            "(source_files.hierarchy_path >= ? AND source_files.hierarchy_path < ?))"
+        )
         parameters.extend((selection.path, selection.path + "/", selection.path + "0"))
     row = database.execute(
         "SELECT count(DISTINCT observations.message_pk) FROM source_files INDEXED BY " + index + " "

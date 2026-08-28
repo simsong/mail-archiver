@@ -6,6 +6,7 @@ import queue
 import re
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ from mailarchiver.__main__ import (
     overall_progress,
     run_file_workers,
 )
+from mailarchiver.plugin_api import ProgressEvent
 from mailarchiver.sources import SourceInventory
 
 
@@ -67,6 +69,20 @@ def test_overall_progress_reports_finalizing_before_last_checkpoint() -> None:
     )
 
     assert overall_progress(state, now=20).eta == "finalizing"
+
+
+def test_unknown_byte_inventory_uses_completed_containers_for_percentage() -> None:
+    """Requirement: provider work with no byte estimate cannot display 100% before completion."""
+    state = ProgressState(
+        started_at=datetime.now(timezone.utc),
+        started_monotonic=0,
+        files_processed=1,
+        source_files_total=4,
+        source_bytes_total=0,
+        inventory_complete=True,
+    )
+
+    assert overall_progress(state, now=20).percent == 25
 
 
 def test_worker_file_progress_does_not_regress_during_post_ingest_hashing() -> None:
@@ -121,6 +137,62 @@ def test_redirected_overall_progress_has_no_terminal_controls(capsys: pytest.Cap
     assert "\x1b" not in output
 
 
+def test_framework_prints_each_skipped_file_and_reason_once(capsys: pytest.CaptureFixture[str]) -> None:
+    """Requirement: importer diagnostics identify every unrecognized input without duplicate-pass output."""
+    progress = ProgressReporter()
+    progress.tty = False
+    skipped = Path("/source/ignored.plist")
+
+    progress.record_skipped_file(skipped, "no file parser recognized it")
+    progress.finish_inventory(SourceInventory(file_count=0, byte_count=0, skipped_file_count=1))
+    progress.finish("completed")
+
+    output = capsys.readouterr().err
+    assert output.count(f"skipped input: {skipped} (no file parser recognized it)") == 1
+    assert "skipped_files=1" in output
+
+
+def test_unchanged_integrity_skip_is_rendered_by_framework(capsys: pytest.CaptureFixture[str]) -> None:
+    """Requirement: worker plug-ins queue skip evidence; only the status framework prints it."""
+    progress = ProgressReporter()
+    progress.tty = False
+    source = Path("/source/archive.mbox")
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="mailfile") as pool:
+        pool.submit(progress.record_unchanged_source, source, "complete SHA-256 matched").result(timeout=5)
+
+    progress.finish("completed")
+
+    output = capsys.readouterr().err
+    assert output.count(f"skipped unchanged: {source} (complete SHA-256 matched)") == 1
+    assert "unchanged_sources=1" in output
+
+
+def test_framework_renders_provider_phase_and_message_progress() -> None:
+    """Requirement: plug-in status is typed data rendered only by the framework."""
+    progress = ProgressReporter()
+    event = ProgressEvent(
+        work_id="account:inbox",
+        phase="fetching\nprovider messages",
+        completed=25,
+        total=100,
+        unit="messages",
+    )
+
+    producer = threading.Thread(
+        name="mailfile_0",
+        target=progress.record_plugin_event,
+        args=(event, Path("Provider Inbox")),
+    )
+    producer.start()
+    producer.join()
+    progress.refresh()
+
+    worker = progress.state.workers[0]
+    assert worker.phase == "fetching provider messages"
+    assert (worker.activity_done, worker.activity_total, worker.activity_unit) == (25, 100, "messages")
+    assert "25/100 messages" in progress._worker_line(worker, 120)
+
+
 def test_clamav_preflight_is_repeated_before_workers_start(capsys: pytest.CaptureFixture[str]) -> None:
     """Requirement: the main status driver reports ClamAV readiness before worker activity."""
     progress = ProgressReporter(worker_count=2)
@@ -171,6 +243,39 @@ def test_file_worker_pool_runs_no_more_than_requested_mailfiles() -> None:
 
     assert stop.is_set() is False
     assert sorted([*first_wave, *(started.get_nowait() for _ in range(3))]) == list(range(6))
+
+
+def test_framework_enforces_source_plugin_concurrency_by_key() -> None:
+    """Requirement: source plug-ins declare limits while the framework owns thread scheduling."""
+    stop = threading.Event()
+    active: Counter[str] = Counter()
+    maximum: Counter[str] = Counter()
+    maximum_total = 0
+    lock = threading.Lock()
+
+    def process(item: tuple[str, int]) -> None:
+        nonlocal maximum_total
+        key, _number = item
+        with lock:
+            active[key] += 1
+            maximum[key] = max(maximum[key], active[key])
+            maximum_total = max(maximum_total, sum(active.values()))
+        time.sleep(0.02)
+        with lock:
+            active[key] -= 1
+
+    items = [("account-a", number) for number in range(4)] + [("account-b", number) for number in range(4)]
+    run_file_workers(
+        items,
+        4,
+        process,
+        stop,
+        lambda: None,
+        concurrency=lambda item: (item[0], 1 if item[0] == "account-a" else 2),
+    )
+
+    assert maximum == Counter({"account-b": 2, "account-a": 1})
+    assert maximum_total == 3
 
 
 def test_numbered_worker_rows_are_main_rendered_without_wrapping(capsys: pytest.CaptureFixture[str]) -> None:

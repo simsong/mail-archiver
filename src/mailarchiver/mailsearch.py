@@ -172,8 +172,8 @@ def _search_statement(
                 parameters.append(selection.volume_identity)
             if selection.path:
                 selected.append(
-                    "(source_files.source_path = ? OR "
-                    "(source_files.source_path >= ? AND source_files.source_path < ?))"
+                    "(source_files.hierarchy_path = ? OR "
+                    "(source_files.hierarchy_path >= ? AND source_files.hierarchy_path < ?))"
                 )
                 parameters.extend((selection.path, selection.path + "/", selection.path + "0"))
             alternatives.append("(" + (" AND ".join(selected) if selected else "1") + ")")

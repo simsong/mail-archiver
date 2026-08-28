@@ -25,7 +25,12 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mailarchiver = ["*.swift", "sql/*.sql"]
+mailarchiver = [
+    "*.swift",
+    "sql/*.sql",
+    "plugins/sources/*/plugin.toml",
+    "plugins/files/*/plugin.toml",
+]
 
 [dependency-groups]
 dev = [

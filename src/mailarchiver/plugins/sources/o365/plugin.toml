@@ -1,0 +1,7 @@
+api_version = 1
+plugin_type = "source"
+kind = "o365"
+name = "Microsoft 365 (reserved)"
+implementation_version = "0"
+priority = 220
+entrypoint = "mailarchiver.source_stubs:O365SourcePlugin"

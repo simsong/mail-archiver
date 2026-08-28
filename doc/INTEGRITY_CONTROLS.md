@@ -1,4 +1,18 @@
-# BagIt and Mailbag interoperability
+# Archive integrity controls: BagIt and Mailbag interoperability
+
+## Scope
+
+This document defines integrity controls for the canonical message archive. It
+does not define how an input source proves that a local file, Gmail account,
+IMAP mailbox, O365 account, or stream is unchanged or safely resumable. Those
+source-specific controls belong to the source plug-in contract described in
+[PLUGINS.md](PLUGINS.md).
+
+The per-message raw SHA-256 is the bridge between the layers: it is recorded
+with the source observation when a mail object is ingested and declared as
+`h2` for the recovered canonical RFC 5322 message. Source-container evidence
+and archive checkpoint fixity remain distinct even when both happen to use
+SHA-256.
 
 ## Status
 

@@ -117,6 +117,8 @@
     const rich = rows()[0];
     rich.click();
     await waitFor(() => document.getElementById("message-subject").textContent === "Rich UI message", "message viewer opens");
+    assert(!document.getElementById("computed-date-banner").hidden, "computed-date warning banner displayed");
+    assert(document.getElementById("message-well").classList.contains("computed-date"), "computed-date message tint applied");
     assert(document.getElementById("message-headers").textContent.includes("curator@example.net"), "message headers displayed");
     assert(document.getElementById("message-locations").textContent.includes("Source path"), "source provenance displayed");
     assert(document.getElementById("message-locations").textContent.includes("Archive mailbox"), "archive provenance displayed");

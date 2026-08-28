@@ -41,7 +41,11 @@ CREATE TABLE source_volumes (
 CREATE TABLE source_files (
     source_file_pk INTEGER PRIMARY KEY,
     source_volume_pk INTEGER NOT NULL REFERENCES source_volumes(source_volume_pk),
+    source_plugin TEXT NOT NULL DEFAULT 'file-folder',
+    work_id TEXT,
     source_path TEXT NOT NULL,
+    hierarchy_path TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
     path_kind TEXT NOT NULL,
     source_kind TEXT NOT NULL,
     modified_at_ns INTEGER,
@@ -52,12 +56,39 @@ CREATE TABLE source_files (
     UNIQUE(source_volume_pk, source_path)
 );
 
+CREATE TABLE source_integrity_checks (
+    integrity_check_pk INTEGER PRIMARY KEY,
+    source_file_pk INTEGER NOT NULL REFERENCES source_files(source_file_pk),
+    run_pk INTEGER NOT NULL REFERENCES ingest_runs(run_pk),
+    control_id TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('read', 'skip', 'resume')),
+    resume_cursor TEXT,
+    reason TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE(run_pk, source_file_pk, control_id)
+);
+
+CREATE TABLE source_integrity_evidence (
+    integrity_check_pk INTEGER NOT NULL REFERENCES source_integrity_checks(integrity_check_pk),
+    ordinal INTEGER NOT NULL,
+    control_id TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    evidence_kind TEXT NOT NULL,
+    algorithm TEXT,
+    value TEXT NOT NULL,
+    byte_length INTEGER,
+    PRIMARY KEY (integrity_check_pk, ordinal)
+);
+
 CREATE TABLE observations (
     observation_pk INTEGER PRIMARY KEY,
     run_pk INTEGER NOT NULL REFERENCES ingest_runs(run_pk),
     message_pk INTEGER REFERENCES messages(message_pk),
     source_file_pk INTEGER NOT NULL REFERENCES source_files(source_file_pk),
-    source_offset INTEGER NOT NULL DEFAULT 0,
+    source_offset INTEGER,
+    source_cursor TEXT,
     raw_sha256 TEXT NOT NULL DEFAULT '',
     semantic_sha256 TEXT,
     disposition TEXT NOT NULL,
@@ -105,8 +136,14 @@ CREATE INDEX locations_generation_pk ON locations(generation_pk);
 CREATE INDEX locations_generation_offset ON locations(generation_pk, byte_offset, byte_length);
 CREATE INDEX source_files_volume_path ON source_files(source_volume_pk, source_path);
 CREATE INDEX source_files_path_volume ON source_files(source_path, source_volume_pk);
+CREATE INDEX source_files_volume_hierarchy ON source_files(source_volume_pk, hierarchy_path);
+CREATE INDEX source_files_hierarchy_volume ON source_files(hierarchy_path, source_volume_pk);
+CREATE INDEX source_integrity_latest ON source_integrity_checks(
+    source_file_pk, control_id, integrity_check_pk DESC
+) WHERE completed_at IS NOT NULL;
 CREATE INDEX observations_message_pk ON observations(message_pk);
 CREATE INDEX observations_raw_sha256 ON observations(raw_sha256);
 CREATE INDEX observations_semantic_sha256 ON observations(semantic_sha256);
 CREATE INDEX observations_source_file_offset ON observations(source_file_pk, source_offset DESC);
+CREATE INDEX observations_source_file_cursor ON observations(source_file_pk, source_cursor);
 CREATE INDEX observations_run_observation ON observations(run_pk, observation_pk);

@@ -44,7 +44,7 @@ async function initialize() {
   for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "load-more",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
-    "message-content", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
+    "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
     "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "error"]) {
     elements[id] = byId(id);
   }
@@ -641,6 +641,9 @@ async function selectMessage(messagePk) {
   selectedRow?.setAttribute("aria-selected", "true");
   elements["result-list"].setAttribute("aria-activedescendant", `message-result-${messagePk}`);
   elements["message-content"].hidden = false;
+  const computedDate = view.date_source === "received-median";
+  elements["computed-date-banner"].hidden = !computedDate;
+  elements["message-well"].classList.toggle("computed-date", computedDate);
   elements["message-subject"].textContent = view.subject;
   elements["message-file-name"].textContent = state.dragExports.get(messagePk)?.filename || "Message.eml";
   elements["message-headers"].replaceChildren(...headerNodes(view.headers));
@@ -657,7 +660,7 @@ function renderLocations(view) {
   if (view.archive_path) locations.push(["Archive mailbox", view.archive_path]);
   for (const source of view.source_locations) {
     locations.push(["Source volume", source.volume]);
-    locations.push(["Source path", `${source.path}:${source.offset}`]);
+    locations.push(["Source path", source.offset === null ? source.path : `${source.path}:${source.offset}`]);
   }
   elements["provenance-section"].hidden = locations.length === 0;
   elements["message-locations"].replaceChildren(...locations.flatMap(([label, value]) => {
