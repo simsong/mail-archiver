@@ -680,7 +680,9 @@ def ingest(args: argparse.Namespace) -> None:
                 write_bag_checkpoint(archive, catalog)
             raise
         if category in SEARCH_CATEGORIES:
-            index_message_safely(catalog, search, message_pk, raw, args.index_attachments)
+            index_message_safely(
+                catalog, search, message_pk, raw, args.index_attachments, date_utc=parsed.date_utc
+            )
         progress.record_disposition("archived")
         if category == "INFECTED":
             progress.record_disposition("infected")
@@ -1049,7 +1051,8 @@ def refresh_index(args: argparse.Namespace) -> None:
                         f"canonical MBOX/catalog count mismatch for {path.name}: {actual} records, {expected} catalogued"
                     )
             rows = catalog.execute(
-                "SELECT messages.sha256, mbox_generations.filename, locations.byte_offset, locations.byte_length "
+                "SELECT messages.sha256, messages.date_utc, mbox_generations.filename, "
+                "locations.byte_offset, locations.byte_length "
                 "FROM mbox_generations "
                 "CROSS JOIN locations ON locations.generation_pk = mbox_generations.generation_pk "
                 "JOIN messages ON messages.message_pk = locations.message_pk "
@@ -1057,7 +1060,7 @@ def refresh_index(args: argparse.Namespace) -> None:
                 SEARCH_CATEGORIES,
             )
             indexed = 0
-            for digest, filename, offset, length in rows:
+            for digest, date_utc, filename, offset, length in rows:
                 if QUARANTINE_MAILBOX.fullmatch(filename):
                     raise RuntimeError(f"searchable catalog message is stored in quarantine MBOX: {filename}")
                 raw = read_verified_location(
@@ -1065,7 +1068,7 @@ def refresh_index(args: argparse.Namespace) -> None:
                     MboxLocation(byte_offset=offset, byte_length=length),
                     digest,
                 )
-                index_message(search, raw, args.index_attachments)
+                index_message(search, raw, args.index_attachments, date_utc=date_utc)
                 indexed += 1
             if indexed != int(expected_row[0]):
                 raise RuntimeError(

@@ -131,6 +131,12 @@ def test_packaged_search_schema_creates_current_disposable_index(tmp_path: Path)
         } <= tables
         columns = {row[1] for row in search.execute("PRAGMA table_info(message_metadata)")}
         assert {"message_fts_rowid", "attachment_fts_rowid"} <= columns
+        suggestion_columns = {row[1] for row in search.execute("PRAGMA table_info(address_suggestions)")}
+        mapping_columns = {row[1] for row in search.execute("PRAGMA table_info(message_address_suggestions)")}
+        indexes = {row[0] for row in search.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        assert "last_seen" in suggestion_columns
+        assert "seen_at" in mapping_columns
+        assert "message_address_suggestions_seen" in indexes
     finally:
         search.close()
 

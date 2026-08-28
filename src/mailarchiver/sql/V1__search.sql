@@ -27,12 +27,14 @@ CREATE TABLE IF NOT EXISTS address_suggestions (
     suggestion_pk INTEGER PRIMARY KEY,
     address TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
-    message_count INTEGER NOT NULL CHECK (message_count >= 0)
+    message_count INTEGER NOT NULL CHECK (message_count >= 0),
+    last_seen TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS message_address_suggestions (
     sha256 TEXT NOT NULL REFERENCES message_metadata(sha256) ON DELETE CASCADE,
     suggestion_pk INTEGER NOT NULL REFERENCES address_suggestions(suggestion_pk),
+    seen_at TEXT NOT NULL,
     PRIMARY KEY(sha256, suggestion_pk)
 );
 
@@ -53,3 +55,5 @@ CREATE TRIGGER IF NOT EXISTS address_suggestions_delete AFTER DELETE ON address_
 END;
 
 CREATE INDEX IF NOT EXISTS message_attachments_mime_type ON message_attachments(mime_type);
+CREATE INDEX IF NOT EXISTS message_address_suggestions_seen
+ON message_address_suggestions(suggestion_pk, seen_at DESC);

@@ -215,13 +215,13 @@ def test_gui_suggestions_use_trigram_substrings_and_deduplicated_message_counts(
                 f"Subject: {subject}\n\nbody\n",
             )).encode()
             raw_messages.append(raw)
-            index_message(search, raw, False)
+            index_message(search, raw, False, date_utc=f"2024-01-0{number}T00:00:00+00:00")
             catalog.execute(
                 "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, "
                 "date_source, category) VALUES (?, ?, ?, ?, '2024-01-01T00:00:00+00:00', 'date', 'Archive')",
                 (f"suggestion-{number}@example", hashlib.sha256(raw).hexdigest(), sender, subject),
             )
-        index_message(search, raw_messages[0], False)
+        index_message(search, raw_messages[0], False, date_utc="2024-01-01T00:00:00+00:00")
         search.commit()
         catalog.commit()
     finally:
@@ -230,14 +230,37 @@ def test_gui_suggestions_use_trigram_substrings_and_deduplicated_message_counts(
 
     suggestions = search_suggestions(archive, "beth")
 
-    assert [(item.address, item.display_name, item.message_count) for item in suggestions.addresses] == [
-        ("beth@example.org", "Beth Rosenberg", 2)
+    assert [(item.address, item.display_name, item.message_count, item.last_seen) for item in suggestions.addresses] == [
+        ("beth@example.org", "Beth Rosenberg", 2, "2024-01-02T00:00:00+00:00")
     ]
     assert [(item.subject, item.message_count) for item in suggestions.subjects] == [
         ("Flight for ELISABETH", 1)
     ]
     assert search_suggestions(archive, "be").addresses == []
     assert searchable_message_count(archive) == 4
+
+
+def test_gui_address_suggestions_break_frequency_ties_by_recency(tmp_path: Path) -> None:
+    """Requirement: equally frequent address completions prefer the most recently seen address."""
+    archive = make_gui_archive(tmp_path)
+    search = create_search(archive / "search.sqlite3")
+    try:
+        index_message(
+            search, b"From: Older Match <older-match@example.org>\n\nbody", False,
+            date_utc="2024-01-01T00:00:00+00:00",
+        )
+        index_message(
+            search, b"From: Newer Match <newer-match@example.org>\n\nbody", False,
+            date_utc="2025-01-01T00:00:00+00:00",
+        )
+        search.commit()
+    finally:
+        search.close()
+
+    assert [item.address for item in search_suggestions(archive, "match").addresses] == [
+        "newer-match@example.org",
+        "older-match@example.org",
+    ]
 
 
 def test_gui_loads_indexed_previews_on_its_background_worker(tmp_path: Path) -> None:

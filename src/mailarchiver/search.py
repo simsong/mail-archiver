@@ -140,11 +140,13 @@ def delete_indexed_message(search: sqlite3.Connection, digest: str) -> None:
             "SELECT suggestion_pk FROM message_address_suggestions WHERE sha256 = ?", (digest,)
         )
     ]
-    search.executemany(
-        "UPDATE address_suggestions SET message_count = message_count - 1 WHERE suggestion_pk = ?",
-        ((suggestion_pk,) for suggestion_pk in suggestion_pks),
-    )
     search.execute("DELETE FROM message_address_suggestions WHERE sha256 = ?", (digest,))
+    search.executemany(
+        "UPDATE address_suggestions SET message_count = message_count - 1, "
+        "last_seen = COALESCE((SELECT max(seen_at) FROM message_address_suggestions "
+        "WHERE suggestion_pk = ?), '') WHERE suggestion_pk = ?",
+        ((suggestion_pk, suggestion_pk) for suggestion_pk in suggestion_pks),
+    )
     search.executemany(
         "DELETE FROM address_suggestions WHERE suggestion_pk = ? AND message_count = 0",
         ((suggestion_pk,) for suggestion_pk in suggestion_pks),
@@ -161,7 +163,9 @@ def delete_indexed_message(search: sqlite3.Connection, digest: str) -> None:
     search.execute("DELETE FROM message_metadata WHERE sha256 = ?", (digest,))
 
 
-def index_message(search: sqlite3.Connection, raw: bytes, index_attachments: bool) -> None:
+def index_message(
+    search: sqlite3.Connection, raw: bytes, index_attachments: bool, *, date_utc: str = ""
+) -> None:
     digest = hashlib.sha256(raw).hexdigest()
     message = BytesParser(policy=policy.compat32).parsebytes(raw)
     attachments = indexed_attachments(message)
@@ -188,25 +192,27 @@ def index_message(search: sqlite3.Connection, raw: bytes, index_attachments: boo
     )
     for identity in suggested_addresses(message):
         suggestion = search.execute(
-            "INSERT INTO address_suggestions(address, display_name, message_count) VALUES (?, ?, 1) "
-            "ON CONFLICT(address) DO UPDATE SET message_count = message_count + 1, display_name = CASE "
+            "INSERT INTO address_suggestions(address, display_name, message_count, last_seen) VALUES (?, ?, 1, ?) "
+            "ON CONFLICT(address) DO UPDATE SET message_count = message_count + 1, "
+            "last_seen = max(address_suggestions.last_seen, excluded.last_seen), display_name = CASE "
             "WHEN address_suggestions.display_name = '' THEN excluded.display_name "
             "ELSE address_suggestions.display_name END RETURNING suggestion_pk",
-            (identity.address, identity.display_name),
+            (identity.address, identity.display_name, date_utc),
         ).fetchone()
         assert suggestion is not None
         search.execute(
-            "INSERT INTO message_address_suggestions(sha256, suggestion_pk) VALUES (?, ?)",
-            (digest, suggestion[0]),
+            "INSERT INTO message_address_suggestions(sha256, suggestion_pk, seen_at) VALUES (?, ?, ?)",
+            (digest, suggestion[0], date_utc),
         )
 
 
 def index_message_safely(
-    catalog: sqlite3.Connection, search: sqlite3.Connection, message_pk: int, raw: bytes, index_attachments: bool
+    catalog: sqlite3.Connection, search: sqlite3.Connection, message_pk: int, raw: bytes,
+    index_attachments: bool, *, date_utc: str = ""
 ) -> None:
     """Index disposable content without allowing extraction failure to veto canonical mail."""
     try:
-        index_message(search, raw, index_attachments)
+        index_message(search, raw, index_attachments, date_utc=date_utc)
         search.commit()
     except Exception as error:
         search.rollback()
