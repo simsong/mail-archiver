@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Rank address completions by deduplicated message count and then by the most
+  recent matching message. Retain per-message suggestion dates so replacement
+  and index maintenance recalculate recency correctly, while preserving the
+  three-character threshold, 120 ms debounce, 20-result limit, and stale-query
+  suppression in the graphical interface.
 * Add read-only ingest for extensionless Emacs RMAIL Babyl files. Detection is
   based on the case-insensitive `BABYL OPTIONS:` header, and the streaming
   reader supports both LF and CRLF containers, falls back to visible headers
