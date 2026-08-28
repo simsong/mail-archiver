@@ -316,6 +316,11 @@ typed search service. Ordinary terms search `message_fts` by default; when the
 box is selected they search the union of `message_fts` and `attachment_fts`.
 Metadata selectors are unchanged.
 
+Search completion starts after three characters, waits 120 milliseconds after
+the latest keystroke, caps each address and subject group at 20 entries, and
+discards responses superseded by newer input. Address results rank by
+deduplicated message count and then last-seen date.
+
 The optional original-mailbox explorer is built from volume-relative
 `source_files.source_path` values. Pydantic node identifiers encode a normalized
 logical path and, only in explicit-volume mode, the stable source-volume
@@ -496,9 +501,10 @@ searchable headers and selected body text: `text/plain` first, otherwise rendere
 text-attachment content only when requested, allowing the GUI to include it
 without changing default body-search semantics. Binary attachment bytes are
 excluded. An external-content trigram FTS5 table covers unique normalized email
-addresses. Its aggregate source table retains one display name and a
-deduplicated message count, while a SHA-256 mapping table permits exact count
-updates and replacement. Display-name matches scan that bounded aggregate table;
+addresses. Its aggregate source table retains one display name, a deduplicated
+message count, and a last-seen date, while a SHA-256 mapping table retains the
+per-message date for exact count and recency updates and replacement.
+Display-name matches scan that bounded aggregate table;
 subject matches scan the canonical subject column rather than creating
 a second subject store. Ordinary `message_metadata.sha256` is the indexed lookup key for the
 corresponding FTS row IDs; updates and recovery delete FTS rows by row ID rather

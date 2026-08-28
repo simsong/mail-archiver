@@ -291,7 +291,8 @@ table also stores explicitly labeled non-email Google Chat identities.
 normal Sent and Archive message SHA-256, normalized headers, `text/plain` body text when present,
 otherwise rendered `text/html`, otherwise safe single-part message text.  It
 also maintains a replaceable trigram index for email-address substring
-completion; ordinary mapping rows provide deduplicated message counts. Display
+completion; ordinary mapping rows provide deduplicated message counts and
+last-seen dates. Display
 names are retained as suggestion metadata but are not trigram-indexed. Subject
 completion reads the canonical subject column and requires no second copy.
 It parses XML-looking content declared as `text/html` with the same forgiving HTML
@@ -358,8 +359,10 @@ the CLI selectors and ordinary ANDed terms; shell-style quotes group spaces,
 so `subject:"annual report"` is one selector while `subject:annual report`
 retains the CLI meaning of a subject selector plus a free-text term.  It loads
 the newest 100 results at a time without changing the CLI's ten-result default.
-After three characters, the GUI suggests matching addresses and subjects with
-deduplicated message counts. Email-address substrings use the disposable
+After three characters and a 120-millisecond debounce, the GUI suggests at most
+20 matching addresses and 20 matching subjects with deduplicated message
+counts. Stale responses are discarded. Addresses rank by message count, then
+most recent message date. Email-address substrings use the disposable
 trigram accelerator; display-name and subject substring matching do not. Selecting an
 address creates a removable filter whose menu scopes it to Any, From, To, Cc,
 or Bcc; recipient roles are the original RFC header roles retained at ingest.

@@ -54,6 +54,7 @@ class AddressSuggestion(BaseModel):
     address: str
     display_name: str
     message_count: int
+    last_seen: str
 
 
 class SubjectSuggestion(BaseModel):
@@ -175,9 +176,10 @@ def search_suggestions(archive: Path, query: str, limit: int = 20) -> SearchSugg
             "SELECT rowid FROM search.address_suggestion_fts WHERE address_suggestion_fts MATCH ? "
             "UNION SELECT suggestion_pk FROM search.address_suggestions "
             "WHERE instr(lower(display_name), lower(?)) > 0) "
-            "SELECT suggestions.address, suggestions.display_name, suggestions.message_count "
+            "SELECT suggestions.address, suggestions.display_name, suggestions.message_count, suggestions.last_seen "
             "FROM matching JOIN search.address_suggestions suggestions USING (suggestion_pk) "
-            "ORDER BY suggestions.message_count DESC, lower(suggestions.address) LIMIT ?",
+            "ORDER BY suggestions.message_count DESC, suggestions.last_seen DESC, "
+            "lower(suggestions.address) LIMIT ?",
             (match, value, limit),
         )
         subject_rows = database.execute(
@@ -189,8 +191,8 @@ def search_suggestions(archive: Path, query: str, limit: int = 20) -> SearchSugg
         return SearchSuggestions(
             query=value,
             addresses=[
-                AddressSuggestion(address=address, display_name=name, message_count=count)
-                for address, name, count in address_rows
+                AddressSuggestion(address=address, display_name=name, message_count=count, last_seen=last_seen)
+                for address, name, count, last_seen in address_rows
             ],
             subjects=[SubjectSuggestion(subject=subject, message_count=count) for subject, count in subject_rows],
         )

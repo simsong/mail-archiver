@@ -149,7 +149,7 @@ def _require_search_layout(database: sqlite3.Connection, tables: set[str]) -> No
             "message_address_suggestions",
             "address_suggestion_fts",
         ),
-        ("message_attachments_mime_type",),
+        ("message_attachments_mime_type", "message_address_suggestions_seen"),
         (
             ("message_fts", ("sha256", "content")),
             ("attachment_fts", ("sha256", "content")),
@@ -158,8 +158,8 @@ def _require_search_layout(database: sqlite3.Connection, tables: set[str]) -> No
                 ("sha256", "message_fts_rowid", "attachment_fts_rowid", "attachment_count", "preview"),
             ),
             ("message_attachments", ("sha256", "attachment_ordinal", "part_id", "filename", "mime_type")),
-            ("address_suggestions", ("suggestion_pk", "address", "display_name", "message_count")),
-            ("message_address_suggestions", ("sha256", "suggestion_pk")),
+            ("address_suggestions", ("suggestion_pk", "address", "display_name", "message_count", "last_seen")),
+            ("message_address_suggestions", ("sha256", "suggestion_pk", "seen_at")),
         ),
     )
 

@@ -31,6 +31,9 @@ const state = {
 const elements = {};
 const byId = id => document.getElementById(id);
 let initialized = false;
+const SUGGESTION_MINIMUM = 3;
+const SUGGESTION_DELAY_MS = 120;
+const SUGGESTION_LIMIT = 20;
 
 window.addEventListener("pywebviewready", initialize);
 window.setTimeout(() => {
@@ -381,13 +384,13 @@ function effectiveQuery() {
 function scheduleSuggestions() {
   window.clearTimeout(state.suggestionTimer);
   const query = elements.search.value.trim();
-  if (query.length < 3) { closeSuggestions(); return; }
+  if (query.length < SUGGESTION_MINIMUM) { closeSuggestions(); return; }
   const request = ++state.suggestionRequest;
-  state.suggestionTimer = window.setTimeout(() => loadSuggestions(query, request), 120);
+  state.suggestionTimer = window.setTimeout(() => loadSuggestions(query, request), SUGGESTION_DELAY_MS);
 }
 
 async function loadSuggestions(query, request) {
-  const suggestions = await call(() => window.pywebview.api.suggestions(query, 20));
+  const suggestions = await call(() => window.pywebview.api.suggestions(query, SUGGESTION_LIMIT));
   if (!suggestions || request !== state.suggestionRequest || elements.search.value.trim() !== query) return;
   renderSuggestions(suggestions);
 }
