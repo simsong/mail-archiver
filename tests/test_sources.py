@@ -237,15 +237,19 @@ def test_rmail_babyl_stream_preserves_messages(tmp_path: Path, newline: bytes) -
         + newline + b"\x1f"
     )
 
-    discovered = list(source_files(path))
-    messages = list(source_messages(discovered[0]))
+    plugin = load_plugins().source("file-folder").implementation
+    discovered = list(plugin.discover(SourceSpec(locator=str(path))))
+    containers = [item for item in discovered if isinstance(item, MailContainer)]
+    assert len(containers) == 1
+    messages = list(plugin.messages(containers[0], None))
     first_offset = path.read_bytes().index(b"\x1f\x0c")
     second_offset = path.read_bytes().index(b"\x1f\x0c", first_offset + 2)
 
-    assert discovered[0].kind == "babyl"
+    assert containers[0].parser_kind == "babyl"
+    assert all(isinstance(message, MailObject) for message in messages)
     assert [message.raw for message in messages] == [first, second]
-    assert [message.source_offset for message in messages] == [first_offset, second_offset]
-    assert messages[-1].bytes_done == path.stat().st_size
+    assert [message.cursor for message in messages] == [str(first_offset), str(second_offset)]
+    assert messages[-1].completed_bytes == path.stat().st_size
     assert path.read_bytes().startswith(b"Babyl Options:" + newline)
 
 
