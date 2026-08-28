@@ -94,8 +94,17 @@ mail-archiver/
     scanner.py          on-demand ClamAV lifecycle and scan client
     standalone_verify.py installed source-independent verifier
   gui/                  pywebview HTML, CSS, and JavaScript assets
+  scripts/data_quality/ read-only forensic audit and evidence tools
   tests/
 ```
+
+The data-quality scripts reproduce the investigation that motivated the date,
+Babyl, MBCP, and `From XXX` rules. Makefile targets require explicit archive
+and source paths and write private derived evidence under ignored `.tmp/` by
+default. The scripts open the archive catalog read-only, verify bytes retrieved
+from canonical MBOX locations, leave all source and archive files unchanged,
+and refuse to replace existing evidence files. The generated MBOX, CSV, and
+JSON files are investigation artifacts, not repository fixtures.
 
 ## Current acceptance implementation
 

@@ -54,6 +54,10 @@ integrity boundaries, plus the work required by real Gmail, O365, IMAP, and
 stream adapters.
 See [release notes](doc/RELEASE_NOTES.md) for changes not yet included in a
 release.
+The [data-quality audit](doc/DATA_QUALITY_AUDIT.md) documents the read-only
+diagnostic scripts used to investigate implausible dates, missing senders, and
+previously unsupported Babyl sources. Its generated mail and metadata evidence
+is private and deliberately excluded from Git.
 The [current source-code audit](doc/source-code-audit.md) distinguishes completed
 tightening from the remaining architectural gaps.
 The [competitive analysis](doc/competitive_analysis.md) explains how this

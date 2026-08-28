@@ -98,6 +98,12 @@ The archive lives on the encrypted laptop filesystem.  BorgBackup and
 Backblaze provide independent backup; archive-internal encryption is not a
 requirement.
 
+Read-only data-quality audit tools may create derived MBOX, CSV, and JSON
+evidence from a source tree and canonical archive. Those outputs contain
+private message content and metadata, must default to an ignored temporary
+directory, and must never be committed. The tools must refuse to overwrite
+existing evidence and must not modify source mail or the canonical archive.
+
 ## Deduplication and provenance
 
 * A duplicate is only a message with both the same normalized `Message-ID`
