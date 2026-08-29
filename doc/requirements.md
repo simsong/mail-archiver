@@ -125,7 +125,13 @@ requirement.
   foreground `clamd` on the main ingest thread when the configured local socket
   is not healthy, waits for a successful health probe before starting mailfile
   workers, reuses a healthy existing daemon without stopping it, and never
-  enables on-access or scheduled scanning.
+  enables on-access or scheduled scanning. A daemon started by mailarchiver
+  must capture its output in a verified, mode-`0600` log in a unique
+  mode-`0700` per-run directory and remove the installed configuration's
+  `LogFile`, `LogSyslog`, and `PidFile`; the owned foreground subprocess needs
+  no PID file. It must also replace `LocalSocket` with a unique short socket
+  owned by that run, without unlinking the configured socket. The private files
+  are removed after the daemon stops.
 * `ingest --workers N` controls the number of source mailfiles ingested
   simultaneously. Its default is the detected CPU count capped at eight, and
   `N` must be positive. Each worker reads and parses its mailfile and submits
@@ -432,8 +438,10 @@ No source mailbox is modified by this program.
 The complete current catalog DDL is the packaged `sql/V1__archive.sql` resource
 and is created only for a fresh archive. An unversioned catalog or any version
 other than V1 is rejected rather than migrated. The separate disposable search
-database likewise has exactly one packaged `sql/V1__search.sql`; an obsolete
-search database is rebuilt, not migrated in place. A fresh catalog is also
+database likewise has exactly one packaged `sql/V1__search.sql`; before ingest
+workers start, an obsolete search database is rebuilt from catalogued canonical
+MBOX into a temporary file and atomically replaced, not migrated in place. A
+failed rebuild preserves the prior database. A fresh catalog is also
 refused beside existing canonical MBOX or `.mbox.integrity` output because that
 would defeat deduplication. Those outputs are detected in `data/mbox/` and
 `integrity/`; unsupported root-level legacy output is never imported.

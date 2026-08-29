@@ -6,6 +6,8 @@ import queue
 import re
 import threading
 import time
+import traceback
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -171,6 +173,22 @@ def test_file_worker_pool_runs_no_more_than_requested_mailfiles() -> None:
 
     assert stop.is_set() is False
     assert sorted([*first_wave, *(started.get_nowait() for _ in range(3))]) == list(range(6))
+
+
+def test_file_worker_pool_preserves_deferred_discovery_traceback() -> None:
+    """Regression: a second-pass discovery error identifies its original failure site."""
+    stop = threading.Event()
+
+    def failing_discovery() -> Iterable[int]:
+        yield 1
+        raise PermissionError("source became unreadable")
+
+    with pytest.raises(PermissionError, match="source became unreadable") as raised:
+        run_file_workers(failing_discovery(), 1, lambda _item: None, stop, lambda: None)
+
+    frames = traceback.extract_tb(raised.value.__traceback__)
+    assert any(frame.name == "failing_discovery" for frame in frames)
+    assert stop.is_set()
 
 
 def test_numbered_worker_rows_are_main_rendered_without_wrapping(capsys: pytest.CaptureFixture[str]) -> None:

@@ -12,6 +12,10 @@ ARCHIVE_SCHEMA = "V1__archive.sql"
 SEARCH_SCHEMA = "V1__search.sql"
 
 
+class UnsupportedSearchSchemaError(RuntimeError):
+    """The disposable search database must be rebuilt from canonical mail."""
+
+
 def _schema(name: str) -> str:
     return resources.files("mailarchiver").joinpath("sql", name).read_text(encoding="utf-8")
 
@@ -138,8 +142,11 @@ def create_search(path: Path, *, check_same_thread: bool = True) -> sqlite3.Conn
     try:
         tables = _tables(database)
         if tables:
-            _require_version(database, tables, SEARCH_SCHEMA_VERSION, "search")
-            _require_search_layout(database, tables)
+            try:
+                _require_version(database, tables, SEARCH_SCHEMA_VERSION, "search")
+                _require_search_layout(database, tables)
+            except RuntimeError as error:
+                raise UnsupportedSearchSchemaError(str(error)) from error
         database.executescript(_schema(SEARCH_SCHEMA))
         return database
     except BaseException:

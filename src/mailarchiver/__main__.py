@@ -18,6 +18,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
+from types import TracebackType
 from typing import Literal, TypeVar
 
 from pydantic import BaseModel, Field
@@ -25,7 +26,13 @@ from tabulate import tabulate
 
 from .archive_path import add_archive_argument, require_archive
 from .bagit import initialize_bag, write_bag_checkpoint
-from .catalog import address_pk, create_catalog, create_search, owner_tokens
+from .catalog import (
+    UnsupportedSearchSchemaError,
+    address_pk,
+    create_catalog,
+    create_search,
+    owner_tokens,
+)
 from .layout import mbox_directory, mbox_path
 from .message import ParsedMessage, parse_message
 from .mbox import (
@@ -475,7 +482,7 @@ def run_file_workers(
     pool = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="mailfile")
     pending: set[Future[None]] = set()
     exhausted = False
-    discovery_error: BaseException | None = None
+    discovery_error: tuple[BaseException, TracebackType | None] | None = None
     try:
         while pending or not exhausted:
             if stop.is_set():
@@ -486,7 +493,7 @@ def run_file_workers(
                 except StopIteration:
                     exhausted = True
                 except BaseException as error:
-                    discovery_error = error
+                    discovery_error = (error, error.__traceback__)
                     exhausted = True
                 else:
                     pending.add(pool.submit(process, item))
@@ -501,7 +508,8 @@ def run_file_workers(
             for future in completed:
                 future.result()
         if discovery_error is not None:
-            raise discovery_error
+            error, traceback = discovery_error
+            raise error.with_traceback(traceback)
     except BaseException:
         stop.set()
         for future in pending:
@@ -510,6 +518,34 @@ def run_file_workers(
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
         status_driver()
+
+
+def open_ingest_search(
+    archive: Path,
+    catalog: sqlite3.Connection,
+    index_attachments: bool,
+) -> tuple[sqlite3.Connection, PublicationRecovery]:
+    """Open the disposable index, rebuilding an obsolete layout before ingest."""
+    path = archive / "search.sqlite3"
+    try:
+        search = create_search(path, check_same_thread=False)
+    except UnsupportedSearchSchemaError as error:
+        print(f"rebuilding obsolete search index: {error}", file=sys.stderr)
+        recovery_path = archive / "search.sqlite3.recovery.tmp"
+        recovery_path.unlink(missing_ok=True)
+        recovery_search = create_search(recovery_path)
+        try:
+            recovery = recover_publication(archive, catalog, recovery_search)
+        finally:
+            recovery_search.close()
+            recovery_path.unlink(missing_ok=True)
+        rebuild_search_index(archive, index_attachments)
+        return create_search(path, check_same_thread=False), recovery
+    try:
+        return search, recover_publication(archive, catalog, search)
+    except BaseException:
+        search.close()
+        raise
 
 
 def ingest(args: argparse.Namespace) -> None:
@@ -527,9 +563,12 @@ def ingest(args: argparse.Namespace) -> None:
         raise RuntimeError("cannot create a fresh catalog beside existing archive output; use a new empty archive directory")
     initialize_bag(archive)
     catalog = create_catalog(catalog_path, check_same_thread=False)
-    search = create_search(archive / "search.sqlite3", check_same_thread=False)
     install_archive_verifier(archive)
-    recovery = recover_publication(archive, catalog, search)
+    try:
+        search, recovery = open_ingest_search(archive, catalog, args.index_attachments)
+    except BaseException:
+        catalog.close()
+        raise
     if recovery is not PublicationRecovery.NONE:
         write_bag_checkpoint(archive, catalog)
         print(f"recovered: pending message publication {recovery.value}", file=sys.stderr)
@@ -1008,8 +1047,8 @@ def report(args: argparse.Namespace) -> None:
     print_report(Path(args.archive), report_years(args.year), args.top)
 
 
-def refresh_index(args: argparse.Namespace) -> None:
-    archive = Path(args.archive)
+def rebuild_search_index(archive: Path, index_attachments: bool) -> None:
+    """Build and validate a replacement search database before publishing it."""
     temporary = archive / "search.sqlite3.tmp"
     temporary.unlink(missing_ok=True)
     catalog = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
@@ -1059,7 +1098,7 @@ def refresh_index(args: argparse.Namespace) -> None:
                     MboxLocation(byte_offset=offset, byte_length=length),
                     digest,
                 )
-                index_message(search, raw, args.index_attachments)
+                index_message(search, raw, index_attachments)
                 indexed += 1
             if indexed != int(expected_row[0]):
                 raise RuntimeError(
@@ -1068,9 +1107,14 @@ def refresh_index(args: argparse.Namespace) -> None:
             search.commit()
         finally:
             search.close()
+        os.replace(temporary, archive / "search.sqlite3")
     finally:
         catalog.close()
-    os.replace(temporary, archive / "search.sqlite3")
+        temporary.unlink(missing_ok=True)
+
+
+def refresh_index(args: argparse.Namespace) -> None:
+    rebuild_search_index(Path(args.archive), args.index_attachments)
 
 
 def main() -> int:

@@ -7,10 +7,12 @@ import hashlib
 import json
 import mailbox
 import os
+import re
 import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 from shutil import copy, copytree
@@ -27,6 +29,7 @@ from mailarchiver.standalone_verify import semantic_bytes
 
 TEST_DATA = Path(__file__).parent / "data"
 CLAMD_ENV = "MAILARCHIVER_CLAMD"
+CLAMD_CONFIG_ENV = "MAILARCHIVER_CLAMD_CONFIG"
 CLAMD_SOCKET_ENV = "MAILARCHIVER_CLAMD_SOCKET"
 
 
@@ -52,7 +55,12 @@ def source_mail(tmp_path: Path) -> tuple[Path, dict[str, bytes]]:
     }
 
 
-def run_ingest(source: Path, archive: Path, owner_names: Path) -> subprocess.CompletedProcess[str]:
+def run_ingest(
+    source: Path,
+    archive: Path,
+    owner_names: Path,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             sys.executable,
@@ -69,6 +77,7 @@ def run_ingest(source: Path, archive: Path, owner_names: Path) -> subprocess.Com
         check=False,
         capture_output=True,
         text=True,
+        env=environment,
     )
 
 
@@ -208,6 +217,22 @@ def test_ingest_routes_preserves_and_indexes_messages(
         assert search.execute("SELECT count(*) FROM message_fts WHERE sha256 = ?", (infected_sha256,)).fetchone() == (0,)
     finally:
         search.close()
+
+    (archive / "search.sqlite3").unlink()
+    obsolete = sqlite3.connect(archive / "search.sqlite3")
+    obsolete.execute("CREATE TABLE message_metadata (sha256 TEXT PRIMARY KEY, fts_rowid INTEGER NOT NULL)")
+    obsolete.close()
+    upgraded = run_ingest(source, archive, owner_names)
+    assert_success(upgraded)
+    assert "rebuilding obsolete search index:" in upgraded.stderr
+    rebuilt = sqlite3.connect(archive / "search.sqlite3")
+    try:
+        assert rebuilt.execute("SELECT count(*) FROM message_fts").fetchone() == (3,)
+        assert rebuilt.execute(
+            "SELECT count(*) FROM message_fts WHERE sha256 = ?", (infected_sha256,)
+        ).fetchone() == (0,)
+    finally:
+        rebuilt.close()
 
     refreshed = subprocess.run(
         [sys.executable, "-m", "mailarchiver", "--archive", str(archive), "refresh-index"],
@@ -677,3 +702,49 @@ def test_clamav_startup_failure_prevents_worker_activity(tmp_path: Path) -> None
         assert catalog.execute("SELECT result FROM ingest_runs").fetchone() == ("failed",)
     finally:
         catalog.close()
+
+
+def test_clamav_start_uses_private_runtime_instead_of_configured_files(tmp_path: Path) -> None:
+    """Regression: stale configured log and PID paths cannot break an owned daemon."""
+    source = tmp_path / "source.eml"
+    source.write_bytes(
+        b"Message-ID: <private-clamd-log@example>\n"
+        b"Date: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"
+    )
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+    configured_path = Path(
+        os.environ.get(CLAMD_CONFIG_ENV, "/opt/homebrew/etc/clamav/clamd.conf")
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="mailarchiver-clamd-test-", dir=configured_path.parent
+    ) as test_runtime_name:
+        test_runtime = Path(test_runtime_name)
+        configured_socket = test_runtime / "configured-clamd.sock"
+        blocked_log = test_runtime / "configured-clamd.log"
+        blocked_log.touch(mode=0o000)
+        configured_pid = test_runtime / "configured-clamd.pid"
+        configuration_path = test_runtime / "clamd.conf"
+        base_configuration = configured_path.read_text(encoding="utf-8")
+        for directive, value in (
+            ("LocalSocket", configured_socket),
+            ("PidFile", configured_pid),
+            ("LogFile", blocked_log),
+        ):
+            base_configuration, count = re.subn(
+                rf"(?m)^{directive}\s+.*$", f"{directive} {value}", base_configuration, count=1
+            )
+            assert count == 1
+        configuration_path.write_text(base_configuration, encoding="utf-8")
+        environment = os.environ.copy()
+        environment[CLAMD_CONFIG_ENV] = str(configuration_path)
+        environment[CLAMD_SOCKET_ENV] = str(configured_socket)
+
+        result = run_ingest(source, archive, owner_names, environment)
+
+        assert_success(result)
+        assert blocked_log.stat().st_mode & 0o777 == 0
+        assert blocked_log.stat().st_size == 0
+        assert not configured_pid.exists()
+        assert not configured_socket.exists()
+        assert not list(test_runtime.glob("mailarchiver-clamd-*"))

@@ -31,16 +31,21 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         self.process: subprocess.Popen[bytes] | None = None
         self.status_callback = status_callback
         self.diagnostics: BinaryIO | None = None
+        self.runtime_directory: tempfile.TemporaryDirectory[str] | None = None
+        self.log_path: Path | None = None
+        self.configuration_path = Path(CLAMD_CONFIG)
+        self.socket_path = CLAMD_SOCKET
+        self.owns_socket = False
 
     def __enter__(self) -> "ClamScanner":
         if CLAMD_SOCKET.exists() and self.available():
             return self
-        CLAMD_SOCKET.unlink(missing_ok=True)
-        self.diagnostics = tempfile.TemporaryFile()
+        configuration_path = self.prepare_runtime_files()
+        self.configuration_path = configuration_path
         try:
             self.process = subprocess.Popen(
-                [CLAMD, "--foreground", f"--config-file={CLAMD_CONFIG}"],
-                stdout=subprocess.DEVNULL,
+                [CLAMD, "--foreground", f"--config-file={configuration_path}"],
+                stdout=self.diagnostics,
                 stderr=self.diagnostics,
             )
         except OSError as error:
@@ -51,7 +56,7 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
             while time.monotonic() < deadline:
                 if self.status_callback is not None:
                     self.status_callback()
-                if CLAMD_SOCKET.exists() and self.available():
+                if self.socket_path.exists() and self.available():
                     return self
                 returncode = self.process.poll()
                 if returncode is not None:
@@ -64,17 +69,58 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         self.__exit__()
         raise error
 
+    def prepare_runtime_files(self) -> Path:
+        """Create and verify private paths for one mailarchiver-owned daemon."""
+        try:
+            self.runtime_directory = tempfile.TemporaryDirectory(
+                prefix="mailarchiver-clamd-", dir=Path(CLAMD_CONFIG).parent
+            )
+            runtime_path = Path(self.runtime_directory.name)
+            self.log_path = runtime_path / "clamd.log"
+            descriptor = os.open(self.log_path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+            self.diagnostics = os.fdopen(descriptor, "w+b")
+            if not self.log_path.is_file() or not os.access(self.log_path, os.W_OK):
+                raise OSError(f"private clamd log is not writable: {self.log_path}")
+            configuration_path = runtime_path / "clamd.conf"
+            configuration = Path(CLAMD_CONFIG).read_text(encoding="utf-8")
+            socket_descriptor, socket_name = tempfile.mkstemp(
+                prefix="mailarchiver-clamd-", suffix=".sock", dir=CLAMD_SOCKET.parent
+            )
+            os.close(socket_descriptor)
+            os.unlink(socket_name)
+            self.socket_path = Path(socket_name)
+            self.owns_socket = True
+            private_directives = {"LocalSocket", "LogFile", "LogSyslog", "PidFile"}
+            lines = [
+                line
+                for line in configuration.splitlines()
+                if not line.strip()
+                or line.lstrip().startswith("#")
+                or line.split(maxsplit=1)[0] not in private_directives
+            ]
+            lines.append(f"LocalSocket {self.socket_path}")
+            configuration_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            configuration_path.chmod(0o600)
+            return configuration_path
+        except OSError as error:
+            self.__exit__()
+            raise ClamScannerStartupError(
+                f"cannot create private clamd runtime files beside {CLAMD_CONFIG}: {error}"
+            ) from error
+
     def startup_error(self, reason: str) -> ClamScannerStartupError:
         """Include clamd's startup output when it is available."""
-        detail = ""
+        details = []
         if self.diagnostics is not None:
             self.diagnostics.flush()
             self.diagnostics.seek(0)
             detail = self.diagnostics.read().decode("utf-8", "replace").strip()
-        if detail:
-            return ClamScannerStartupError(f"{reason}: {detail[-4096:]}")
+            if detail:
+                details.append(detail[-4096:])
+        if details:
+            return ClamScannerStartupError(f"{reason}: {'; '.join(details)}")
         return ClamScannerStartupError(
-            f"{reason}; inspect the LogFile configured by {CLAMD_CONFIG}"
+            f"{reason}; no diagnostics were written to the private clamd log"
         )
 
     def __exit__(self, *_: object) -> None:
@@ -87,21 +133,36 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-            CLAMD_SOCKET.unlink(missing_ok=True)
+        if self.owns_socket:
+            self.socket_path.unlink(missing_ok=True)
+        self.configuration_path = Path(CLAMD_CONFIG)
+        self.socket_path = CLAMD_SOCKET
+        self.owns_socket = False
         diagnostics, self.diagnostics = self.diagnostics, None
         if diagnostics is not None:
             diagnostics.close()
+        self.log_path = None
+        runtime_directory, self.runtime_directory = self.runtime_directory, None
+        if runtime_directory is not None:
+            runtime_directory.cleanup()
 
-    @staticmethod
-    def available() -> bool:
-        return subprocess.run([CLAMDSCAN, f"--config-file={CLAMD_CONFIG}", "--ping=1"], check=False, capture_output=True).returncode == 0
+    def available(self) -> bool:
+        return subprocess.run(
+            [CLAMDSCAN, f"--config-file={self.configuration_path}", "--ping=1"],
+            check=False,
+            capture_output=True,
+        ).returncode == 0
 
     def infected(self, raw: bytes) -> bool:
         with tempfile.NamedTemporaryFile(prefix="mailarchiver-", delete=False) as handle:
             handle.write(raw)
             temporary = handle.name
         try:
-            result = subprocess.run([CLAMDSCAN, f"--config-file={CLAMD_CONFIG}", "--stream", temporary], check=False, capture_output=True)
+            result = subprocess.run(
+                [CLAMDSCAN, f"--config-file={self.configuration_path}", "--stream", temporary],
+                check=False,
+                capture_output=True,
+            )
             if result.returncode not in (0, 1):
                 raise RuntimeError(result.stderr.decode("utf-8", "replace"))
             return result.returncode == 1
