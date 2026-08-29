@@ -504,8 +504,10 @@ and verifies a mode-`0600` log, and derives a private configuration without
 `LogFile`, `LogSyslog`, or `PidFile`. The owned foreground subprocess needs no
 PID file, and its output goes to the private log for startup diagnostics. The
 derived configuration replaces `LocalSocket` with a short unique path for that
-run; externally managed configured sockets are never unlinked. Shutdown removes
-only owned runtime files. `clamscan` remains a diagnostic fallback. Neither an
+run. Its unique mode-`1733` socket directory lets a privilege-dropped daemon
+create the socket without letting other users list or remove entries.
+Externally managed configured sockets are never unlinked. Shutdown removes only
+owned runtime files. `clamscan` remains a diagnostic fallback. Neither an
 on-access scanner, a login service, nor a scheduled scan is enabled.  Run
 `freshclam` only when an operator explicitly wants new signatures.
 `MAILARCHIVER_CLAMD`, `MAILARCHIVER_CLAMDSCAN`, `MAILARCHIVER_CLAMD_CONFIG`,

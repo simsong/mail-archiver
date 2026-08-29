@@ -7,7 +7,6 @@ import hashlib
 import json
 import mailbox
 import os
-import re
 import signal
 import sqlite3
 import subprocess
@@ -726,15 +725,21 @@ def test_clamav_start_uses_private_runtime_instead_of_configured_files(tmp_path:
         configured_pid = test_runtime / "configured-clamd.pid"
         configuration_path = test_runtime / "clamd.conf"
         base_configuration = configured_path.read_text(encoding="utf-8")
-        for directive, value in (
+        configured_directives = (
             ("LocalSocket", configured_socket),
             ("PidFile", configured_pid),
             ("LogFile", blocked_log),
-        ):
-            base_configuration, count = re.subn(
-                rf"(?m)^{directive}\s+.*$", f"{directive} {value}", base_configuration, count=1
-            )
-            assert count == 1
+        )
+        directive_names = {directive for directive, _value in configured_directives}
+        lines = [
+            line
+            for line in base_configuration.splitlines()
+            if not line.strip()
+            or line.lstrip().startswith("#")
+            or line.split(maxsplit=1)[0] not in directive_names
+        ]
+        lines.extend(f"{directive} {value}" for directive, value in configured_directives)
+        base_configuration = "\n".join(lines) + "\n"
         configuration_path.write_text(base_configuration, encoding="utf-8")
         environment = os.environ.copy()
         environment[CLAMD_CONFIG_ENV] = str(configuration_path)

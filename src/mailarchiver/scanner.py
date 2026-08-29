@@ -32,6 +32,7 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         self.status_callback = status_callback
         self.diagnostics: BinaryIO | None = None
         self.runtime_directory: tempfile.TemporaryDirectory[str] | None = None
+        self.socket_directory: tempfile.TemporaryDirectory[str] | None = None
         self.log_path: Path | None = None
         self.configuration_path = Path(CLAMD_CONFIG)
         self.socket_path = CLAMD_SOCKET
@@ -83,12 +84,12 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
                 raise OSError(f"private clamd log is not writable: {self.log_path}")
             configuration_path = runtime_path / "clamd.conf"
             configuration = Path(CLAMD_CONFIG).read_text(encoding="utf-8")
-            socket_descriptor, socket_name = tempfile.mkstemp(
-                prefix="mailarchiver-clamd-", suffix=".sock", dir=CLAMD_SOCKET.parent
+            self.socket_directory = tempfile.TemporaryDirectory(
+                prefix="mailarchiver-clamd-socket-", dir=CLAMD_SOCKET.parent
             )
-            os.close(socket_descriptor)
-            os.unlink(socket_name)
-            self.socket_path = Path(socket_name)
+            socket_directory = Path(self.socket_directory.name)
+            socket_directory.chmod(0o1733)
+            self.socket_path = socket_directory / "clamd.sock"
             self.owns_socket = True
             private_directives = {"LocalSocket", "LogFile", "LogSyslog", "PidFile"}
             lines = [
@@ -145,6 +146,9 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         runtime_directory, self.runtime_directory = self.runtime_directory, None
         if runtime_directory is not None:
             runtime_directory.cleanup()
+        socket_directory, self.socket_directory = self.socket_directory, None
+        if socket_directory is not None:
+            socket_directory.cleanup()
 
     def available(self) -> bool:
         return subprocess.run(

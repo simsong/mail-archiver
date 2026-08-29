@@ -130,8 +130,10 @@ requirement.
   mode-`0700` per-run directory and remove the installed configuration's
   `LogFile`, `LogSyslog`, and `PidFile`; the owned foreground subprocess needs
   no PID file. It must also replace `LocalSocket` with a unique short socket
-  owned by that run, without unlinking the configured socket. The private files
-  are removed after the daemon stops.
+  owned by that run, without unlinking the configured socket. When `clamd`
+  drops privileges, its socket lives in a unique sticky, owner-unlistable
+  directory beneath the configured socket directory. Owned files and
+  directories are removed after the daemon stops.
 * `ingest --workers N` controls the number of source mailfiles ingested
   simultaneously. Its default is the detected CPU count capped at eight, and
   `N` must be positive. Each worker reads and parses its mailfile and submits
