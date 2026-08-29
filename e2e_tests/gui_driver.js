@@ -167,7 +167,11 @@
     showTree.dispatchEvent(new Event("change", {bubbles: true}));
     await waitFor(() => !document.getElementById("mailbox-browser").hidden && treeNode("Inbox"), "original-mailbox tree appears");
     assert(treeNode("Inbox").textContent.includes("104"), "mailbox count is deduplicated");
-    assert(treeNode("Loose Mail") && !treeNode("001-single.eml"), "single-message files collapse into their containing folder");
+    const mailboxLabels = [...document.querySelectorAll(".mailbox-node")].map(node => node.dataset.label);
+    assert(
+      treeNode("Loose Mail") && !treeNode("001-single.eml"),
+      `single-message files collapse into their containing folder; labels=${mailboxLabels.join(",")}`,
+    );
     treeNode("Inbox").querySelector("input[type=checkbox]").click();
     await waitFor(() => rows().length === 100 && !document.getElementById("load-more").hidden, "mailbox selection filters before pagination");
     document.getElementById("load-more").click();

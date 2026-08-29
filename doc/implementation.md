@@ -156,7 +156,13 @@ Modern Apple Mail package traversal recognizes complete
 attachment files. It reports missing paths and macOS Full Disk Access failures
 instead of treating them as empty input. `.partial.emlx` is rejected because
 the cached RFC 5322 representation omits detached attachment bytes; use Apple
-Mail's mailbox export to obtain a complete MBOX source.
+Mail's mailbox export to obtain a complete MBOX source. Physical `.emlx` paths
+remain source identities and integrity boundaries. Their catalog hierarchy
+ends at the deepest containing `.mbox` package, strips `.mbox` suffixes, and
+therefore omits Apple's internal UUID, `Data`, bucket, `Messages`, and message
+filename components while retaining the account path. A `[Gmail].mbox` chain
+also stores a typed cache relationship to the Gmail source kind and retains
+the Apple account UUID as a non-authoritative account hint.
 Emacs RMAIL files are detected by their case-insensitive `BABYL OPTIONS:`
 header because they commonly have no extension. The reader accepts LF and CRLF
 container line endings, streams records without modifying the source, combines
@@ -175,7 +181,15 @@ The production `file-folder` source performs sorted read-only traversal and
 delegates each container to the selected file generator. Packaged file plug-ins
 implement EMLX, Babyl, MBOX, and single-message EML/Maildir. Gmail, IMAP, O365,
 Microsoft Exchange, and NUL-delimited stdin are reserved source stubs and fail
-without accessing those systems.
+without accessing those systems. A direct `cur` or `new` child is a Maildir
+message only when their parent also contains the standard `cur`, `new`, and
+`tmp` directories. Its physical path remains the container identity, while the
+Maildir root is stored as the logical hierarchy. The structural single-message
+parser yields to exactly one content-specific match, so an envelope-prefixed
+Maildir message uses the MBOX parser without becoming a separate mailbox.
+A Maildir coincident with its mounted volume uses the mount directory name, or
+`Maildir` at an unnamed filesystem root, instead of an empty hierarchy. Other
+parser ambiguities still fail before ingest.
 
 The loader scans only packaged and repeatable `--plugin-dir` roots, validates
 every `plugin.toml` before importing external code, sorts by priority and kind,
@@ -321,12 +335,13 @@ the latest keystroke, caps each address and subject group at 20 entries, and
 discards responses superseded by newer input. Address results rank by
 deduplicated message count and then last-seen date.
 
-The optional original-mailbox explorer is built from volume-relative
-`source_files.source_path` values. Pydantic node identifiers encode a normalized
-logical path and, only in explicit-volume mode, the stable source-volume
-identity; browser input never supplies SQL. MBOX files are leaves, while
-Maildir `cur`/`new` contents and directories containing only direct EML/EMLX
-files collapse into logical-mailbox leaves. Exact node counts use
+The optional original-mailbox explorer is built from
+`source_files.hierarchy_path`; volume-relative `source_path` remains the exact
+physical provenance. Pydantic node identifiers encode a normalized logical
+path and, only in explicit-volume mode, the stable source-volume identity;
+browser input never supplies SQL. MBOX files, structurally recognized Maildir
+roots, Apple Mail `.mbox` package chains, and directories containing only
+direct EML/EMLX files become logical-mailbox leaves. Exact node counts use
 `COUNT(DISTINCT observations.message_pk)` with the path/volume and
 `observations_source_file_offset` indexes. Hidden-volume trees merge identical
 volume-relative paths. The two tree modes are cached for the active archive.
@@ -350,7 +365,9 @@ payloads are written to a private temporary directory before macOS opens them.
 The viewer also reads the archive mailbox location and linked source
 observations from the catalog, then displays archive path, source-volume label,
 and source or forensic path at the bottom without treating an archive mailbox
-as a source.
+as a source. Direct provider observations sort before local evidence; retained
+Apple Gmail observations are labeled as local cache copies rather than as the
+authoritative cloud source.
 
 `search.sqlite3` contains separate `message_fts` and `attachment_fts` virtual
 tables so message text remains searchable without attachment matches.
@@ -452,7 +469,9 @@ table names now represent source origins and containers: local files use a
 volume-relative path and `path_kind='file'`; provider plug-ins use their
 account/container identity and `path_kind='provider'`. Per-container
 `metadata_json` preserves display name, hierarchy, and non-secret provenance;
-`hierarchy_path` is the normalized path used by mailbox-tree filtering.
+`hierarchy_path` is the normalized path used by mailbox-tree filtering. The
+metadata also carries a typed direct/cache relationship, upstream plug-in kind,
+and optional account hint without replacing the local source-origin identity.
 `work_id` is scoped by plug-in and source account and binds a container to its
 messages; observations preserve both an opaque
 source cursor and an optional numeric position. `message_pk` is

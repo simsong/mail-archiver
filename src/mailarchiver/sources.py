@@ -26,6 +26,7 @@ from .plugin_api import (
     SkippedInput,
     SourcePlugin,
     SourceReference,
+    SourceRelationship,
     SourceSpec,
 )
 from .source_volume import SourceVolume, local_mount_path, local_source_volume
@@ -172,7 +173,15 @@ def is_babyl(path: Path) -> bool:
 
 
 def is_maildir_message(path: Path) -> bool:
-    return path.parent.name in {"cur", "new"}
+    return maildir_root(path) is not None
+
+
+def maildir_root(path: Path) -> Path | None:
+    """Return the root for a direct message in a structurally valid Maildir."""
+    if path.parent.name not in {"cur", "new"}:
+        return None
+    root = path.parent.parent
+    return root if all((root / name).is_dir() for name in ("cur", "new", "tmp")) else None
 
 
 class EmlxFileParser(FileParser):
@@ -391,6 +400,10 @@ class LocalSourcePlugin(SourcePlugin):
             )
             if recognized:
                 matches.append(plugin)
+        if len(matches) > 1 and is_maildir_message(path):
+            content_matches = [plugin for plugin in matches if plugin.manifest.kind != "message"]
+            if len(content_matches) == 1:
+                return content_matches[0]
         if len(matches) > 1:
             kinds = ", ".join(plugin.manifest.kind for plugin in matches)
             raise ValueError(f"ambiguous file parser plug-ins for {path}: {kinds}")
@@ -402,10 +415,69 @@ def _local_reference(source: SourceFile) -> SourceReference:
     return SourceReference(
         plugin_kind=LocalSourcePlugin.kind,
         source_id=f"local-volume:{volume_id}",
-        hierarchy=tuple(Path(source.source_path).parts[:-1]),
+        hierarchy=_local_hierarchy(source),
         native_id=source.source_path,
         display_name=str(source.path),
+        relationship=_local_relationship(source),
     )
+
+
+def _local_hierarchy(source: SourceFile) -> tuple[str, ...]:
+    """Separate a source file's physical identity from its logical mailbox."""
+    logical = _logical_container_hierarchy(source)
+    source_parts = tuple(Path(source.source_path).parts)
+    return logical if logical is not None else (source_parts[:-1] or source_parts)
+
+
+def _logical_container_hierarchy(source: SourceFile) -> tuple[str, ...] | None:
+    """Return a structural Maildir or Apple package hierarchy when present."""
+    source_parts = tuple(Path(source.source_path).parts)
+    physical_parts = tuple(source.path.parts)
+    root = maildir_root(source.path)
+    if root is not None:
+        hierarchy = source_parts[: -len(physical_parts) + len(root.parts)]
+        return hierarchy or (root.name or "Maildir",)
+
+    package_index = next(
+        (
+            index
+            for index in range(len(physical_parts) - 1, -1, -1)
+            if physical_parts[index].lower().endswith(".mbox")
+        ),
+        None,
+    )
+    inside_apple_package = package_index is not None and (
+        source.kind == "emlx" or (source.kind == "mbox" and source.path.name == "mbox")
+    )
+    if inside_apple_package and package_index is not None:
+        logical = list(source_parts[: -len(physical_parts) + package_index + 1])
+        for index, part in enumerate(logical):
+            if part.lower().endswith(".mbox"):
+                logical[index] = part[:-5]
+        return tuple(logical)
+    return None
+
+
+def _local_relationship(source: SourceFile) -> SourceRelationship:
+    packages = [part for part in source.path.parts if part.lower().endswith(".mbox")]
+    if source.kind != "emlx" or not any(part.casefold() == "[gmail].mbox" for part in packages):
+        return SourceRelationship()
+    gmail_index = next(
+        index for index, part in enumerate(source.path.parts)
+        if part.casefold() == "[gmail].mbox"
+    )
+    account_hint = source.path.parts[gmail_index - 1] if gmail_index else None
+    return SourceRelationship(
+        role="cache",
+        upstream_plugin_kind="gmail",
+        account_hint=account_hint,
+    )
+
+
+def local_hierarchy_path(source: SourceFile) -> str:
+    """Return the catalog path for the physical source's logical mailbox."""
+    logical = _logical_container_hierarchy(source)
+    return source.source_path if logical is None else "/".join(logical)
 
 
 def _local_work_id(source: SourceFile) -> str:
@@ -438,10 +510,15 @@ def unregister_file_parser(kind: SourceKind) -> None:
 
 
 def _file_parser(path: Path) -> FileParser | None:
-    for parser in _FILE_PARSERS:
-        if parser.recognizes(path):
-            return parser
-    return None
+    matches = [parser for parser in _FILE_PARSERS if parser.recognizes(path)]
+    if len(matches) > 1 and is_maildir_message(path):
+        content_matches = [parser for parser in matches if parser.kind != "message"]
+        if len(content_matches) == 1:
+            return content_matches[0]
+    if len(matches) > 1:
+        kinds = ", ".join(parser.kind for parser in matches)
+        raise ValueError(f"ambiguous file parsers for {path}: {kinds}")
+    return None if not matches else matches[0]
 
 
 def _mbox_envelope_sender(envelope: bytes) -> bytes:

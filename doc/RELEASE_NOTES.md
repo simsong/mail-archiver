@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+* Treat complete `cur`/`new`/`tmp` Maildir structures and Apple Mail `.mbox`
+  package chains as logical mailboxes while retaining every physical message
+  file as provenance. Within Maildir, a structural single-message match yields
+  to exactly one content parser, fixing envelope-prefixed messages that also
+  match MBOX without using priority to hide genuine parser ambiguity. Mark
+  Apple `[Gmail].mbox` observations as local Gmail caches and prefer a retained
+  direct-provider observation in provenance displays when both exist.
 * Rank address completions by deduplicated message count and then by the most
   recent matching message. Retain per-message suggestion dates so replacement
   and index maintenance recalculate recency correctly, while preserving the

@@ -662,7 +662,8 @@ function renderLocations(view) {
   const locations = [];
   if (view.archive_path) locations.push(["Archive mailbox", view.archive_path]);
   for (const source of view.source_locations) {
-    locations.push(["Source volume", source.volume]);
+    const origin = source.preferred ? `Preferred source (${source.origin})` : source.origin;
+    locations.push([origin, source.volume]);
     locations.push(["Source path", source.offset === null ? source.path : `${source.path}:${source.offset}`]);
   }
   elements["provenance-section"].hidden = locations.length === 0;
