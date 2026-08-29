@@ -74,7 +74,7 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         """Create and verify private paths for one mailarchiver-owned daemon."""
         try:
             self.runtime_directory = tempfile.TemporaryDirectory(
-                prefix="mailarchiver-clamd-", dir=CLAMD_SOCKET.parent
+                prefix="mailarchiver-clamd-", dir=Path(CLAMD_CONFIG).parent
             )
             runtime_path = Path(self.runtime_directory.name)
             self.log_path = runtime_path / "clamd.log"
@@ -99,7 +99,7 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         except OSError as error:
             self.__exit__()
             raise ClamScannerStartupError(
-                f"cannot create private clamd runtime files beside {CLAMD_SOCKET}: {error}"
+                f"cannot create private clamd runtime files beside {CLAMD_CONFIG}: {error}"
             ) from error
 
     def startup_error(self, reason: str) -> ClamScannerStartupError:
