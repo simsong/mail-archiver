@@ -1039,6 +1039,28 @@ def test_clamav_startup_failure_prevents_worker_activity(tmp_path: Path) -> None
         catalog.close()
 
 
+def test_clamav_start_failure_reports_daemon_diagnostics(tmp_path: Path) -> None:
+    """Regression: daemon startup output is retained and reported without a traceback."""
+    source = tmp_path / "source.eml"
+    source.write_bytes(b"Message-ID: <clamd-diagnostic@example>\n\nbody\n")
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+    failed_clamd = tmp_path / "failed-clamd"
+    failed_clamd.write_text(
+        "#!/bin/sh\nprintf 'deliberate clamd diagnostic\\n' >&2\nexit 23\n", encoding="utf-8"
+    )
+    failed_clamd.chmod(0o700)
+    environment = os.environ.copy()
+    environment[CLAMD_ENV] = str(failed_clamd)
+    environment[CLAMD_SOCKET_ENV] = str(tmp_path / "clamd.sock")
+
+    result = run_ingest(source, archive, owner_names, environment=environment)
+
+    assert result.returncode == 1
+    assert "clamd exited with status 23: deliberate clamd diagnostic" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_clamav_start_uses_a_private_log_instead_of_configured_log(tmp_path: Path) -> None:
     """Regression: an unusable shared LogFile cannot block an on-demand daemon."""
     source = tmp_path / "source.eml"

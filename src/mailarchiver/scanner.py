@@ -78,7 +78,7 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
             )
             runtime_path = Path(self.runtime_directory.name)
             self.log_path = runtime_path / "clamd.log"
-            descriptor = os.open(self.log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            descriptor = os.open(self.log_path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
             self.diagnostics = os.fdopen(descriptor, "w+b")
             if not self.log_path.is_file() or not os.access(self.log_path, os.W_OK):
                 raise OSError(f"private clamd log is not writable: {self.log_path}")
