@@ -117,6 +117,10 @@ and `.emlx` files below
 for the ingest run if no daemon is already listening on the configured local
 socket.
 
+Maildir message files are grouped at the Maildir root. Apple Mail `.emlx`
+cache files are grouped by their containing `.mbox` package hierarchy rather
+than exposed as UUID, `Data`, `Messages`, and individual filename nodes.
+
 ### `--clamav`
 
 `--clamav` is currently required on every ingest.  It scans each new

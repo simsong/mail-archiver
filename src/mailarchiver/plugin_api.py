@@ -58,6 +58,20 @@ class FileProbe(FrozenModel):
     prefix: bytes
 
 
+class SourceRelationship(FrozenModel):
+    """Describe whether a source is direct or a cache of an upstream account."""
+
+    role: Literal["direct", "cache"] = "direct"
+    upstream_plugin_kind: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]*$")
+    account_hint: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_cache(self) -> SourceRelationship:
+        if self.role == "cache" and self.upstream_plugin_kind is None:
+            raise ValueError("a cache relationship requires an upstream plug-in kind")
+        return self
+
+
 class SourceReference(FrozenModel):
     plugin_kind: str = Field(min_length=1)
     source_id: str = Field(min_length=1)
@@ -65,6 +79,7 @@ class SourceReference(FrozenModel):
     native_id: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
     provenance_json: str = "{}"
+    relationship: SourceRelationship = SourceRelationship()
 
     @field_validator("hierarchy")
     @classmethod
@@ -75,6 +90,13 @@ class SourceReference(FrozenModel):
         ):
             raise ValueError("hierarchy entries must be printable normalized path components")
         return value
+
+
+class SourceContainerMetadata(FrozenModel):
+    display_name: str
+    hierarchy: tuple[str, ...]
+    provenance_json: str
+    relationship: SourceRelationship = SourceRelationship()
 
 
 class ArchiveReference(FrozenModel):

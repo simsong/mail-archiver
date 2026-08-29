@@ -16,6 +16,7 @@ from mailarchiver.sources import (
     SourceInventory,
     SourceMessage,
     emlx_bytes,
+    local_hierarchy_path,
     mailbox_hierarchy_parsers,
     register_mailbox_hierarchy_parser,
     register_file_parser,
@@ -42,6 +43,9 @@ def test_local_source_plugin_generates_containers_and_delegates_mail_objects(tmp
     skipped = [item for item in discovered if isinstance(item, SkippedInput)]
     assert len(containers) == 1
     assert containers[0].parser_kind == "message"
+    source = plugin.source_file(containers[0])
+    assert containers[0].source.hierarchy == tuple(Path(source.source_path).parts[:-1])
+    assert local_hierarchy_path(source).endswith("/mail.eml")
     assert skipped[0].source.display_name == str(ignored.resolve())
     messages = list(plugin.messages(containers[0], None))
     assert len(messages) == 1 and isinstance(messages[0], MailObject)
@@ -124,6 +128,82 @@ def test_modern_apple_mail_package_reads_complete_emlx_only(tmp_path: Path) -> N
     assert [source.path for source in discovered] == [emlx.resolve()]
     assert [message.raw for message in source_messages(discovered[0])] == [raw]
     assert emlx_bytes(emlx) == raw
+
+
+def test_apple_mail_cache_uses_mbox_packages_as_logical_hierarchy(tmp_path: Path) -> None:
+    """Requirement: Apple cache files retain physical provenance but group by `.mbox` packages."""
+    account = "B705E5AE-3E33-4277-8BE6-5AE1F2B0046A"
+    messages = (
+        tmp_path / "Library" / "Mail" / "V10" / account / "[Gmail].mbox" / "All Mail.mbox"
+        / "D32894D5-2B73-483D-85A7-C61A5316DD04" / "Data" / "7" / "2" / "Messages"
+    )
+    messages.mkdir(parents=True)
+    raw = b"Message-ID: <apple-cache@example>\nFrom: sender@example.net\n\nbody\n"
+    emlx = messages / "42.emlx"
+    emlx.write_bytes(str(len(raw)).encode() + b"\n" + raw + b"<?xml version='1.0'?><plist/>")
+    plugin = load_plugins().source("file-folder").implementation
+
+    containers = [
+        item for item in plugin.discover(SourceSpec(locator=str(tmp_path / "Library" / "Mail")))
+        if isinstance(item, MailContainer)
+    ]
+
+    assert len(containers) == 1
+    container = containers[0]
+    source = plugin.source_file(container)
+    assert container.parser_kind == "emlx"
+    assert container.source.hierarchy[-4:] == ("V10", account, "[Gmail]", "All Mail")
+    assert container.source.relationship.role == "cache"
+    assert container.source.relationship.upstream_plugin_kind == "gmail"
+    assert container.source.relationship.account_hint == account
+    assert "Data" not in container.source.hierarchy
+    assert container.source.native_id.endswith("/Data/7/2/Messages/42.emlx")
+    assert local_hierarchy_path(source).endswith(f"/V10/{account}/[Gmail]/All Mail")
+    assert [message.raw for message in plugin.messages(container, None)] == [raw]
+
+
+def test_maildir_content_parser_wins_without_changing_logical_folder(tmp_path: Path) -> None:
+    """Requirement: a valid Maildir is one mailbox even when a message has an MBOX envelope."""
+    root = tmp_path / "2003" / "mbox.2003.ID-Policy"
+    for name in ("cur", "new", "tmp"):
+        (root / name).mkdir(parents=True, exist_ok=True)
+    path = root / "cur" / "1071235664.M505205P94798:2,S.txt"
+    raw = b"From: sender@example.net\nDate: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"
+    box = mailbox.mbox(path)
+    try:
+        box.add(raw)
+        box.flush()
+    finally:
+        box.close()
+    plugin = load_plugins().source("file-folder").implementation
+
+    containers = [
+        item for item in plugin.discover(SourceSpec(locator=str(root)))
+        if isinstance(item, MailContainer)
+    ]
+
+    assert len(containers) == 1
+    container = containers[0]
+    source = plugin.source_file(container)
+    assert container.parser_kind == "mbox"
+    assert container.source.hierarchy == tuple(Path(source.source_path).parts[:-2])
+    assert local_hierarchy_path(source).endswith("/2003/mbox.2003.ID-Policy")
+    assert container.source.native_id.endswith("/mbox.2003.ID-Policy/cur/1071235664.M505205P94798:2,S.txt")
+    assert [message.raw for message in plugin.messages(container, None)] == [raw]
+
+
+def test_cur_directory_without_maildir_structure_is_not_a_maildir(tmp_path: Path) -> None:
+    """Requirement: a directory named `cur` alone must not classify arbitrary files as mail."""
+    path = tmp_path / "cache" / "cur" / "message"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"From: sender@example.net\n\nbody\n")
+    plugin = load_plugins().source("file-folder").implementation
+
+    discovered = list(plugin.discover(SourceSpec(locator=str(tmp_path / "cache"))))
+
+    assert len(discovered) == 1
+    assert isinstance(discovered[0], SkippedInput)
+    assert discovered[0].source.display_name == str(path.resolve())
 
 
 def test_classic_apple_mail_package_reads_mbox_stream(tmp_path: Path) -> None:

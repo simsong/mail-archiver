@@ -19,10 +19,17 @@ from pydantic import BaseModel, Field
 from .mailsearch import MessageHeader, SortDirection, SortField, parse_query, read_message_bytes, search_headers
 from .mailbox_tree import MailboxSelection
 from .message import decoded_header
+from .plugin_api import SourceContainerMetadata
 from .search import SEARCH_CATEGORIES, decoded_part, is_attachment
 
 PAGE_SIZE = 100
 RAW_PART_ID = -1
+PROVIDER_LABELS = {
+    "gmail": "Gmail",
+    "imap": "IMAP",
+    "microsoft-exchange": "Microsoft Exchange",
+    "o365": "Microsoft 365",
+}
 BLOCKED_ELEMENTS = {"base", "button", "embed", "form", "frame", "frameset", "iframe", "input", "link", "meta", "object", "script"}
 RISKY_SUFFIXES = {
     ".app",
@@ -106,6 +113,8 @@ class SourceLocation(BaseModel):
     offset: int | None
     raw_sha256: str
     semantic_sha256: str | None
+    origin: str
+    preferred: bool = False
 
 
 class MessageView(BaseModel):
@@ -310,25 +319,18 @@ def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[
         ).fetchone()
         rows = database.execute(
             "SELECT source_volumes.metadata_json, source_files.metadata_json, source_files.source_path, "
-            "source_files.path_kind, observations.source_offset, "
+            "source_files.path_kind, source_files.source_plugin, observations.source_offset, "
             "observations.raw_sha256, observations.semantic_sha256 FROM observations "
             "JOIN source_files USING (source_file_pk) JOIN source_volumes USING (source_volume_pk) "
             "WHERE observations.message_pk = ? ORDER BY observations.observation_pk",
             (message_pk,),
         )
-        return (
-            None if archive_row is None else str(archive_row[0]),
-            [
-                SourceLocation(
-                    volume=_volume_label(volume_metadata),
-                    path=_source_display_path(container_metadata, source_path, path_kind),
-                    offset=source_offset,
-                    raw_sha256=raw_sha256, semantic_sha256=semantic_sha256,
-                )
-                for volume_metadata, container_metadata, source_path, path_kind, source_offset,
-                raw_sha256, semantic_sha256 in rows
-            ],
-        )
+        locations = [
+            _source_location(*row)
+            for row in rows
+        ]
+        locations.sort(key=lambda item: (not item.preferred, item.origin, item.volume, item.path))
+        return None if archive_row is None else str(archive_row[0]), locations
     finally:
         database.close()
 
@@ -349,6 +351,42 @@ def _source_display_path(metadata_json: str, source_path: str, path_kind: str) -
     if not isinstance(metadata, dict):
         return source_path
     return str(metadata.get("display_name") or source_path)
+
+
+def _source_location(
+    volume_metadata: str,
+    container_metadata: str,
+    source_path: str,
+    path_kind: str,
+    source_plugin: str,
+    source_offset: int | None,
+    raw_sha256: str,
+    semantic_sha256: str | None,
+) -> SourceLocation:
+    try:
+        relationship = SourceContainerMetadata.model_validate_json(container_metadata).relationship
+    except ValueError:
+        relationship = None
+    cached_provider = None if relationship is None else relationship.upstream_plugin_kind
+    cached = relationship is not None and relationship.role == "cache"
+    preferred = source_plugin != "file-folder" and not cached
+    provider = PROVIDER_LABELS.get(source_plugin, source_plugin)
+    upstream = PROVIDER_LABELS.get(cached_provider, cached_provider) if cached_provider else None
+    if preferred:
+        origin = f"Direct {provider} source"
+    elif cached:
+        origin = f"Local cache of {upstream or 'upstream account'}"
+    else:
+        origin = "Local source" if source_plugin == "file-folder" else f"{provider} source"
+    return SourceLocation(
+        volume=_volume_label(volume_metadata),
+        path=_source_display_path(container_metadata, source_path, path_kind),
+        offset=source_offset,
+        raw_sha256=raw_sha256,
+        semantic_sha256=semantic_sha256,
+        origin=origin,
+        preferred=preferred,
+    )
 
 
 def render_part(archive: Path, message_pk: int, part_id: int, allow_remote: bool = False) -> PartContent:

@@ -53,6 +53,7 @@ from .plugin_api import (
     MailObject,
     ProgressEvent,
     SkippedInput,
+    SourceContainerMetadata,
     SourceSpec,
 )
 from .plugin_loader import PluginDiscoveryError, load_plugins
@@ -61,6 +62,7 @@ from .sources import (
     LocalSourcePlugin,
     SourceFile,
     SourceInventory,
+    local_hierarchy_path,
 )
 from .standalone_verify import semantic_bytes
 
@@ -127,12 +129,6 @@ class SourceOriginIdentity(BaseModel):
 class SourceOriginMetadata(BaseModel):
     plugin_kind: str
     volume_label: str
-
-
-class SourceContainerMetadata(BaseModel):
-    display_name: str
-    hierarchy: tuple[str, ...]
-    provenance_json: str
 
 
 class WorkerProgress(BaseModel):
@@ -847,6 +843,7 @@ def ingest(args: argparse.Namespace) -> None:
                 display_name=work.container.source.display_name,
                 hierarchy=work.container.source.hierarchy,
                 provenance_json=work.container.source.provenance_json,
+                relationship=work.container.source.relationship,
             ).model_dump_json()
             source_path = work.container.source.native_id
             hierarchy_path = (
@@ -865,9 +862,10 @@ def ingest(args: argparse.Namespace) -> None:
                 display_name=work.container.source.display_name,
                 hierarchy=work.container.source.hierarchy,
                 provenance_json=work.container.source.provenance_json,
+                relationship=work.container.source.relationship,
             ).model_dump_json()
             source_path = source.source_path
-            hierarchy_path = source.source_path
+            hierarchy_path = local_hierarchy_path(source)
             path_kind = "file"
             source_kind = source.kind
             modified_at_ns = source.modified_at_ns
