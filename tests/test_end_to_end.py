@@ -1068,7 +1068,8 @@ def test_clamav_start_uses_a_private_log_instead_of_configured_log(tmp_path: Pat
             base_configuration, count = re.subn(
                 rf"(?m)^{directive}\s+.*$", f"{directive} {value}", base_configuration, count=1
             )
-            assert count == 1
+            if count == 0:
+                base_configuration += f"{directive} {value}\n"
         configuration_path.write_text(base_configuration, encoding="utf-8")
         environment = os.environ.copy()
         environment[CLAMD_CONFIG_ENV] = str(configuration_path)

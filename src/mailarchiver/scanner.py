@@ -38,18 +38,15 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         if CLAMD_SOCKET.exists() and self.available():
             return self
         CLAMD_SOCKET.unlink(missing_ok=True)
-        log_path, pid_path = self.prepare_runtime_files()
-        self.diagnostics = tempfile.TemporaryFile()
+        configuration_path = self.prepare_runtime_files()
         try:
             self.process = subprocess.Popen(
                 [
                     CLAMD,
                     "--foreground",
-                    f"--config-file={CLAMD_CONFIG}",
-                    f"--log={log_path}",
-                    f"--pid={pid_path}",
+                    f"--config-file={configuration_path}",
                 ],
-                stdout=subprocess.DEVNULL,
+                stdout=self.diagnostics,
                 stderr=self.diagnostics,
             )
         except OSError as error:
@@ -73,7 +70,7 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         self.__exit__()
         raise error
 
-    def prepare_runtime_files(self) -> tuple[Path, Path]:
+    def prepare_runtime_files(self) -> Path:
         """Create and verify private paths for one mailarchiver-owned daemon."""
         try:
             self.runtime_directory = tempfile.TemporaryDirectory(
@@ -82,10 +79,23 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
             runtime_path = Path(self.runtime_directory.name)
             self.log_path = runtime_path / "clamd.log"
             descriptor = os.open(self.log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            os.close(descriptor)
+            self.diagnostics = os.fdopen(descriptor, "w+b")
             if not self.log_path.is_file() or not os.access(self.log_path, os.W_OK):
                 raise OSError(f"private clamd log is not writable: {self.log_path}")
-            return self.log_path, runtime_path / "clamd.pid"
+            configuration_path = runtime_path / "clamd.conf"
+            configuration = Path(CLAMD_CONFIG).read_text(encoding="utf-8")
+            private_directives = {"LogFile", "LogSyslog", "PidFile"}
+            lines = [
+                line
+                for line in configuration.splitlines()
+                if not line.strip()
+                or line.lstrip().startswith("#")
+                or line.split(maxsplit=1)[0] not in private_directives
+            ]
+            lines.append(f"PidFile {runtime_path / 'clamd.pid'}")
+            configuration_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            configuration_path.chmod(0o600)
+            return configuration_path
         except OSError as error:
             self.__exit__()
             raise ClamScannerStartupError(
@@ -101,13 +111,6 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
             detail = self.diagnostics.read().decode("utf-8", "replace").strip()
             if detail:
                 details.append(detail[-4096:])
-        if self.log_path is not None:
-            try:
-                detail = self.log_path.read_bytes()[-4096:].decode("utf-8", "replace").strip()
-            except OSError:
-                detail = ""
-            if detail:
-                details.append(f"{self.log_path}: {detail}")
         if details:
             return ClamScannerStartupError(f"{reason}: {'; '.join(details)}")
         return ClamScannerStartupError(
