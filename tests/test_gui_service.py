@@ -33,6 +33,7 @@ from mailarchiver.gui_app import GuiApi, application_metadata, configure_macos_a
 from mailarchiver.mailsearch import _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, MailboxTreeNode, mailbox_tree
+from mailarchiver.plugin_api import SourceContainerMetadata, SourceRelationship
 from mailarchiver.mbox import add_message
 from mailarchiver.search import index_message
 from mailarchiver.standalone_verify import semantic_bytes
@@ -325,6 +326,63 @@ def test_gui_displays_archive_and_source_locations(tmp_path: Path) -> None:
     assert [(item.volume, item.path, item.offset) for item in view.source_locations] == [
         ("Fixture Backup", "mail/simple.eml", 0)
     ]
+    assert view.source_locations[0].origin == "Local source"
+    assert not view.source_locations[0].preferred
+
+
+def test_gui_prefers_direct_cloud_observation_over_local_cache(tmp_path: Path) -> None:
+    """Requirement: direct provider provenance precedes a retained local-cache observation."""
+    archive = make_gui_archive(tmp_path)
+    database = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        cache_metadata = SourceContainerMetadata(
+            display_name="Apple Mail All Mail cache",
+            hierarchy=("[Gmail]", "All Mail"),
+            provenance_json="{}",
+            relationship=SourceRelationship(
+                role="cache", upstream_plugin_kind="gmail", account_hint="APPLE-ACCOUNT-UUID"
+            ),
+        ).model_dump_json()
+        database.execute("UPDATE source_files SET metadata_json = ?", (cache_metadata,))
+        provider_volume = database.execute(
+            "INSERT INTO source_volumes(identity_json, metadata_json, first_observed_at, last_observed_at) "
+            "VALUES (?, ?, '2026-08-28', '2026-08-28') RETURNING source_volume_pk",
+            (
+                json.dumps({"plugin_kind": "gmail", "source_id": "simsong@gmail.com"}),
+                json.dumps({"plugin_kind": "gmail", "volume_label": "simsong@gmail.com"}),
+            ),
+        ).fetchone()
+        assert provider_volume is not None
+        provider_metadata = SourceContainerMetadata(
+            display_name="All Mail",
+            hierarchy=("All Mail",),
+            provenance_json="{}",
+        ).model_dump_json()
+        provider_file = database.execute(
+            "INSERT INTO source_files(source_volume_pk, source_plugin, source_path, hierarchy_path, "
+            "metadata_json, path_kind, source_kind) VALUES (?, 'gmail', 'messages/1', 'All Mail', ?, "
+            "'provider', 'gmail') RETURNING source_file_pk",
+            (provider_volume[0], provider_metadata),
+        ).fetchone()
+        assert provider_file is not None
+        run_pk = database.execute("SELECT min(run_pk) FROM ingest_runs").fetchone()[0]
+        database.execute(
+            "INSERT INTO observations(run_pk, message_pk, source_file_pk, source_cursor, raw_sha256, "
+            "disposition, detail) VALUES (?, 1, ?, 'gmail-message-1', '', 'duplicate', "
+            "'same Message-ID and SHA-256')",
+            (run_pk, provider_file[0]),
+        )
+        database.commit()
+    finally:
+        database.close()
+
+    view = describe_message(archive, 1)
+
+    assert [item.origin for item in view.source_locations] == [
+        "Direct Gmail source",
+        "Local cache of Gmail",
+    ]
+    assert [item.preferred for item in view.source_locations] == [True, False]
 
 
 def test_gui_exposes_computed_date_tag_for_warning_banner(tmp_path: Path) -> None:

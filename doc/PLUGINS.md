@@ -170,7 +170,12 @@ The packaged file parsers are:
 | `emlx` | `.emlx` suffix | Reads the declared RFC 5322 length; rejects partial EMLX |
 | `babyl` | case-insensitive `BABYL OPTIONS:` signature | Streams Emacs RMAIL Babyl records, including extensionless files |
 | `mbox` | initial `From ` separator | Streams MBOX records with numeric offsets and safe append resume |
-| `message` | `.eml` suffix or a Maildir `cur`/`new` child | Streams one RFC 5322 message |
+| `message` | `.eml` suffix or a direct `cur`/`new` child in a `cur`/`new`/`tmp` Maildir | Streams one RFC 5322 message; yields to one content-specific parser inside Maildir |
+
+Parser priority provides deterministic ordering and diagnostics; it does not
+silently choose between content formats. The Maildir `message` recognizer is a
+structural fallback only. If one other parser recognizes the content, that
+parser is selected. Two content-specific matches still fail as ambiguous.
 
 Babyl parsing handles LF and CRLF containers, uses the original-header block
 when present, falls back to visible headers when needed, and omits Babyl labels

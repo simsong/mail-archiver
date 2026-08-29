@@ -123,6 +123,11 @@ existing evidence and must not modify source mail or the canonical archive.
   including label, format information when available, and current mount path.
   Cloud adapters use a provider/account origin identity plus per-container
   native ID, hierarchy, display name, and non-secret provider JSON.
+  A local provider cache records a typed `cache` relationship, the upstream
+  provider kind, and any non-secret local account hint while retaining its
+  local volume and physical path. If the same canonical message also has a
+  direct cloud-provider observation, provenance displays that direct source
+  first and identifies the local observation as a retained cache copy.
   Source evidence is retained in the private archive catalog and excluded from
   redacted or public derivative packages by default.
 * Idempotence is at message level.  After a raw message hash and Message-ID
@@ -179,6 +184,9 @@ existing evidence and must not modify source mail or the canonical archive.
   manifests. All manifests are validated before any external Python is
   imported; duplicate kinds, incompatible APIs, unsafe entrypoints, ambiguous
   source selection, and ambiguous file recognition fail before workers start.
+  The one exception is the structural Maildir single-message recognizer: it is
+  a fallback to exactly one content-specific parser, such as MBOX. Two
+  content-specific matches remain ambiguous and fail.
   Plug-in registries are frozen before inventory. Mail source trees and the
   archive are never searched for executable plug-ins. Typed boundaries are
   strict: in particular, text cannot be coerced into RFC 5322 bytes.
@@ -427,6 +435,12 @@ the command fails before reading or writing an archive.
 
 * Recursive local-directory ingest recognizes MBOX streams, Apple Mail MBOX
   packages, Maildir, individual RFC 5322 files, and Apple `.emlx` files.
+  A Maildir is recognized structurally: a message must be directly below
+  `cur` or `new`, and their parent must contain `cur`, `new`, and `tmp`
+  directories. The Maildir root is the logical mailbox; `cur`, `new`, and the
+  physical message filename are provenance, not mailbox-name components. A
+  Maildir at a mounted volume root uses the mount directory name, or `Maildir`
+  for an unnamed filesystem root, so its logical mailbox remains selectable.
   Local source-file fingerprints and append checkpoints use the physical file
   bytes, including `.emlx` trailing metadata even though it is not message data.
   Directory traversal must surface missing paths and permission failures rather
@@ -438,6 +452,10 @@ the command fails before reading or writing an archive.
   attachment payloads are detached and reconstructing a message would not
   preserve the original RFC 5322 bytes. Apple Mail databases, plist files,
   attachment directories, and `.emlxpart` fragments are not separate messages.
+  For an Apple Mail cache, the logical mailbox path ends at the deepest
+  `.mbox` package, with each `.mbox` suffix removed. Account and parent mailbox
+  components remain in the path; internal UUID, `Data`, numeric bucket,
+  `Messages`, and `.emlx` filename components do not.
 * Gmail ingest uses OAuth and the Gmail API for incremental acquisition of
   raw messages and labels.  It supports a rolling `--days N` mode using
   Gmail's `newer_than:Nd` query.  Google Takeout MBOX is supported as an offline,

@@ -241,8 +241,13 @@ The tree behaves as follows:
 * Selected branches are combined: a result may come from any selected branch.
   The result itself still appears only once.
 * A directory whose contents are all single-message EML or EMLX files is shown
-  as one logical mailbox rather than thousands of message filenames. Maildir
-  `cur` and `new` directories are handled the same way.
+  as one logical mailbox rather than thousands of message filenames. A valid
+  Maildir is shown at its root, not as `cur`, `new`, or individual message
+  files. Apple Mail cache paths end at their `.mbox` package names and omit
+  internal UUID, `Data`, bucket, `Messages`, and `.emlx` components.
+  `[Gmail].mbox` observations are labeled as local Gmail cache copies. If the
+  same message was acquired directly from Gmail, that provider observation is
+  shown first as the preferred source; both observations remain in the catalog.
 * Source volumes are hidden by default. Matching logical paths are merged, so
   `Professional` from `/Volumes/Backup1` and `/Volumes/Backup2` appears once.
   The message viewer continues to list the actual source volumes and paths.
