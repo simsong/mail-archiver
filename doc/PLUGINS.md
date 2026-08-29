@@ -151,7 +151,9 @@ directory and filename order. It probes each regular file against the frozen
 file registry. No match yields a `SkippedInput`. Multiple packaged matches are
 resolved by manifest priority; any overlap involving an external plug-in is a
 fatal ambiguity. Known incomplete or malformed formats remain fatal rather than
-being reported as harmless skips.
+being reported as harmless skips. Exact-basename `Info.plist` and
+`table_of_contents` plus case-insensitive `.toc` mailbox metadata are silently
+omitted before recognition.
 
 For every match, the source yields a `MailContainer` holding an opaque serialized
 `LocalContainerData`. When a worker consumes it, the local source calls the
@@ -180,7 +182,8 @@ plug-in remains a fatal ambiguity.
 
 Babyl parsing handles LF and CRLF containers, uses the original-header block
 when present, falls back to visible headers when needed, and omits Babyl labels
-and redundant visible-header metadata from the yielded message. It never
+and redundant visible-header metadata from the yielded message. A `0x1f` end
+marker before the first record represents a valid empty mailbox. It never
 changes the source file.
 
 The older `FileParser`, `SourceFile`, `SourceMessage`, and explicit registration

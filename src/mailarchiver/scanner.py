@@ -31,15 +31,24 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         self.process: subprocess.Popen[bytes] | None = None
         self.status_callback = status_callback
         self.diagnostics: BinaryIO | None = None
+        self.runtime_directory: tempfile.TemporaryDirectory[str] | None = None
+        self.log_path: Path | None = None
 
     def __enter__(self) -> "ClamScanner":
         if CLAMD_SOCKET.exists() and self.available():
             return self
         CLAMD_SOCKET.unlink(missing_ok=True)
+        log_path, pid_path = self.prepare_runtime_files()
         self.diagnostics = tempfile.TemporaryFile()
         try:
             self.process = subprocess.Popen(
-                [CLAMD, "--foreground", f"--config-file={CLAMD_CONFIG}"],
+                [
+                    CLAMD,
+                    "--foreground",
+                    f"--config-file={CLAMD_CONFIG}",
+                    f"--log={log_path}",
+                    f"--pid={pid_path}",
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=self.diagnostics,
             )
@@ -64,17 +73,45 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         self.__exit__()
         raise error
 
+    def prepare_runtime_files(self) -> tuple[Path, Path]:
+        """Create and verify private paths for one mailarchiver-owned daemon."""
+        try:
+            self.runtime_directory = tempfile.TemporaryDirectory(
+                prefix="mailarchiver-clamd-", dir=CLAMD_SOCKET.parent
+            )
+            runtime_path = Path(self.runtime_directory.name)
+            self.log_path = runtime_path / "clamd.log"
+            descriptor = os.open(self.log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(descriptor)
+            if not self.log_path.is_file() or not os.access(self.log_path, os.W_OK):
+                raise OSError(f"private clamd log is not writable: {self.log_path}")
+            return self.log_path, runtime_path / "clamd.pid"
+        except OSError as error:
+            self.__exit__()
+            raise ClamScannerStartupError(
+                f"cannot create private clamd runtime files beside {CLAMD_SOCKET}: {error}"
+            ) from error
+
     def startup_error(self, reason: str) -> ClamScannerStartupError:
         """Include clamd's startup output when it is available."""
-        detail = ""
+        details = []
         if self.diagnostics is not None:
             self.diagnostics.flush()
             self.diagnostics.seek(0)
             detail = self.diagnostics.read().decode("utf-8", "replace").strip()
-        if detail:
-            return ClamScannerStartupError(f"{reason}: {detail[-4096:]}")
+            if detail:
+                details.append(detail[-4096:])
+        if self.log_path is not None:
+            try:
+                detail = self.log_path.read_bytes()[-4096:].decode("utf-8", "replace").strip()
+            except OSError:
+                detail = ""
+            if detail:
+                details.append(f"{self.log_path}: {detail}")
+        if details:
+            return ClamScannerStartupError(f"{reason}: {'; '.join(details)}")
         return ClamScannerStartupError(
-            f"{reason}; inspect the LogFile configured by {CLAMD_CONFIG}"
+            f"{reason}; no diagnostics were written to the private clamd log"
         )
 
     def __exit__(self, *_: object) -> None:
@@ -91,6 +128,10 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         diagnostics, self.diagnostics = self.diagnostics, None
         if diagnostics is not None:
             diagnostics.close()
+        self.log_path = None
+        runtime_directory, self.runtime_directory = self.runtime_directory, None
+        if runtime_directory is not None:
+            runtime_directory.cleanup()
 
     @staticmethod
     def available() -> bool:

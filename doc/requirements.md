@@ -172,7 +172,10 @@ existing evidence and must not modify source mail or the canonical archive.
   body become one RFC 5322 message. If the original-header block is empty, the
   visible headers are the record's only headers and are used instead. Babyl
   labels and redundant visible-header copies are source-container metadata and
-  are not added to the canonical message.
+  are not added to the canonical message. A zero-record container ending with
+  the Babyl `0x1f` end marker is a valid empty mailbox and completes normally;
+  a container reaching EOF without either a record or end marker is truncated
+  and fails.
 * Source and physical file parsing use separate versioned, immutable plug-in
   registries. The production file registry contains MBOX, Babyl, EMLX, and
   single-message EML/Maildir generators. The production local source generator
@@ -200,7 +203,11 @@ existing evidence and must not modify source mail or the canonical archive.
   foreground `clamd` on the main ingest thread when the configured local socket
   is not healthy, waits for a successful health probe before starting mailfile
   workers, reuses a healthy existing daemon without stopping it, and never
-  enables on-access or scheduled scanning.
+  enables on-access or scheduled scanning. A daemon started by mailarchiver
+  must use a verified, mode-`0600` log and PID file in a unique mode-`0700`
+  per-run directory rather than the shared `LogFile` and `PidFile` from the
+  installed configuration. The directory and its files are removed after the
+  owned daemon stops.
 * `ingest --workers N` controls the number of source containers ingested
   simultaneously. Its default is the detected CPU count capped at eight, and
   `N` must be positive. Each worker reads and parses its mailfile and submits
@@ -445,6 +452,10 @@ the command fails before reading or writing an archive.
   for an unnamed filesystem root, so its logical mailbox remains selectable.
   Local source-file fingerprints and append checkpoints use the physical file
   bytes, including `.emlx` trailing metadata even though it is not message data.
+  Files whose exact basename is `Info.plist` or `table_of_contents`, or whose
+  suffix is case-insensitively `.toc`, are known mailbox-container metadata and
+  are silently omitted from discovery; they do not produce skipped-input
+  reports or counts.
   Directory traversal must surface missing paths and permission failures rather
   than silently treating an unreadable mailbox as empty. Direct access to
   `~/Library/Mail` may require Full Disk Access for the invoking application.

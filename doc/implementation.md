@@ -178,7 +178,9 @@ container line endings, streams records without modifying the source, combines
 the original-header block with the body, and excludes Babyl labels and the
 duplicated visible-header block. A record with an empty original-header block
 uses its visible headers instead. Babyl files are fully reprocessed if they
-change; MBOX-only append-boundary resume is not applied to them.
+change; MBOX-only append-boundary resume is not applied to them. A `0x1f` end
+marker before the first record returns an empty stream, while EOF without a
+record or end marker raises a truncation error.
 
 Source discovery has two independent, manifest-loaded registries.
 `SourcePlugin.discover()` yields source-neutral containers, progress, and skip
@@ -200,7 +202,9 @@ message uses the MBOX parser without becoming a separate mailbox.
 A Maildir coincident with its mounted volume uses the mount directory name, or
 `Maildir` at an unnamed filesystem root, instead of an empty hierarchy. Any
 competing match involving an external file plug-in remains a fatal preflight
-ambiguity.
+ambiguity. Local discovery discards exact-basename `Info.plist` and
+`table_of_contents` plus case-insensitive `.toc` mailbox metadata before parser
+recognition, without emitting `SkippedInput` events.
 
 The loader scans only packaged and repeatable `--plugin-dir` roots, validates
 every `plugin.toml` before importing external code, sorts by priority and kind,
@@ -669,7 +673,12 @@ Homebrew installed these commands:
 `clamd` is the normal on-demand scanner: it loads the signature database once
 and accepts scans through `/private/tmp/clamd.sock`; the archiver starts it
 for a run when needed and stops it after the run unless an operator has
-already started it.  `clamscan` remains a diagnostic fallback.  Neither an
+already started it. Before starting an owned daemon, the archiver creates a
+unique mode-`0700` runtime directory beside the configured socket, pre-creates
+and verifies a mode-`0600` log, and overrides the configured `LogFile` and
+`PidFile` with paths in that directory. Startup errors include both captured
+stderr and the private log tail; shutdown removes the private directory.
+`clamscan` remains a diagnostic fallback. Neither an
 on-access scanner, a login service, nor a scheduled scan is enabled.  Run
 `freshclam` only when an operator explicitly wants new signatures.
 `MAILARCHIVER_CLAMD`, `MAILARCHIVER_CLAMDSCAN`, `MAILARCHIVER_CLAMD_CONFIG`,

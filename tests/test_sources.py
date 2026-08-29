@@ -54,6 +54,24 @@ def test_local_source_plugin_generates_containers_and_delegates_mail_objects(tmp
     assert messages[0].source == containers[0].source
 
 
+def test_local_source_silently_ignores_known_mailbox_metadata(tmp_path: Path) -> None:
+    """Requirement: known mailbox metadata files do not produce skipped-input noise."""
+    mailbox_package = tmp_path / "Archive.mbox"
+    mailbox_package.mkdir()
+    (mailbox_package / "message.eml").write_bytes(b"From: sender@example.net\n\nbody\n")
+    (mailbox_package / "Info.plist").write_bytes(b"not mail")
+    (mailbox_package / "table_of_contents").write_bytes(b"not mail")
+    (mailbox_package / "Folder.toc").write_bytes(b"not mail")
+    (mailbox_package / "Legacy.TOC").write_bytes(b"not mail")
+    plugin = load_plugins().source("file-folder").implementation
+
+    discovered = list(plugin.discover(SourceSpec(locator=str(tmp_path))))
+
+    assert len(discovered) == 1
+    assert isinstance(discovered[0], MailContainer)
+    assert discovered[0].source.display_name.endswith("message.eml")
+
+
 def test_local_source_file_has_a_stable_volume_identity_and_relative_path(tmp_path: Path) -> None:
     """Requirement: every local source file records its source volume and path within that volume."""
     path = tmp_path / "message.eml"
@@ -378,6 +396,33 @@ def test_rmail_babyl_stream_preserves_messages(tmp_path: Path, newline: bytes) -
     assert [message.cursor for message in messages] == [str(first_offset), str(second_offset)]
     assert messages[-1].completed_bytes == path.stat().st_size
     assert path.read_bytes().startswith(b"Babyl Options:" + newline)
+
+
+@pytest.mark.parametrize("newline", (b"\n", b"\r\n"))
+def test_empty_rmail_babyl_container_has_no_messages(tmp_path: Path, newline: bytes) -> None:
+    """Requirement: a terminated zero-record Babyl container is a valid empty mailbox."""
+    path = tmp_path / "empty-rmail"
+    raw = newline.join((b"BABYL OPTIONS:", b"Version: 5", b"Labels:")) + newline + b"\x1f"
+    path.write_bytes(raw)
+    plugin = load_plugins().source("file-folder").implementation
+
+    discovered = list(plugin.discover(SourceSpec(locator=str(path))))
+
+    assert len(discovered) == 1 and isinstance(discovered[0], MailContainer)
+    assert discovered[0].parser_kind == "babyl"
+    assert list(plugin.messages(discovered[0], None)) == []
+    assert path.read_bytes() == raw
+
+
+def test_unterminated_empty_rmail_babyl_container_is_rejected(tmp_path: Path) -> None:
+    """Requirement: a Babyl header without a record or end marker is truncated, not empty."""
+    path = tmp_path / "truncated-rmail"
+    path.write_bytes(b"BABYL OPTIONS:\nVersion: 5\nLabels:\n")
+    plugin = load_plugins().source("file-folder").implementation
+    container = next(item for item in plugin.discover(SourceSpec(locator=str(path))))
+
+    with pytest.raises(ValueError, match="Babyl file has no record or end marker"):
+        list(plugin.messages(container, None))
 
 
 def test_partial_apple_mail_message_is_rejected(tmp_path: Path) -> None:

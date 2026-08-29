@@ -7,10 +7,12 @@ import hashlib
 import json
 import mailbox
 import os
+import re
 import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 from shutil import copy, copytree
@@ -30,6 +32,7 @@ from e2e_tests.eicar_fixture import write_eicar_emlx
 
 TEST_DATA = Path(__file__).parent / "data"
 CLAMD_ENV = "MAILARCHIVER_CLAMD"
+CLAMD_CONFIG_ENV = "MAILARCHIVER_CLAMD_CONFIG"
 CLAMD_SOCKET_ENV = "MAILARCHIVER_CLAMD_SOCKET"
 
 
@@ -63,6 +66,7 @@ def run_ingest(
     archive: Path,
     owner_names: Path,
     *ingest_args: str,
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -81,6 +85,7 @@ def run_ingest(
         check=False,
         capture_output=True,
         text=True,
+        env=environment,
     )
 
 
@@ -794,6 +799,30 @@ def test_report_labels_missing_sender(tmp_path: Path) -> None:
     assert "(missing sender)" in result.stdout
 
 
+def test_ingest_accepts_an_empty_babyl_mailbox(tmp_path: Path) -> None:
+    """Requirement: a terminated zero-record Babyl source completes and checkpoints."""
+    source = tmp_path / "empty-rmail"
+    raw = b"BABYL OPTIONS:\nVersion: 5\nLabels:\n\x1f"
+    source.write_bytes(raw)
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+
+    result = run_ingest(source, archive, owner_names)
+
+    assert_success(result)
+    assert "processed=0" in result.stderr
+    assert not list(mbox_directory(archive).glob("*.mbox"))
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT count(*) FROM messages").fetchone() == (0,)
+        assert catalog.execute("SELECT count(*) FROM observations").fetchone() == (0,)
+        assert catalog.execute(
+            "SELECT byte_length, sha256, completed_run FROM source_files"
+        ).fetchone() == (len(raw), hashlib.sha256(raw).hexdigest(), 1)
+    finally:
+        catalog.close()
+
+
 def test_interrupt_stops_cleanly(source_mail: tuple[Path, dict[str, bytes]], tmp_path: Path) -> None:
     """Requirement: Ctrl-C exits cleanly without an exception traceback."""
     source, _ = source_mail
@@ -1008,3 +1037,46 @@ def test_clamav_startup_failure_prevents_worker_activity(tmp_path: Path) -> None
         assert catalog.execute("SELECT result FROM ingest_runs").fetchone() == ("failed",)
     finally:
         catalog.close()
+
+
+def test_clamav_start_uses_a_private_log_instead_of_configured_log(tmp_path: Path) -> None:
+    """Regression: an unusable shared LogFile cannot block an on-demand daemon."""
+    source = tmp_path / "source.eml"
+    source.write_bytes(
+        b"Message-ID: <private-clamd-log@example>\n"
+        b"Date: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"
+    )
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+    configured_socket = Path(os.environ.get(CLAMD_SOCKET_ENV, "/private/tmp/clamd.sock"))
+    with tempfile.TemporaryDirectory(
+        prefix="mailarchiver-clamd-test-", dir=configured_socket.parent
+    ) as test_runtime_name:
+        test_runtime = Path(test_runtime_name)
+        blocked_log = test_runtime / "configured-clamd.log"
+        blocked_log.touch(mode=0o000)
+        socket_path = test_runtime / "clamd.sock"
+        configuration_path = test_runtime / "clamd.conf"
+        base_configuration = Path(
+            os.environ.get(CLAMD_CONFIG_ENV, "/opt/homebrew/etc/clamav/clamd.conf")
+        ).read_text(encoding="utf-8")
+        for directive, value in (
+            ("LocalSocket", socket_path),
+            ("PidFile", test_runtime / "configured-clamd.pid"),
+            ("LogFile", blocked_log),
+        ):
+            base_configuration, count = re.subn(
+                rf"(?m)^{directive}\s+.*$", f"{directive} {value}", base_configuration, count=1
+            )
+            assert count == 1
+        configuration_path.write_text(base_configuration, encoding="utf-8")
+        environment = os.environ.copy()
+        environment[CLAMD_CONFIG_ENV] = str(configuration_path)
+        environment[CLAMD_SOCKET_ENV] = str(socket_path)
+
+        result = run_ingest(source, archive, owner_names, environment=environment)
+
+        assert_success(result)
+        assert blocked_log.stat().st_mode & 0o777 == 0
+        assert blocked_log.stat().st_size == 0
+        assert not list(test_runtime.glob("mailarchiver-clamd-*"))

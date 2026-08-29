@@ -41,6 +41,8 @@ MBCP_ENVELOPE_SENDER = b"mbcp@s.eecs.harvard.edu"
 MBCP_HEADERS = {"status", "x-mbcp-flags", "x-uid"}
 XXX_ENVELOPE_SENDER = b"XXX"
 XXX_WRAPPER_HEADERS = {"status", "x-keywords", "x-status"}
+SILENT_METADATA_FILENAMES = frozenset({"Info.plist", "table_of_contents"})
+SILENT_METADATA_SUFFIXES = frozenset({".toc"})
 HEADER_SEPARATOR = re.compile(br"\r?\n\r?\n")
 MBOXRD_QUOTED_FROM = re.compile(br"(?m)^>(?=>*From )")
 
@@ -316,6 +318,11 @@ class LocalSourcePlugin(SourcePlugin):
                     reason_code="not-regular-file",
                     detail="not a regular file",
                 )
+                continue
+            if (
+                path.name in SILENT_METADATA_FILENAMES
+                or path.suffix.lower() in SILENT_METADATA_SUFFIXES
+            ):
                 continue
             parser = self._recognize_file(path, stat.st_size)
             if parser is None:
@@ -647,10 +654,13 @@ def babyl_messages(source: SourceFile) -> Iterator[SourceMessage]:
         delimiter_offset = 0
         for line in mailbox_file:
             delimiter_offset = mailbox_file.tell() - len(line)
-            if line.rstrip(b"\r\n") == BABYL_RECORD:
+            marker = line.rstrip(b"\r\n")
+            if marker == BABYL_END:
+                return
+            if marker == BABYL_RECORD:
                 break
         else:
-            raise ValueError(f"Babyl file has no message records: {source.path}")
+            raise ValueError(f"Babyl file has no record or end marker: {source.path}")
 
         while True:
             labels = mailbox_file.readline()
