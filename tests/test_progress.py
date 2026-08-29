@@ -27,6 +27,7 @@ from mailarchiver.__main__ import (
 )
 from mailarchiver.plugin_api import ProgressEvent
 from mailarchiver.sources import SourceInventory
+from mailarchiver.ingest_status import IngestStatusFile, new_status_id, read_ingest_history
 
 
 def test_overall_progress_uses_concurrent_source_bytes_for_percentage_and_eta() -> None:
@@ -301,3 +302,94 @@ def test_numbered_worker_rows_are_main_rendered_without_wrapping(capsys: pytest.
     rendered = [part.split("\n", 1)[0] for part in output.split("\r\x1b[2K")[1:]]
     plain = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in rendered]
     assert plain and all(len(line) <= progress.terminal_columns for line in plain)
+
+
+def test_progress_status_file_preserves_final_run_statistics(tmp_path: Path) -> None:
+    """Requirement: one atomic JSON file retains each ingest's final typed statistics."""
+    archive = tmp_path / "archive"
+    started_at = datetime.now(timezone.utc)
+    status_file = IngestStatusFile(archive, new_status_id(started_at, 7, 1234))
+    progress = ProgressReporter(
+        worker_count=2,
+        status_file=status_file,
+        archive=archive,
+        run_pk=7,
+        source_roots=["/source/one", "/source/two"],
+        started_at=started_at,
+    )
+    progress.tty = False
+    progress.start()
+    progress.finish_inventory(SourceInventory(file_count=1, byte_count=100))
+
+    def produce() -> None:
+        progress.record_worker("ingesting", "/source/one/mailbox.mbox", 80, 100)
+        progress.record_disposition("archived")
+        progress.record_file_complete("/source/one/mailbox.mbox", 100)
+
+    producer = threading.Thread(name="mailfile_0", target=produce)
+    producer.start()
+    producer.join()
+    progress.finish("completed")
+
+    history = read_ingest_history(archive)
+    assert history.errors == []
+    assert len(history.statuses) == 1
+    status = history.statuses[0]
+    assert status.state == "completed"
+    assert status.run_pk == 7
+    assert status.source_roots == ["/source/one", "/source/two"]
+    assert status.files_processed == 1
+    assert status.bytes_processed == 100
+    assert status.counts.archived == 1
+    assert status.completed_at is not None
+    assert status.workers[0].phase == "idle"
+
+
+def test_status_history_retains_prior_runs_and_reports_corruption(tmp_path: Path) -> None:
+    """Requirement: starting a later ingest neither replaces nor hides prior run evidence."""
+    archive = tmp_path / "archive"
+    for run_pk in (1, 2):
+        started_at = datetime.now(timezone.utc)
+        status_file = IngestStatusFile(archive, new_status_id(started_at, run_pk, 1234))
+        progress = ProgressReporter(
+            status_file=status_file,
+            archive=archive,
+            run_pk=run_pk,
+            started_at=started_at,
+        )
+        progress.tty = False
+        progress.start()
+        progress.finish("completed")
+    (archive / "status" / "ingest-corrupt.json").write_text("not JSON", encoding="utf-8")
+
+    history = read_ingest_history(archive)
+
+    assert [status.run_pk for status in history.statuses] == [2, 1]
+    assert [error.filename for error in history.errors] == ["ingest-corrupt.json"]
+
+
+def test_status_history_marks_an_abandoned_running_snapshot_stale(tmp_path: Path) -> None:
+    """Requirement: the UI cannot present an expired heartbeat as a live ingest."""
+    archive = tmp_path / "archive"
+    started_at = datetime(2026, 8, 29, 12, tzinfo=timezone.utc)
+    status_file = IngestStatusFile(archive, new_status_id(started_at, 1, 1234))
+    progress = ProgressReporter(
+        status_file=status_file,
+        archive=archive,
+        run_pk=1,
+        started_at=started_at,
+    )
+    progress.tty = False
+    progress.start()
+    status = read_ingest_history(
+        archive, now=datetime(2026, 8, 29, 12, 0, 1, tzinfo=timezone.utc)
+    ).statuses[0]
+    assert status.state == "running"
+    status_file.write(status.model_copy(update={"state": "running", "updated_at": started_at}))
+
+    expired = read_ingest_history(
+        archive, now=datetime(2026, 8, 29, 12, 0, 6, tzinfo=timezone.utc)
+    ).statuses[0]
+
+    assert expired.state == "stale"
+    assert expired.phase == "status heartbeat lost"

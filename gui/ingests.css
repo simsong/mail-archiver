@@ -1,0 +1,53 @@
+:root {
+  color-scheme: light dark;
+  font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  --background: Canvas;
+  --surface: color-mix(in srgb, Canvas 94%, CanvasText 6%);
+  --border: color-mix(in srgb, CanvasText 18%, transparent);
+  --muted: color-mix(in srgb, CanvasText 58%, transparent);
+  --selection: color-mix(in srgb, AccentColor 25%, Canvas);
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--background); color: CanvasText; }
+button { font: inherit; }
+.ingest-browser { display: grid; grid-template-columns: minmax(260px, 32%) 1fr; width: 100%; height: 100%; }
+.ingest-history { overflow: auto; border-right: 1px solid var(--border); background: var(--surface); }
+.ingest-history header { position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; justify-content: space-between; padding: 14px 15px 10px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.ingest-history h1 { margin: 0; font-size: 18px; }
+#history-count { color: var(--muted); }
+.history-row { display: grid; grid-template-columns: 10px 1fr; gap: 8px; width: 100%; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--border); text-align: left; background: transparent; }
+.history-row:hover { background: color-mix(in srgb, AccentColor 10%, transparent); }
+.history-row.selected { background: var(--selection); }
+.state-dot { width: 9px; height: 9px; margin-top: 3px; border-radius: 50%; background: #888; }
+.state-dot.running { background: #2a9d4b; box-shadow: 0 0 0 3px color-mix(in srgb, #2a9d4b 20%, transparent); }
+.state-dot.failed, .state-dot.disk-full, .state-dot.stale { background: #c43b35; }
+.state-dot.interrupted { background: #d89024; }
+.history-main { min-width: 0; }
+.history-title { display: flex; justify-content: space-between; gap: 6px; font-weight: 650; }
+.history-state { text-transform: capitalize; }
+.history-time, .history-summary { display: block; margin-top: 3px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.ingest-detail { overflow: auto; padding: 22px 26px 40px; }
+.detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.detail-heading h1 { margin: 0 0 5px; font-size: 22px; }
+.detail-heading p { margin: 0; color: var(--muted); }
+.state-badge { padding: 5px 9px; border-radius: 999px; background: var(--surface); font-weight: 650; text-transform: capitalize; }
+.progress-track { height: 10px; margin: 22px 0 7px; overflow: hidden; border-radius: 999px; background: var(--surface); }
+.progress-fill { height: 100%; background: AccentColor; }
+.progress-caption { display: flex; justify-content: space-between; color: var(--muted); }
+.statistics { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin: 22px 0; }
+.stat { padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); }
+.stat strong { display: block; margin-top: 4px; font-size: 17px; font-variant-numeric: tabular-nums; }
+.detail-section { margin-top: 24px; }
+.detail-section h2 { margin: 0 0 9px; font-size: 14px; }
+.worker-table { width: 100%; border-collapse: collapse; }
+.worker-table th, .worker-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.worker-table th { color: var(--muted); font-weight: 500; }
+.worker-table td:first-child, .worker-table td:nth-child(3), .worker-table td:nth-child(4) { white-space: nowrap; }
+.worker-path { max-width: 440px; overflow-wrap: anywhere; }
+.source-list { margin: 0; padding-left: 20px; }
+.source-list li { margin: 4px 0; overflow-wrap: anywhere; }
+.failure { padding: 10px 12px; border: 1px solid color-mix(in srgb, #c33 50%, var(--border)); border-radius: 7px; background: color-mix(in srgb, #c33 10%, Canvas); white-space: pre-wrap; }
+.history-errors { margin: 10px; padding: 9px; border: 1px solid color-mix(in srgb, #c33 50%, var(--border)); border-radius: 6px; color: #c33; }
+.empty { color: var(--muted); }
+#error { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: 80%; padding: 10px 14px; border-radius: 7px; color: white; background: #a22; box-shadow: 0 4px 20px #0006; }

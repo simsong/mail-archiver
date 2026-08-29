@@ -92,6 +92,7 @@ mail-archiver/
       V1__search.sql    disposable search.sqlite3 V1 schema
     search.py           disposable search.sqlite3 and FTS5 rebuild
     scanner.py          on-demand ClamAV lifecycle and scan client
+    ingest_status.py    shared typed per-run JSON status contract and store
     standalone_verify.py installed source-independent verifier
   gui/                  pywebview HTML, CSS, and JavaScript assets
   scripts/data_quality/ read-only forensic audit and evidence tools
@@ -124,6 +125,11 @@ a foreground daemon only when no healthy configured socket is available, then
 removes the daemon's stale socket on exit; it never enables persistent or
 on-access scanning. Workers enqueue typed phase/path/offset updates; the main
 thread drains them and redraws the stderr scoreboard every 250 milliseconds.
+The same main-thread snapshot is atomically published to a unique
+`status/ingest-*.json` operational tag file. It is updated in place for that
+run and finalized with completion state, failure detail, aggregate statistics,
+and per-worker file/message totals. Later ingests create new files, preserving
+the history without changing the SQLite schema.
 Before starting workers, source plug-ins make a lightweight read-only discovery
 pass which counts every schedulable container and its available byte estimate
 without hashing or retaining message contents. The framework spools typed
@@ -330,6 +336,14 @@ the same typed functions used by `mailsearch`.  Search pages request 101 rows
 to return 100 plus a `has_more` indicator.  The UI is conventional: a search
 toolbar above a result list and message pane. Independent message windows load
 the same static application with a message-number parameter.
+The main window polls the latest shared `IngestStatus` once per second and
+renders it in a bottom status line. The separate `ingests.html` application
+polls all typed status files and presents run history beside aggregate and
+per-worker detail. Both the status-line action and the native
+**Windows → Ingest** menu route through a singleton window owner: an existing
+window is restored and ordered to the front, while a closed one is recreated
+with its own normal close box. A running file whose heartbeat is older than
+five seconds is displayed as stale without rewriting its retained JSON.
 
 Result ordering is a server-side SQL whitelist over date, case-folded subject,
 or case-folded sender with a stable message-number tie break. The listbox owns

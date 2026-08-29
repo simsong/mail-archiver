@@ -17,6 +17,7 @@ from typing import Any
 
 import webview
 from pydantic import BaseModel
+from webview.menu import MenuAction
 
 from .gui_service import (
     MessageView,
@@ -36,6 +37,7 @@ from .gui_service import (
     write_attachment,
     write_message,
 )
+from .ingest_status import IngestHistory, IngestStatus, latest_ingest_status, read_ingest_history
 from .mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, mailbox_tree
 
 GUI_DIRECTORY = Path(__file__).parents[2] / "gui"
@@ -54,6 +56,10 @@ class GuiStatus(BaseModel):
     archive: str | None
     ready: bool
     message_count: int = 0
+
+
+class GuiIngestOverview(BaseModel):
+    status: IngestStatus | None = None
 
 
 class DragExport(BaseModel):
@@ -75,6 +81,25 @@ class GuiE2EClientResult(BaseModel):
 
 class GuiE2EReport(GuiE2EClientResult):
     exports: list[str]
+
+
+class IngestWindowApi:
+    """Read-only bridge for the independent ingest-history window."""
+
+    def __init__(self, archive: Path | None) -> None:
+        self.archive = archive
+        self.window: Any = None
+
+    def set_window(self, window: Any) -> None:
+        self.window = window
+
+    def history(self) -> dict[str, object]:
+        if self.archive is None:
+            return IngestHistory(statuses=[], errors=[]).model_dump(mode="json")
+        return read_ingest_history(self.archive).model_dump(mode="json")
+
+    def close(self, *_args: object) -> None:
+        self.window = None
 
 
 class GuiApi:
@@ -104,6 +129,8 @@ class GuiApi:
         self._preview_generation = 0
         self._tree_cache: dict[bool, list[dict[str, object]]] = {}
         self._message_count: int | None = None
+        self._ingest_window_lock = Lock()
+        self._ingest_window_api: IngestWindowApi | None = None
 
     def set_window(self, window: Any) -> None:
         self.window = window
@@ -117,6 +144,46 @@ class GuiApi:
             ready=ready,
             message_count=self._message_count or 0,
         ).model_dump()
+
+    def ingest_overview(self) -> dict[str, object]:
+        status = latest_ingest_status(self._archive()) if self.archive and _is_archive(self.archive) else None
+        return GuiIngestOverview(status=status).model_dump(mode="json")
+
+    def open_ingest_window(self, status_id: str | None = None) -> bool:
+        """Open one ingest browser, or focus and retarget the existing window."""
+        if self.e2e_directory is not None and self.window is None:
+            return True
+        with self._ingest_window_lock:
+            api = self._ingest_window_api
+            if api is not None and api.window is not None:
+                api.archive = self.archive
+                if status_id is not None:
+                    api.window.run_js(f"window.selectIngest({json.dumps(status_id)});")
+                api.window.restore()
+                api.window.show()
+                return True
+            api = IngestWindowApi(self.archive)
+            selected = "" if status_id is None else f"?status={status_id}"
+            window = webview.create_window(
+                "Mail Archiver — Ingests",
+                str(GUI_DIRECTORY / f"ingests.html{selected}"),
+                js_api=api,
+                width=1050,
+                height=700,
+                min_size=(720, 440),
+                text_select=True,
+            )
+            api.set_window(window)
+            self._ingest_window_api = api
+
+            def closed(*_args: object) -> None:
+                api.close()
+                with self._ingest_window_lock:
+                    if self._ingest_window_api is api:
+                        self._ingest_window_api = None
+
+            window.events.closed += closed
+        return True
 
     def choose_archive(self) -> dict[str, object]:
         if self.e2e_directory is not None:
@@ -134,6 +201,10 @@ class GuiApi:
                 self._preview_error = None
             self._tree_cache.clear()
             self._message_count = None
+            if self._ingest_window_api is not None:
+                self._ingest_window_api.archive = archive
+                if self._ingest_window_api.window is not None:
+                    self._ingest_window_api.window.run_js("window.refreshHistory();")
         status = self.status()
         self.window.set_title(_window_title(self.archive, int(status["message_count"])))
         return status
@@ -314,6 +385,11 @@ class GuiApi:
 
     def close(self, *_args: object) -> None:
         self._preview_executor.shutdown(wait=False, cancel_futures=True)
+        with self._ingest_window_lock:
+            ingest_api, self._ingest_window_api = self._ingest_window_api, None
+        if ingest_api is not None and ingest_api.window is not None:
+            ingest_api.window.destroy()
+            ingest_api.close()
         for child in tuple(self.children):
             if child.window is not None:
                 child.window.destroy()
@@ -345,6 +421,11 @@ def application_metadata() -> ApplicationMetadata:
         version=version("mailarchiver"),
         copyright="Copyright © 2026 The Mail Archiver contributors.",
     )
+
+
+def application_menu(api: GuiApi) -> list[webview.Menu]:
+    """Build the native menu entry for the singleton ingest browser."""
+    return [webview.Menu("Windows", [MenuAction("Ingest", api.open_ingest_window)])]
 
 
 def configure_macos_application() -> None:
@@ -454,7 +535,7 @@ def main() -> int:
         window.events.loaded += lambda *_args: run_e2e_driver(window, e2e_result)
     webview.settings["ALLOW_FILE_URLS"] = True
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
-    webview.start(http_server=True, private_mode=True)
+    webview.start(http_server=True, private_mode=True, menu=application_menu(api))
     if args.smoke_test:
         passed = smoke_result == ["passed"]
         print("GUI bridge smoke test passed" if passed else f"GUI bridge smoke test failed: {smoke_result}")

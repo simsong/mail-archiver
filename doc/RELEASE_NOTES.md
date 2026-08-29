@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Persist each ingest's typed progress and final statistics in its own
+  atomically updated `status/ingest-*.json` operational BagIt tag file. Add a
+  bottom GUI status line plus a singleton **Windows → Ingest** history window
+  that displays every retained run and all configured worker threads without a
+  catalog schema change.
 * Preserve the read-only data-quality investigation as maintained scripts and
   documentation. Generated message exports and metadata evidence remain private
   ignored artifacts and are not retained in the repository.

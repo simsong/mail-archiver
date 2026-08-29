@@ -124,6 +124,10 @@ The progress display shows overall bytes or completed unknown-size containers,
 processed messages, estimated time remaining, provider phases, and each active
 worker. Publication to the canonical MBOX files and catalog remains
 single-writer.
+The same status is atomically updated in a new `status/ingest-*.json` file in
+the archive. That file retains final totals when the run finishes. Every later
+ingest creates another file, so the archive accumulates a run history without
+changing the database schema.
 
 ### Stop and continue safely
 
@@ -174,6 +178,13 @@ make gui ARGS='--archive "/path/to/mail-archive"'
 If no archive was supplied, choose one with **Choose Archive…**.
 The window title shows the archive path and the total number of deduplicated,
 searchable messages.
+
+The status line at the bottom shows a running ingest, or summarizes the most
+recent run. Click it to open the independent Ingests window. You can also use
+**Windows → Ingest**. The window lists all retained runs and shows the selected
+run's sources, totals, failures, and every configured worker thread. It has its
+own close box; opening it again while it is visible brings the same window to
+the front.
 
 Type ordinary words to search indexed headers and message text. The result
 list is on the left and the selected message is on the right. The message view

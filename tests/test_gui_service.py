@@ -29,7 +29,7 @@ from mailarchiver.gui_service import (
     write_attachment,
     write_message,
 )
-from mailarchiver.gui_app import GuiApi, application_metadata, configure_macos_application
+from mailarchiver.gui_app import GuiApi, application_menu, application_metadata, configure_macos_application
 from mailarchiver.mailsearch import _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, MailboxTreeNode, mailbox_tree
@@ -153,6 +153,18 @@ def test_gui_application_metadata_names_the_product() -> None:
     assert metadata.name == "Mail Archiver"
     assert metadata.version == "0.0.0"
     assert "Mail Archiver" in metadata.copyright
+
+
+def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:
+    """Requirement: the native Windows menu exposes the independent ingest browser."""
+    api = GuiApi(None, e2e_directory=tmp_path)
+    try:
+        menus = application_menu(api)
+        assert [menu.title for menu in menus] == ["Windows"]
+        assert [item.title for item in menus[0].items] == ["Ingest"]
+        assert menus[0].items[0].function()
+    finally:
+        api.close()
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Cocoa metadata is macOS-specific")

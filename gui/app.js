@@ -34,6 +34,7 @@ let initialized = false;
 const SUGGESTION_MINIMUM = 3;
 const SUGGESTION_DELAY_MS = 120;
 const SUGGESTION_LIMIT = 20;
+const INGEST_REFRESH_MS = 1000;
 
 window.addEventListener("pywebviewready", initialize);
 window.setTimeout(() => {
@@ -48,7 +49,7 @@ async function initialize() {
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
     "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
-    "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "error"]) {
+    "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "ingest-status-line", "error"]) {
     elements[id] = byId(id);
   }
   elements["choose-archive"].addEventListener("click", async () => {
@@ -79,6 +80,7 @@ async function initialize() {
   elements["remote-content"].addEventListener("click", () => showPart(Number(elements["part-select"].value), true));
   elements["save-message"].addEventListener("click", () => call(() => window.pywebview.api.save_message(state.selected)));
   elements["print-message"].addEventListener("click", () => window.print());
+  elements["ingest-status-line"].addEventListener("click", openIngestWindow);
   installDrag(elements["message-file-well"], () => state.selected);
   document.addEventListener("keydown", handleCommandShortcut);
 
@@ -88,6 +90,8 @@ async function initialize() {
   if (!status) return;
   await loadFilterSets();
   applyStatus(status);
+  await refreshIngestOverview();
+  window.setInterval(refreshIngestOverview, INGEST_REFRESH_MS);
   const message = Number(parameters.get("message"));
   if (message) await selectMessage(message);
   else if (status.ready) await runSearch(false);
@@ -104,6 +108,7 @@ async function chooseArchive() {
   if (status) {
     resetArchiveView();
     applyStatus(status);
+    await refreshIngestOverview();
     if (status.ready) await runSearch(false);
   }
 }
@@ -132,6 +137,43 @@ function applyStatus(status) {
   elements.search.disabled = !status.ready;
   elements["result-status"].textContent = status.ready ? "Enter a search or press Return for newest mail." : "Choose an archive to begin.";
   if (status.ready) elements.search.focus();
+}
+
+async function refreshIngestOverview() {
+  const overview = await call(() => window.pywebview.api.ingest_overview());
+  if (!overview) return;
+  const line = elements["ingest-status-line"];
+  const status = overview.status;
+  line.hidden = elements.search.disabled;
+  line.className = `ingest-status-line no-print${status ? ` ${status.state}` : ""}`;
+  line.dataset.statusId = status?.status_id || "";
+  if (!status) {
+    line.textContent = "No ingest history · Click to open Ingests";
+    return;
+  }
+  const messages = Number(status.processed_messages).toLocaleString();
+  const percent = Number(status.percent).toFixed(1);
+  if (status.state === "running") {
+    line.textContent = `Ingesting ${percent}% · ${messages} messages · ${status.active_workers}/${status.configured_workers} workers · ETA ${status.eta}`;
+  } else if (status.state === "completed") {
+    line.textContent = `Last ingest completed · ${messages} messages · ${formatElapsed(status.elapsed_seconds)} · Click for history`;
+  } else {
+    line.textContent = `Last ingest ${status.state}: ${status.phase} · ${messages} messages · Click for details`;
+  }
+}
+
+async function openIngestWindow() {
+  const statusId = elements["ingest-status-line"].dataset.statusId || null;
+  await call(() => window.pywebview.api.open_ingest_window(statusId));
+  elements["ingest-status-line"].dataset.openedWindow = "true";
+}
+
+function formatElapsed(value) {
+  const seconds = Math.max(0, Math.round(Number(value || 0)));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return [hours ? `${hours}h` : "", hours || minutes ? `${minutes}m` : "", `${remainder}s`].filter(Boolean).join(" ");
 }
 
 async function toggleMailboxTree() {

@@ -39,6 +39,9 @@
     await waitFor(() => rows().length === 100, "initial search displays first 100 results", 20000);
     assert(document.getElementById("archive-label").textContent.includes("archive"), "archive status displayed");
     assert(document.title.includes("archive") && document.title.includes("(107 messages)"), "window title identifies archive and total message count");
+    await waitFor(() => document.getElementById("ingest-status-line").textContent.includes("Last ingest completed"), "completed ingest status appears in the main status line");
+    document.getElementById("ingest-status-line").click();
+    await waitFor(() => document.getElementById("ingest-status-line").dataset.openedWindow === "true", "ingest status line invokes the independent ingest window");
     assert(!document.getElementById("load-more").hidden, "pagination control displayed");
     await waitFor(() => document.querySelector(".result-preview")?.textContent.length > 0, "background preview displayed");
 

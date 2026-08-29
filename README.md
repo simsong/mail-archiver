@@ -198,8 +198,9 @@ The archive directory is a native BagIt/Mailbag package containing:
 * `integrity/*.mbox.integrity` tags containing versioned `h1` complete-MBOX,
   `h2` raw-message, and `h3` semantic-message SHA-256 digests as specified in
   [doc/INTEGRITY_CONTROLS.md](doc/INTEGRITY_CONTROLS.md);
-* `archive.sqlite3`, the ingest catalog and observation log; and
-* `search.sqlite3`, a separately rebuildable FTS5 index.
+* `archive.sqlite3`, the ingest catalog and observation log;
+* `search.sqlite3`, a separately rebuildable FTS5 index; and
+* `status/ingest-*.json`, one typed operational status/history file per ingest.
 
 Ingest also places `verify_mail_archive.py` in the archive. It is a small,
 single-purpose Python program with no third-party dependencies. Run it to
@@ -249,6 +250,9 @@ fitted to the terminal width so the dashboard does not scroll. Redirected
 output stays line-oriented for logs. It also counts archived mail,
 previously-seen duplicates, autosave exclusions, infected messages,
 unrecognized files, and unchanged containers skipped by source integrity.
+The same state is atomically written to a new run-specific file under the
+archive's `status/` directory. The final update preserves the run statistics;
+later ingests create new files rather than replacing the history.
 
 ## Interrupts and disk space
 
@@ -348,6 +352,11 @@ count. Start it with:
 ```console
 make gui ARGS="--archive /path/to/mail-archive"
 ```
+
+The bottom status line shows the current ingest, or the latest completed run.
+Click it to open the separate ingest-history and worker-detail window. The same
+window is available from **Windows → Ingest**; choosing it again brings the
+existing window to the front.
 
 Select **Search attachments** to include the separate text-attachment index in
 ordinary full-text searches. Build the attachment index with `uv run

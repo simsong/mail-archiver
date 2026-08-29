@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; object-src 'none'; connect-src 'self'">
+    <title>Mail Archiver — Ingests</title>
+    <link rel="stylesheet" href="ingests.css">
+  </head>
+  <body>
+    <main class="ingest-browser">
+      <aside class="ingest-history">
+        <header><h1>Ingests</h1><span id="history-count"></span></header>
+        <div id="history-list" role="listbox" aria-label="Ingest history"></div>
+        <div id="history-errors" class="history-errors" hidden></div>
+      </aside>
+      <article id="ingest-detail" class="ingest-detail">
+        <p class="empty">No ingest history is available for this archive.</p>
+      </article>
+    </main>
+    <div id="error" role="alert" hidden></div>
+    <script src="ingests.js"></script>
+  </body>
+</html>

@@ -15,7 +15,15 @@ import pytest
 from playwright.sync_api import Page
 from pydantic import BaseModel
 
-from mailarchiver.gui_app import E2E_DRIVER, GUI_DIRECTORY, GuiApi, GuiE2EClientResult, GuiE2EReport
+from mailarchiver.gui_app import (
+    E2E_DRIVER,
+    GUI_DIRECTORY,
+    GuiApi,
+    GuiE2EClientResult,
+    GuiE2EReport,
+    IngestWindowApi,
+)
+from mailarchiver.ingest_status import read_ingest_history
 from e2e_tests.eicar_fixture import write_eicar_emlx
 
 
@@ -24,7 +32,7 @@ NORMAL_MESSAGE_COUNT = 107
 PROCESSED_MESSAGE_COUNT = 110
 GUI_API_METHODS = (
     "attachment", "choose_archive", "delete_filter_set", "mailbox_tree", "message",
-    "open_attachment", "open_message_window", "part", "prepare_drag", "rename_filter_set",
+    "ingest_overview", "open_attachment", "open_ingest_window", "open_message_window", "part", "prepare_drag", "rename_filter_set",
     "request_previews", "save_attachment", "save_filter_set", "save_message",
     "saved_filter_sets", "search", "status", "suggestions", "take_previews",
 )
@@ -100,6 +108,15 @@ def test_fresh_ingest_builds_an_independently_verifiable_archive(built_archive: 
     assert (archive / "manifest-sha256.txt").is_file()
     assert (archive / "tagmanifest-sha256.txt").is_file()
     assert (archive / "mailbag.csv").is_file()
+    history = read_ingest_history(archive)
+    assert history.errors == []
+    assert len(history.statuses) == 1
+    ingest_status = history.statuses[0]
+    assert ingest_status.state == "completed"
+    assert ingest_status.processed_messages == PROCESSED_MESSAGE_COUNT
+    assert ingest_status.counts.infected == 1
+    assert ingest_status.counts.autosaves == 1
+    assert "status/" not in (archive / "tagmanifest-sha256.txt").read_text(encoding="utf-8")
     assert "Mailarchiver-Message-Newline-Policy: preserve-source; add-final-LF-for-MBOX-framing\n" in (
         archive / "bag-info.txt"
     ).read_text(encoding="utf-8")
@@ -185,6 +202,26 @@ def test_search_ui_end_to_end_without_a_window(
     assert {"saved-tiny.png", "saved-review.command", "filter-sets.json"} <= exports
     assert any(name.startswith("saved-Rich UI message-") and name.endswith(".eml") for name in exports)
     assert any(name.startswith("Rich UI message-") and name.endswith(".eml") for name in exports)
+
+
+def test_ingest_history_ui_end_to_end(built_archive: BuiltArchive, page: Page) -> None:
+    """Display persisted run history and every configured worker through the real service."""
+    api = IngestWindowApi(built_archive.archive)
+    page.expose_function("mailarchive_ingest_history", api.history)
+    page.add_init_script(
+        "window.pywebview = {api: {history: (...args) => "
+        "window.mailarchive_ingest_history(...args)}}; "
+        "window.addEventListener('DOMContentLoaded', () => "
+        "window.dispatchEvent(new Event('pywebviewready')));"
+    )
+
+    page.goto((GUI_DIRECTORY / "ingests.html").as_uri())
+
+    page.wait_for_selector(".history-row")
+    assert page.locator(".history-row").count() == 1
+    assert "Completed" in page.locator(".history-row").inner_text()
+    assert page.locator(".worker-table tbody tr").count() == 2
+    assert "110" in page.locator(".statistics").inner_text()
 
 
 @pytest.mark.skipif(

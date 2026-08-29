@@ -28,6 +28,16 @@ from tabulate import tabulate
 from .archive_integrity import MailbagArchiveIntegrityControls
 from .archive_path import add_archive_argument, require_archive
 from .catalog import address_pk, create_catalog, create_search, owner_tokens
+from .ingest_status import (
+    IngestCounts,
+    IngestState,
+    IngestStatus,
+    IngestStatusFile,
+    IngestWorkerStatus as WorkerProgress,
+    STATUS_REFRESH_SECONDS,
+    YearProgress,
+    new_status_id,
+)
 from .layout import mbox_directory, mbox_path
 from .message import ParsedMessage, parse_message
 from .mbox import (
@@ -91,21 +101,6 @@ def nonnegative_integer(value: str) -> int:
     return number
 
 
-class YearProgress(BaseModel):
-    year: int
-    messages: int = 0
-
-
-class IngestCounts(BaseModel):
-    archived: int = 0
-    duplicates: int = 0
-    autosaves: int = 0
-    metadata_excluded: int = 0
-    infected: int = 0
-    skipped_files: int = 0
-    unchanged_sources: int = 0
-
-
 class PendingScan(BaseModel):
     source: MailObject
     parsed: ParsedMessage
@@ -129,17 +124,6 @@ class SourceOriginIdentity(BaseModel):
 class SourceOriginMetadata(BaseModel):
     plugin_kind: str
     volume_label: str
-
-
-class WorkerProgress(BaseModel):
-    worker: int
-    phase: str = "idle"
-    path: str | None = None
-    bytes_done: int = 0
-    bytes_total: int = 0
-    activity_done: int | None = None
-    activity_total: int | None = None
-    activity_unit: str | None = None
 
 
 class ProgressUpdate(BaseModel):
@@ -253,9 +237,18 @@ def overall_line(state: ProgressState, now: float) -> str:
 class ProgressReporter:
     """Receive worker updates and let the main thread render ingest status."""
 
-    def __init__(self, worker_count: int = 1) -> None:
+    def __init__(
+        self,
+        worker_count: int = 1,
+        *,
+        status_file: IngestStatusFile | None = None,
+        archive: Path | None = None,
+        run_pk: int | None = None,
+        source_roots: list[str] | None = None,
+        started_at: datetime | None = None,
+    ) -> None:
         self.state = ProgressState(
-            started_at=datetime.now(timezone.utc),
+            started_at=started_at or datetime.now(timezone.utc),
             started_monotonic=time.monotonic(),
             workers=[WorkerProgress(worker=worker) for worker in range(1, worker_count + 1)],
         )
@@ -270,6 +263,12 @@ class ProgressReporter:
         self.last_display_monotonic = self.state.started_monotonic
         self.notices: set[tuple[str, str, str]] = set()
         self.emitted_notices: set[tuple[str, str, str]] = set()
+        self.status_file = status_file
+        self.status_archive = archive
+        self.status_run_pk = run_pk
+        self.status_source_roots = source_roots or []
+        self.status_write_error: str | None = None
+        self.last_status_monotonic: float | None = None
 
     def start(self) -> None:
         self.display(self.phase)
@@ -448,6 +447,8 @@ class ProgressReporter:
             if update.file_complete:
                 self.state.files_processed += 1
                 self.state.source_bytes_completed += update.bytes_total or 0
+                worker.last_path = update.path or worker.path
+                worker.files_processed += 1
                 worker.phase = "idle"
                 worker.path = None
                 worker.bytes_done = 0
@@ -489,6 +490,7 @@ class ProgressReporter:
                     worker.activity_unit = update.activity_unit
             if update.message_date is not None:
                 self._record_message(update.message_date)
+                worker.messages_processed += 1
             if update.disposition == "archived":
                 self.state.counts.archived += 1
             elif update.disposition == "duplicate":
@@ -568,7 +570,12 @@ class ProgressReporter:
             return line
         return line[: max(columns - 1, 0)] + "…"
 
-    def display(self, label: str | None) -> None:
+    def display(
+        self,
+        label: str | None,
+        ingest_state: IngestState = "running",
+        failure_detail: str | None = None,
+    ) -> None:
         self._drain_updates()
         now = time.monotonic()
         self.last_display_monotonic = now
@@ -623,12 +630,88 @@ class ProgressReporter:
                 f"unchanged_sources={state.counts.unchanged_sources}",
                 file=sys.stderr,
             )
+        self._write_status(
+            state,
+            display_label,
+            elapsed,
+            phase_elapsed,
+            overall,
+            active,
+            ingest_state,
+            failure_detail,
+        )
         sys.stderr.flush()
 
-    def finish(self, status: str) -> None:
+    def _write_status(
+        self,
+        state: ProgressState,
+        phase: str,
+        elapsed: float,
+        phase_elapsed: float,
+        overall: OverallProgress,
+        active: int,
+        ingest_state: IngestState,
+        failure_detail: str | None,
+    ) -> None:
+        if self.status_file is None:
+            return
+        now = state.started_monotonic + elapsed
+        if (
+            ingest_state == "running"
+            and self.last_status_monotonic is not None
+            and now - self.last_status_monotonic < STATUS_REFRESH_SECONDS
+        ):
+            return
+        assert self.status_archive is not None and self.status_run_pk is not None
+        updated_at = datetime.now(timezone.utc)
+        status = IngestStatus(
+            status_id=self.status_file.path.stem,
+            archive=str(self.status_archive.resolve()),
+            run_pk=self.status_run_pk,
+            process_id=os.getpid(),
+            source_roots=self.status_source_roots,
+            started_at=state.started_at,
+            updated_at=updated_at,
+            completed_at=None if ingest_state == "running" else updated_at,
+            state=ingest_state,
+            phase=phase,
+            elapsed_seconds=elapsed,
+            phase_elapsed_seconds=phase_elapsed,
+            processed_messages=state.processed,
+            message_rate=state.processed / elapsed,
+            files_processed=state.files_processed,
+            files_total=state.source_files_total,
+            bytes_processed=overall.bytes_done,
+            bytes_total=overall.bytes_total,
+            percent=overall.percent,
+            eta=overall.eta,
+            earliest_date=state.earliest_date,
+            latest_date=state.latest_date,
+            current_year=state.current_year,
+            current_year_messages=state.current_year_messages,
+            active_workers=active,
+            peak_workers=state.peak_active_files,
+            configured_workers=len(state.workers),
+            workers=[WorkerProgress.model_validate(worker) for worker in state.workers],
+            counts=state.counts,
+            years=state.years,
+            failure_detail=failure_detail,
+        )
+        try:
+            self.status_file.write(status)
+            self.last_status_monotonic = now
+        except OSError as error:
+            self.status_write_error = f"cannot update {self.status_file.path}: {error}"
+            self.status_file = None
+            if self.tty and self.rendered_lines:
+                sys.stderr.write("\n")
+                self.rendered_lines = 0
+            print(f"ingest status disabled: {self.status_write_error}", file=sys.stderr)
+
+    def finish(self, status: IngestState, failure_detail: str | None = None) -> None:
         self._drain_updates()
         self._emit_notices()
-        self.display(status)
+        self.display(status, status, failure_detail)
 
 
 def run_file_workers(
@@ -734,7 +817,6 @@ def ingest(args: argparse.Namespace) -> None:
         if key not in selected_source_keys:
             selected_sources.append((source_spec, matches[0]))
             selected_source_keys.add(key)
-    progress = ProgressReporter(args.workers)
     archive = Path(args.archive)
     archive.mkdir(parents=True, exist_ok=True)
     catalog_path = archive / "archive.sqlite3"
@@ -781,8 +863,38 @@ def ingest(args: argparse.Namespace) -> None:
         checkpoint_archive()
         print(f"recovered: pending message publication {recovery.value}", file=sys.stderr)
     owners = owner_tokens(Path(args.owner_names_file))
-    run_pk = catalog.execute("INSERT INTO ingest_runs(started_at) VALUES (?)", (datetime.now(timezone.utc).isoformat(),)).lastrowid
+    started_at = datetime.now(timezone.utc)
+    run_pk = catalog.execute(
+        "INSERT INTO ingest_runs(started_at) VALUES (?)", (started_at.isoformat(),)
+    ).lastrowid
+    assert run_pk is not None
     catalog.commit()
+    try:
+        status_file = IngestStatusFile(
+            archive,
+            new_status_id(started_at, int(run_pk), os.getpid()),
+        )
+    except BaseException as error:
+        catalog.execute(
+            "UPDATE ingest_runs SET completed_at = ?, result = 'failed', detail = ? WHERE run_pk = ?",
+            (
+                datetime.now(timezone.utc).isoformat(),
+                f"{type(error).__name__}: {error}",
+                run_pk,
+            ),
+        )
+        catalog.commit()
+        search.close()
+        catalog.close()
+        raise
+    progress = ProgressReporter(
+        args.workers,
+        status_file=status_file,
+        archive=archive,
+        run_pk=int(run_pk),
+        source_roots=[source.locator for source, _plugin in selected_sources],
+        started_at=started_at,
+    )
     boxes: dict[Path, mailbox.mbox] = {}
     source_file_pks: dict[tuple[str, str, str], int] = {}
     source_volume_pks: dict[str, int] = {}
@@ -1528,7 +1640,7 @@ def ingest(args: argparse.Namespace) -> None:
             catalog.commit()
         catalog.close()
         search.close()
-        progress.finish(result)
+        progress.finish(result, failure_detail)
         if integrity_error is not None and succeeded:
             raise integrity_error
 

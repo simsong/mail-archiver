@@ -93,6 +93,10 @@ directory, and a `data/mbox/` payload directory.
 `archive.sqlite3` and the disposable `search.sqlite3` are operational BagIt
 tag files but are deliberately not listed in the tag manifest; their live
 SQLite state is outside the portable preservation checkpoint.
+The top-level `status/` directory likewise contains operational, unmanifested
+JSON tag files. Each ingest creates a distinct file and atomically replaces
+only that file with its current typed status; the final replacement retains
+the run's complete statistics as append-by-run history.
 
 The archive lives on the encrypted laptop filesystem.  BorgBackup and
 Backblaze provide independent backup; archive-internal encryption is not a
@@ -253,6 +257,13 @@ existing evidence and must not modify source mail or the canonical archive.
   resources, refreshes the BagIt/Mailbag checkpoint for committed MBOX changes, and leaves a
   rerunnable error observation containing the source cursor (and numeric offset
   when available) plus raw SHA-256.
+* The main status driver writes the same typed state used by terminal rendering
+  to one run-specific `status/ingest-*.json` file. The JSON contract records a
+  format/version identifier, archive and run identity, process and source
+  roots, timestamps, state, phase, aggregate progress, dates, rates,
+  disposition totals, and every configured worker's current and cumulative
+  statistics. Updates use same-directory atomic replacement. A later ingest
+  creates a new file and never replaces an earlier run's final status.
 * Before each MBOX append, ingest durably records the target, prior length,
   message identity, and whether the target already existed. Catalog changes
   remain uncommitted until the append is complete. On an exception or the next
@@ -404,6 +415,15 @@ meaning. The control does not extract attachment content on demand.
 The GUI paints each result page from header metadata first, then requests its
 indexed body previews on a background worker and fills a reserved third line
 without blocking the initial result display.
+
+The bottom of the main GUI contains a clickable ingest-status line. During a
+run it shows live completion, message count, active/configured workers, and ETA;
+otherwise it summarizes the latest run. Clicking it opens a separate native
+Ingests window with its own close box. The **Windows → Ingest** menu opens the
+same window. That window browses every retained status file and shows the
+selected run's aggregate statistics, sources, failure detail, and all worker
+threads. If it is already visible, either action brings it to the front and
+selects the requested run instead of creating a duplicate window.
 
 The GUI lists every non-attachment `text/plain` and `text/html` MIME part and
 allows the user to select among them.  HTML is isolated and sanitized. Scripts,
