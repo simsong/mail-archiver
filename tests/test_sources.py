@@ -8,6 +8,7 @@ import pytest
 
 from mailarchiver.plugin_api import MailContainer, MailObject, SkippedInput, SourceSpec
 from mailarchiver.plugin_loader import load_plugins
+from mailarchiver.source_volume import SourceVolume
 from mailarchiver.sources import (
     FileParser,
     IncompleteAppleMailMessageError,
@@ -204,6 +205,25 @@ def test_cur_directory_without_maildir_structure_is_not_a_maildir(tmp_path: Path
     assert len(discovered) == 1
     assert isinstance(discovered[0], SkippedInput)
     assert discovered[0].source.display_name == str(path.resolve())
+
+
+def test_maildir_at_volume_root_has_a_visible_logical_name(tmp_path: Path) -> None:
+    """Requirement: a Maildir at a volume root remains selectable in the mailbox tree."""
+    root = tmp_path / "Mail Volume"
+    for name in ("cur", "new", "tmp"):
+        (root / name).mkdir(parents=True, exist_ok=True)
+    path = root / "new" / "message"
+    path.write_bytes(b"From: sender@example.net\n\nbody\n")
+    source = SourceFile(
+        path=path,
+        volume=SourceVolume(identity_json="{}", metadata_json="{}", mount_path=root),
+        source_path="new/message",
+        kind="message",
+        modified_at_ns=path.stat().st_mtime_ns,
+        byte_length=path.stat().st_size,
+    )
+
+    assert local_hierarchy_path(source) == "Mail Volume"
 
 
 def test_classic_apple_mail_package_reads_mbox_stream(tmp_path: Path) -> None:

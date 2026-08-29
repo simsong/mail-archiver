@@ -435,7 +435,8 @@ def _logical_container_hierarchy(source: SourceFile) -> tuple[str, ...] | None:
     physical_parts = tuple(source.path.parts)
     root = maildir_root(source.path)
     if root is not None:
-        return source_parts[: -len(physical_parts) + len(root.parts)]
+        hierarchy = source_parts[: -len(physical_parts) + len(root.parts)]
+        return hierarchy or (root.name or "Maildir",)
 
     package_index = next(
         (

@@ -187,7 +187,9 @@ message only when their parent also contains the standard `cur`, `new`, and
 Maildir root is stored as the logical hierarchy. The structural single-message
 parser yields to exactly one content-specific match, so an envelope-prefixed
 Maildir message uses the MBOX parser without becoming a separate mailbox.
-Other parser ambiguities still fail before ingest.
+A Maildir coincident with its mounted volume uses the mount directory name, or
+`Maildir` at an unnamed filesystem root, instead of an empty hierarchy. Other
+parser ambiguities still fail before ingest.
 
 The loader scans only packaged and repeatable `--plugin-dir` roots, validates
 every `plugin.toml` before importing external code, sorts by priority and kind,

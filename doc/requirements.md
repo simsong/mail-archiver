@@ -432,7 +432,9 @@ the command fails before reading or writing an archive.
   A Maildir is recognized structurally: a message must be directly below
   `cur` or `new`, and their parent must contain `cur`, `new`, and `tmp`
   directories. The Maildir root is the logical mailbox; `cur`, `new`, and the
-  physical message filename are provenance, not mailbox-name components.
+  physical message filename are provenance, not mailbox-name components. A
+  Maildir at a mounted volume root uses the mount directory name, or `Maildir`
+  for an unnamed filesystem root, so its logical mailbox remains selectable.
   Local source-file fingerprints and append checkpoints use the physical file
   bytes, including `.emlx` trailing metadata even though it is not message data.
   Directory traversal must surface missing paths and permission failures rather
