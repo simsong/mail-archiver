@@ -688,10 +688,11 @@ Homebrew installed these commands:
 and accepts scans through `/private/tmp/clamd.sock`; the archiver starts it
 for a run when needed and stops it after the run unless an operator has
 already started it. Before starting an owned daemon, the archiver creates a
-unique mode-`0700` runtime directory beside the configured socket, pre-creates
-and verifies a mode-`0600` log, and overrides the configured `LogFile` and
-`PidFile` with paths in that directory. Startup errors include both captured
-stderr and the private log tail; shutdown removes the private directory.
+unique mode-`0700` runtime directory beside the configured file, pre-creates
+and verifies a mode-`0600` log, and derives a private configuration without
+`LogFile`, `LogSyslog`, or `PidFile`. The owned foreground subprocess needs no
+PID file, and its stdout and stderr go to the private log for startup
+diagnostics. Shutdown removes the private directory.
 `clamscan` remains a diagnostic fallback. Neither an
 on-access scanner, a login service, nor a scheduled scan is enabled.  Run
 `freshclam` only when an operator explicitly wants new signatures.

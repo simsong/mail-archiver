@@ -92,7 +92,6 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
                 or line.lstrip().startswith("#")
                 or line.split(maxsplit=1)[0] not in private_directives
             ]
-            lines.append(f"PidFile {runtime_path / 'clamd.pid'}")
             configuration_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             configuration_path.chmod(0o600)
             return configuration_path

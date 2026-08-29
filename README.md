@@ -133,8 +133,8 @@ written to a normal MBOX. Before starting any mailfile workers, the main
 ingest thread verifies that ClamAV is ready. If no healthy daemon is listening,
 mailarchiver starts one foreground daemon for this ingest only, reusing its
 loaded signatures, and stops it afterward. Each daemon started by mailarchiver
-uses a verified private per-run log and PID file, so a stale configured log
-cannot prevent startup. If a healthy local daemon already owns the socket,
+uses a verified private per-run log and no PID file, so stale configured log
+or PID paths cannot prevent startup. If a healthy local daemon owns the socket,
 mailarchiver uses it and leaves it running.
 `MAILARCHIVER_CLAMD`, `MAILARCHIVER_CLAMDSCAN`,
 `MAILARCHIVER_CLAMD_CONFIG`, and `MAILARCHIVER_CLAMD_SOCKET` override the

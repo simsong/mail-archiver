@@ -1071,20 +1071,21 @@ def test_clamav_start_uses_a_private_log_instead_of_configured_log(tmp_path: Pat
     archive = tmp_path / "archive"
     owner_names = Path(__file__).parents[1] / "owner-names.txt"
     configured_socket = Path(os.environ.get(CLAMD_SOCKET_ENV, "/private/tmp/clamd.sock"))
+    configured_path = Path(
+        os.environ.get(CLAMD_CONFIG_ENV, "/opt/homebrew/etc/clamav/clamd.conf")
+    )
     with tempfile.TemporaryDirectory(
-        prefix="mailarchiver-clamd-test-", dir=configured_socket.parent
+        prefix="mailarchiver-clamd-test-", dir=configured_path.parent
     ) as test_runtime_name:
         test_runtime = Path(test_runtime_name)
         blocked_log = test_runtime / "configured-clamd.log"
         blocked_log.touch(mode=0o000)
-        socket_path = test_runtime / "clamd.sock"
+        configured_pid = test_runtime / "configured-clamd.pid"
         configuration_path = test_runtime / "clamd.conf"
-        base_configuration = Path(
-            os.environ.get(CLAMD_CONFIG_ENV, "/opt/homebrew/etc/clamav/clamd.conf")
-        ).read_text(encoding="utf-8")
+        base_configuration = configured_path.read_text(encoding="utf-8")
         for directive, value in (
-            ("LocalSocket", socket_path),
-            ("PidFile", test_runtime / "configured-clamd.pid"),
+            ("LocalSocket", configured_socket),
+            ("PidFile", configured_pid),
             ("LogFile", blocked_log),
         ):
             base_configuration, count = re.subn(
@@ -1095,11 +1096,12 @@ def test_clamav_start_uses_a_private_log_instead_of_configured_log(tmp_path: Pat
         configuration_path.write_text(base_configuration, encoding="utf-8")
         environment = os.environ.copy()
         environment[CLAMD_CONFIG_ENV] = str(configuration_path)
-        environment[CLAMD_SOCKET_ENV] = str(socket_path)
+        environment[CLAMD_SOCKET_ENV] = str(configured_socket)
 
         result = run_ingest(source, archive, owner_names, environment=environment)
 
         assert_success(result)
         assert blocked_log.stat().st_mode & 0o777 == 0
         assert blocked_log.stat().st_size == 0
+        assert not configured_pid.exists()
         assert not list(test_runtime.glob("mailarchiver-clamd-*"))

@@ -208,10 +208,10 @@ existing evidence and must not modify source mail or the canonical archive.
   is not healthy, waits for a successful health probe before starting mailfile
   workers, reuses a healthy existing daemon without stopping it, and never
   enables on-access or scheduled scanning. A daemon started by mailarchiver
-  must use a verified, mode-`0600` log and PID file in a unique mode-`0700`
-  per-run directory rather than the shared `LogFile` and `PidFile` from the
-  installed configuration. The directory and its files are removed after the
-  owned daemon stops.
+  must capture its output in a verified, mode-`0600` log in a unique
+  mode-`0700` per-run directory and remove the installed configuration's
+  `LogFile` and `PidFile`; the owned foreground subprocess requires no PID
+  file. The directory and its files are removed after the daemon stops.
 * `ingest --workers N` controls the number of source containers ingested
   simultaneously. Its default is the detected CPU count capped at eight, and
   `N` must be positive. Each worker reads and parses its mailfile and submits
