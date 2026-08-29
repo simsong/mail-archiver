@@ -148,9 +148,10 @@ reentrant or protect mutable provider-client state. The framework rejects a
 
 The production `file-folder` source recursively walks local files in sorted
 directory and filename order. It probes each regular file against the frozen
-file registry. No match yields a `SkippedInput`; more than one match is a fatal
-ambiguity. Known incomplete or malformed formats remain fatal rather than being
-reported as harmless skips.
+file registry. No match yields a `SkippedInput`. Multiple packaged matches are
+resolved by manifest priority; any overlap involving an external plug-in is a
+fatal ambiguity. Known incomplete or malformed formats remain fatal rather than
+being reported as harmless skips.
 
 For every match, the source yields a `MailContainer` holding an opaque serialized
 `LocalContainerData`. When a worker consumes it, the local source calls the
@@ -170,12 +171,12 @@ The packaged file parsers are:
 | `emlx` | `.emlx` suffix | Reads the declared RFC 5322 length; rejects partial EMLX |
 | `babyl` | case-insensitive `BABYL OPTIONS:` signature | Streams Emacs RMAIL Babyl records, including extensionless files |
 | `mbox` | initial `From ` separator | Streams MBOX records with numeric offsets and safe append resume |
-| `message` | `.eml` suffix or a direct `cur`/`new` child in a `cur`/`new`/`tmp` Maildir | Streams one RFC 5322 message; yields to one content-specific parser inside Maildir |
+| `message` | `.eml` suffix or a direct `cur`/`new` child in a `cur`/`new`/`tmp` Maildir, after higher-priority packaged formats | Streams one RFC 5322 message |
 
-Parser priority provides deterministic ordering and diagnostics; it does not
-silently choose between content formats. The Maildir `message` recognizer is a
-structural fallback only. If one other parser recognizes the content, that
-parser is selected. Two content-specific matches still fail as ambiguous.
+Packaged precedence is EMLX, Babyl, MBOX, then `message`. In particular, an
+MBOX envelope signature wins when a one-message MBOX file resides under a
+Maildir `cur` or `new` directory. Any overlap involving an external file
+plug-in remains a fatal ambiguity.
 
 Babyl parsing handles LF and CRLF containers, uses the original-header block
 when present, falls back to visible headers when needed, and omits Babyl labels

@@ -245,6 +245,33 @@ def test_classic_apple_mail_package_reads_mbox_stream(tmp_path: Path) -> None:
     assert [message.raw for message in source_messages(discovered[0])] == [raw]
 
 
+def test_mbox_signature_precedes_maildir_location(tmp_path: Path) -> None:
+    """Requirement: packaged MBOX recognition takes precedence over a Maildir path."""
+    path = tmp_path / "maildir" / "cur" / "message:2,S.txt"
+    path.parent.mkdir(parents=True)
+    raw = (
+        b"Message-ID: <maildir-mbox@example>\n"
+        b"From: sender@example.net\n"
+        b"Date: Thu, 1 Feb 2024 12:00:00 +0000\n\n"
+        b"body\nordinary second line\n"
+    )
+    box = mailbox.mbox(path)
+    try:
+        box.add(raw)
+        box.flush()
+    finally:
+        box.close()
+
+    plugin = load_plugins().source("file-folder").implementation
+    discovered = list(plugin.discover(SourceSpec(locator=str(path))))
+
+    assert len(discovered) == 1 and isinstance(discovered[0], MailContainer)
+    assert discovered[0].parser_kind == "mbox"
+    messages = list(plugin.messages(discovered[0], None))
+    assert len(messages) == 1 and isinstance(messages[0], MailObject)
+    assert messages[0].raw == raw
+
+
 def test_mbox_parser_excludes_mbcp_metadata_and_unwraps_xxx_records(tmp_path: Path) -> None:
     """Requirement: exact MBCP stubs are observed as metadata and From XXX exposes its nested email."""
     path = tmp_path / "eudora.mbx"

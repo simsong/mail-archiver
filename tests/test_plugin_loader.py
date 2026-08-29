@@ -139,7 +139,7 @@ def create_plugin():
 
 
 def test_local_source_rejects_ambiguous_file_recognizers(tmp_path: Path) -> None:
-    """Requirement: priority orders diagnostics but never silently resolves two matching parsers."""
+    """Requirement: priority never silently resolves two matching external parsers."""
     root = tmp_path / "trusted-plugins"
     template = """
 class Parser:
@@ -159,6 +159,29 @@ def create_plugin():
     local = load_plugins([root]).source("file-folder").implementation
 
     with pytest.raises(ValueError, match=r"ambiguous file parser plug-ins.*alpha-parser, zulu-parser"):
+        list(local.discover(SourceSpec(locator=str(source))))
+
+
+def test_external_file_parser_cannot_override_a_packaged_match(tmp_path: Path) -> None:
+    """Requirement: a match involving an external parser remains a fatal ambiguity."""
+    root = tmp_path / "trusted-plugins"
+    code = """
+class Parser:
+    kind = "external-message"
+    def recognizes(self, probe):
+        return probe.path.suffix == ".eml"
+    def messages(self, container, checkpoint):
+        del container, checkpoint
+        yield from ()
+def create_plugin():
+    return Parser()
+"""
+    write_plugin(root, "file", "external-message", code, priority=250)
+    source = tmp_path / "mail.eml"
+    source.write_bytes(b"From: sender@example.net\n\nbody\n")
+    local = load_plugins([root]).source("file-folder").implementation
+
+    with pytest.raises(ValueError, match=r"ambiguous file parser plug-ins.*external-message, message"):
         list(local.discover(SourceSpec(locator=str(source))))
 
 

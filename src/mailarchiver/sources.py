@@ -404,7 +404,7 @@ class LocalSourcePlugin(SourcePlugin):
             content_matches = [plugin for plugin in matches if plugin.manifest.kind != "message"]
             if len(content_matches) == 1:
                 return content_matches[0]
-        if len(matches) > 1:
+        if len(matches) > 1 and not all(plugin.builtin for plugin in matches):
             kinds = ", ".join(plugin.manifest.kind for plugin in matches)
             raise ValueError(f"ambiguous file parser plug-ins for {path}: {kinds}")
         return None if not matches else matches[0]

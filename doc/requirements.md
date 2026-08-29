@@ -176,17 +176,19 @@ existing evidence and must not modify source mail or the canonical archive.
 * Source and physical file parsing use separate versioned, immutable plug-in
   registries. The production file registry contains MBOX, Babyl, EMLX, and
   single-message EML/Maildir generators. The production local source generator
-  delegates each recognized filename to that registry. Packaged reserved
-  source stubs name Gmail, IMAP, O365, Microsoft Exchange, and standard input;
+  delegates each recognized filename to that registry. When more than one
+  packaged parser recognizes a file, manifest priority selects the format;
+  EMLX, Babyl, MBOX, then single-message precedence ensures that MBOX framing
+  takes precedence over an enclosing Maildir `cur` or `new` path. Any
+  recognition overlap involving an external parser remains fatal. Packaged
+  reserved source stubs name Gmail, IMAP, O365, Microsoft Exchange, and standard input;
   the standard-input contract is RFC 5322 messages separated by a NUL byte.
   Reserved stubs must fail clearly and must not be exposed as working ingest.
 * Built-in and explicitly configured trusted plug-in directories use API-v1
   manifests. All manifests are validated before any external Python is
   imported; duplicate kinds, incompatible APIs, unsafe entrypoints, ambiguous
-  source selection, and ambiguous file recognition fail before workers start.
-  The one exception is the structural Maildir single-message recognizer: it is
-  a fallback to exactly one content-specific parser, such as MBOX. Two
-  content-specific matches remain ambiguous and fail.
+  source selection, and external file-recognition ambiguity fail before
+  workers start.
   Plug-in registries are frozen before inventory. Mail source trees and the
   archive are never searched for executable plug-ins. Typed boundaries are
   strict: in particular, text cannot be coerced into RFC 5322 bytes.

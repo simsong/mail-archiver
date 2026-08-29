@@ -193,12 +193,14 @@ Microsoft Exchange, and NUL-delimited stdin are reserved source stubs and fail
 without accessing those systems. A direct `cur` or `new` child is a Maildir
 message only when their parent also contains the standard `cur`, `new`, and
 `tmp` directories. Its physical path remains the container identity, while the
-Maildir root is stored as the logical hierarchy. The structural single-message
-parser yields to exactly one content-specific match, so an envelope-prefixed
-Maildir message uses the MBOX parser without becoming a separate mailbox.
+Maildir root is stored as the logical hierarchy. If multiple packaged file
+generators recognize one file, their manifest priority selects EMLX, then
+Babyl, then MBOX, then a single message. Thus an envelope-prefixed Maildir
+message uses the MBOX parser without becoming a separate mailbox.
 A Maildir coincident with its mounted volume uses the mount directory name, or
-`Maildir` at an unnamed filesystem root, instead of an empty hierarchy. Other
-parser ambiguities still fail before ingest.
+`Maildir` at an unnamed filesystem root, instead of an empty hierarchy. Any
+competing match involving an external file plug-in remains a fatal preflight
+ambiguity.
 
 The loader scans only packaged and repeatable `--plugin-dir` roots, validates
 every `plugin.toml` before importing external code, sorts by priority and kind,
@@ -741,7 +743,8 @@ browser-acceptance, native-WKWebView, and optional XCUITest layers, including
 which layer owns macOS menu-bar verification.
 
 Tests use small, hand-authored MBOX, Babyl, and EMLX fixtures covering mboxrd
-quoting, trimmed Received medians and Date outliers, exact MBCP exclusion,
+quoting, MBOX-formatted files under Maildir paths, trimmed Received medians and
+Date outliers, exact MBCP exclusion,
 `From XXX` unwrapping, parser registration, missing IDs,
 same-ID/different-content messages, autosaves,
 duplicate source trees, interruption recovery, and infected routing. The EICAR
