@@ -116,9 +116,9 @@ ingest thread verifies that ClamAV is ready. If no healthy daemon is listening,
 mailarchiver starts one foreground daemon for this ingest only, reusing its
 loaded signatures, and stops it afterward. Each daemon started by mailarchiver
 uses a verified private per-run log and no PID file, so stale configured log or
-PID paths cannot prevent startup. It also uses a unique private socket, avoiding
-cross-run ownership races. If a healthy local daemon already owns the configured
-socket, mailarchiver uses it and leaves it running.
+PID paths cannot prevent startup. An advisory lock serializes mailarchiver-owned
+daemons that share one configured socket. If a healthy external daemon already
+owns that socket, mailarchiver uses it and leaves it running.
 `MAILARCHIVER_CLAMD`, `MAILARCHIVER_CLAMDSCAN`,
 `MAILARCHIVER_CLAMD_CONFIG`, and `MAILARCHIVER_CLAMD_SOCKET` override the
 macOS Homebrew defaults for another local environment, including CI.

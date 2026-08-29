@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
 import tempfile
@@ -32,15 +33,19 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         self.status_callback = status_callback
         self.diagnostics: BinaryIO | None = None
         self.runtime_directory: tempfile.TemporaryDirectory[str] | None = None
-        self.socket_directory: tempfile.TemporaryDirectory[str] | None = None
+        self.start_lock: BinaryIO | None = None
         self.log_path: Path | None = None
         self.configuration_path = Path(CLAMD_CONFIG)
         self.socket_path = CLAMD_SOCKET
         self.owns_socket = False
 
     def __enter__(self) -> "ClamScanner":
+        self.start_lock = Path(CLAMD_CONFIG).open("rb")
+        fcntl.flock(self.start_lock.fileno(), fcntl.LOCK_EX)
         if CLAMD_SOCKET.exists() and self.available():
+            self.release_start_lock()
             return self
+        CLAMD_SOCKET.unlink(missing_ok=True)
         configuration_path = self.prepare_runtime_files()
         self.configuration_path = configuration_path
         try:
@@ -58,6 +63,7 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
                 if self.status_callback is not None:
                     self.status_callback()
                 if self.socket_path.exists() and self.available():
+                    self.owns_socket = True
                     return self
                 returncode = self.process.poll()
                 if returncode is not None:
@@ -84,14 +90,7 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
                 raise OSError(f"private clamd log is not writable: {self.log_path}")
             configuration_path = runtime_path / "clamd.conf"
             configuration = Path(CLAMD_CONFIG).read_text(encoding="utf-8")
-            self.socket_directory = tempfile.TemporaryDirectory(
-                prefix="mailarchiver-clamd-socket-", dir=CLAMD_SOCKET.parent
-            )
-            socket_directory = Path(self.socket_directory.name)
-            socket_directory.chmod(0o1733)
-            self.socket_path = socket_directory / "clamd.sock"
-            self.owns_socket = True
-            private_directives = {"LocalSocket", "LogFile", "LogSyslog", "PidFile"}
+            private_directives = {"LogFile", "LogSyslog", "PidFile"}
             lines = [
                 line
                 for line in configuration.splitlines()
@@ -99,7 +98,6 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
                 or line.lstrip().startswith("#")
                 or line.split(maxsplit=1)[0] not in private_directives
             ]
-            lines.append(f"LocalSocket {self.socket_path}")
             configuration_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             configuration_path.chmod(0o600)
             return configuration_path
@@ -146,9 +144,14 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         runtime_directory, self.runtime_directory = self.runtime_directory, None
         if runtime_directory is not None:
             runtime_directory.cleanup()
-        socket_directory, self.socket_directory = self.socket_directory, None
-        if socket_directory is not None:
-            socket_directory.cleanup()
+        self.release_start_lock()
+
+    def release_start_lock(self) -> None:
+        """Release this process's advisory ownership of the configured socket."""
+        start_lock, self.start_lock = self.start_lock, None
+        if start_lock is not None:
+            fcntl.flock(start_lock.fileno(), fcntl.LOCK_UN)
+            start_lock.close()
 
     def available(self) -> bool:
         return subprocess.run(

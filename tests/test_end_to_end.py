@@ -712,6 +712,7 @@ def test_clamav_start_uses_private_runtime_instead_of_configured_files(tmp_path:
     )
     archive = tmp_path / "archive"
     owner_names = Path(__file__).parents[1] / "owner-names.txt"
+    configured_socket = Path(os.environ.get(CLAMD_SOCKET_ENV, "/private/tmp/clamd.sock"))
     configured_path = Path(
         os.environ.get(CLAMD_CONFIG_ENV, "/opt/homebrew/etc/clamav/clamd.conf")
     )
@@ -719,7 +720,6 @@ def test_clamav_start_uses_private_runtime_instead_of_configured_files(tmp_path:
         prefix="mailarchiver-clamd-test-", dir=configured_path.parent
     ) as test_runtime_name:
         test_runtime = Path(test_runtime_name)
-        configured_socket = test_runtime / "configured-clamd.sock"
         blocked_log = test_runtime / "configured-clamd.log"
         blocked_log.touch(mode=0o000)
         configured_pid = test_runtime / "configured-clamd.pid"

@@ -129,11 +129,11 @@ requirement.
   must capture its output in a verified, mode-`0600` log in a unique
   mode-`0700` per-run directory and remove the installed configuration's
   `LogFile`, `LogSyslog`, and `PidFile`; the owned foreground subprocess needs
-  no PID file. It must also replace `LocalSocket` with a unique short socket
-  owned by that run, without unlinking the configured socket. When `clamd`
-  drops privileges, its socket lives in a unique sticky, owner-unlistable
-  directory beneath the configured socket directory. Owned files and
-  directories are removed after the daemon stops.
+  no PID file. Mailarchiver-owned daemons sharing one configured `LocalSocket`
+  must be serialized by an advisory lock held for the daemon's complete
+  lifetime. A healthy external daemon is reused without holding that lock or
+  stopping or unlinking its socket. Owned private files are removed after the
+  daemon stops.
 * `ingest --workers N` controls the number of source mailfiles ingested
   simultaneously. Its default is the detected CPU count capped at eight, and
   `N` must be positive. Each worker reads and parses its mailfile and submits
