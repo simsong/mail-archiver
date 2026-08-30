@@ -1,4 +1,4 @@
-.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika pylint run search summary-smoke test test-bagit test-data-quality test-e2e test-gui test-headers test-mailsearch test-native-gui test-plugins test-progress test-provenance verify
+.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika pylint run search summary-smoke test test-bagit test-data-quality test-e2e test-gui test-headers test-mailsearch test-native-gui test-plugins test-progress test-provenance validation-aws-start validation-aws-start-all validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
 
 TIKA_VERSION ?= 3.3.2
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
@@ -7,6 +7,9 @@ TIKA_SHA512 := $(TIKA_JAR).sha512
 TIKA_URL := https://downloads.apache.org/tika/$(TIKA_VERSION)/tika-app-$(TIKA_VERSION).jar
 PLAYWRIGHT_INSTALL_ARGS ?= chromium
 AUDIT_OUTPUT ?= $(CURDIR)/.tmp/data-quality-audit
+VALIDATION_DATA_DIR ?= $(CURDIR)/data
+VALIDATION_CONFIG_DIR ?= $(CURDIR)/validation/datasets
+VALIDATION_SAM_CONFIG ?= validation/samconfig.toml
 
 check: test test-e2e
 
@@ -87,6 +90,56 @@ test-progress:
 
 test-plugins:
 	uv run pytest -q tests/test_plugin_loader.py tests/test_source_integrity.py tests/test_archive_integrity.py
+
+validation-list:
+	@echo "Listing validation datasets configured in $(VALIDATION_CONFIG_DIR)"
+	uv run mailarchiver-validation --config-dir "$(VALIDATION_CONFIG_DIR)" --data-dir "$(VALIDATION_DATA_DIR)" list
+
+validation-fetch:
+	@test -n "$(DATASET)" || { echo 'usage: make validation-fetch DATASET=dataset-id'; exit 2; }
+	@echo "Downloading and fixity-recording validation dataset $(DATASET) under $(VALIDATION_DATA_DIR)"
+	uv run mailarchiver-validation --config-dir "$(VALIDATION_CONFIG_DIR)" --data-dir "$(VALIDATION_DATA_DIR)" fetch "$(DATASET)"
+
+validation-prepare:
+	@test -n "$(DATASET)" || { echo 'usage: make validation-prepare DATASET=dataset-id'; exit 2; }
+	@echo "Safely extracting and preprocessing validation dataset $(DATASET) under $(VALIDATION_DATA_DIR)"
+	uv run mailarchiver-validation --config-dir "$(VALIDATION_CONFIG_DIR)" --data-dir "$(VALIDATION_DATA_DIR)" prepare "$(DATASET)"
+
+validation-run:
+	@test -n "$(DATASET)" || { echo 'usage: make validation-run DATASET=dataset-id'; exit 2; }
+	@echo "Acquiring, preprocessing, ingesting, independently verifying, and packaging $(DATASET)"
+	uv run mailarchiver-validation --config-dir "$(VALIDATION_CONFIG_DIR)" --data-dir "$(VALIDATION_DATA_DIR)" run "$(DATASET)"
+
+validation-run-all:
+	@echo "Running every enabled public validation dataset locally and sequentially"
+	uv run mailarchiver-validation --config-dir "$(VALIDATION_CONFIG_DIR)" --data-dir "$(VALIDATION_DATA_DIR)" run-all
+
+validation-test:
+	uv run pytest -q tests/test_validation.py tests/test_validation_launcher.py
+
+validation-sam-build:
+	@echo "Building the validation EC2 launcher SAM application"
+	sam build --template-file validation/template.yaml
+
+validation-sam-validate:
+	@echo "Validating the validation EC2 launcher SAM template"
+	sam validate --lint --template-file validation/template.yaml
+
+validation-sam-deploy: validation-sam-build
+	@test -f "$(VALIDATION_SAM_CONFIG)" || { echo "Create ignored $(VALIDATION_SAM_CONFIG) from validation/samconfig.example.toml"; exit 2; }
+	@echo "Deploying the long-lived validation control plane; the configured output bucket remains external"
+	sam deploy --config-file "$(VALIDATION_SAM_CONFIG)"
+
+validation-aws-start:
+	@test -n "$(DATASET)" || { echo 'usage: make validation-aws-start DATASET=dataset-id STACK=stack-name'; exit 2; }
+	@test -n "$(STACK)" || { echo 'usage: make validation-aws-start DATASET=dataset-id STACK=stack-name'; exit 2; }
+	@echo "Launching one self-terminating EC2 worker for validation dataset $(DATASET)"
+	uv run mailarchiver-validation --config-dir "$(VALIDATION_CONFIG_DIR)" --data-dir "$(VALIDATION_DATA_DIR)" aws-start "$(DATASET)" --stack "$(STACK)"
+
+validation-aws-start-all:
+	@test -n "$(STACK)" || { echo 'usage: make validation-aws-start-all STACK=stack-name'; exit 2; }
+	@echo "Launching one independent self-terminating EC2 worker for every enabled validation dataset"
+	uv run mailarchiver-validation --config-dir "$(VALIDATION_CONFIG_DIR)" --data-dir "$(VALIDATION_DATA_DIR)" aws-start-all --stack "$(STACK)"
 
 install-mac:
 	@test "$$(uname -s)" = Darwin || { echo "install-mac must run on macOS"; exit 1; }

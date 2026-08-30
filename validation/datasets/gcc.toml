@@ -1,0 +1,32 @@
+schema_version = 1
+id = "gcc"
+title = "GCC Mailing List Sample"
+homepage = "https://gcc.gnu.org/pipermail/gcc/"
+availability_note = "A fixed three-month cross-era sample keeps this validation run bounded."
+max_unpacked_bytes = 5368709120
+
+[preprocess]
+kind = "mailboxes"
+include = ["*", "**/*"]
+
+[aws]
+instance_type = "m7i.large"
+volume_size_gib = 30
+
+[[sources]]
+kind = "http"
+url = "https://gcc.gnu.org/pipermail/gcc/2005-January.txt.gz"
+filename = "2005-January.txt.gz"
+archive = "gzip"
+
+[[sources]]
+kind = "http"
+url = "https://gcc.gnu.org/pipermail/gcc/2015-January.txt.gz"
+filename = "2015-January.txt.gz"
+archive = "gzip"
+
+[[sources]]
+kind = "http"
+url = "https://gcc.gnu.org/pipermail/gcc/2025-January.txt.gz"
+filename = "2025-January.txt.gz"
+archive = "gzip"

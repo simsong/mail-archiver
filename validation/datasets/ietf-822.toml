@@ -1,0 +1,32 @@
+schema_version = 1
+id = "ietf-822"
+title = "IETF-822 Mailing List Sample"
+homepage = "https://mailarchive.ietf.org/arch/browse/ietf-822/"
+availability_note = "Three available cross-era months keep this sparse-list validation run bounded."
+max_unpacked_bytes = 5368709120
+
+[preprocess]
+kind = "mailboxes"
+include = ["*"]
+
+[aws]
+instance_type = "m7i.large"
+volume_size_gib = 30
+
+[[sources]]
+kind = "http"
+url = "https://www.ietf.org/ietf-ftp/ietf-mail-archive/ietf-822/1997-01.mail"
+filename = "1997-01.mbox"
+archive = "none"
+
+[[sources]]
+kind = "http"
+url = "https://www.ietf.org/ietf-ftp/ietf-mail-archive/ietf-822/2010-09.mail"
+filename = "2010-09.mbox"
+archive = "none"
+
+[[sources]]
+kind = "http"
+url = "https://www.ietf.org/ietf-ftp/ietf-mail-archive/ietf-822/2021-08.mail"
+filename = "2021-08.mbox"
+archive = "none"

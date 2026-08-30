@@ -10,3 +10,6 @@ htmlcov/
 build/
 dist/
 .tmp
+data/
+validation/samconfig.toml
+.aws-sam/

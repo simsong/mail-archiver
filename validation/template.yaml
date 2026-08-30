@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Launch one self-terminating EC2 worker per public email validation dataset.
+
+Parameters:
+  OutputBucketName:
+    Type: String
+    Description: Existing long-lived S3 bucket; this stack never creates or deletes it.
+  OutputPrefix:
+    Type: String
+    Default: mailarchiver-validation
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet with an internet-gateway route for corpus downloads.
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+  RepositoryUrl:
+    Type: String
+    Default: https://github.com/simsong/mail-archiver.git
+  RepositoryRef:
+    Type: String
+    Default: main
+
+Resources:
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Egress-only validation workers; no inbound access
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteValidationResults
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:PutObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::${OutputBucketName}/${OutputPrefix}/*
+
+  WorkerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WorkerRole
+
+  LauncherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: aws/launcher/
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          AMI_ID: !Ref AmiId
+          INSTANCE_PROFILE_ARN: !GetAtt WorkerInstanceProfile.Arn
+          OUTPUT_BUCKET: !Ref OutputBucketName
+          OUTPUT_PREFIX: !Ref OutputPrefix
+          REPOSITORY_REF: !Ref RepositoryRef
+          REPOSITORY_URL: !Ref RepositoryUrl
+          SECURITY_GROUP_ID: !Ref WorkerSecurityGroup
+          SUBNET_ID: !Ref SubnetId
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ec2:RunInstances
+              Resource: "*"
+            - Effect: Allow
+              Action: ec2:CreateTags
+              Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:*
+              Condition:
+                StringEquals:
+                  ec2:CreateAction: RunInstances
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt WorkerRole.Arn
+              Condition:
+                StringEquals:
+                  iam:PassedToService: ec2.amazonaws.com
+
+Outputs:
+  LauncherFunctionName:
+    Description: Invoke this function with mailarchiver-validation aws-start.
+    Value: !Ref LauncherFunction
+  WorkerRoleArn:
+    Value: !GetAtt WorkerRole.Arn
+  ResultLocation:
+    Value: !Sub s3://${OutputBucketName}/${OutputPrefix}/

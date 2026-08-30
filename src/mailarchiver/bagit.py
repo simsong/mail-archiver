@@ -122,7 +122,7 @@ def _mailbag_message_id(message: IntegrityMessage) -> str:
 def _mailbag_metadata(raw: bytes, fallback_message_id: str) -> MailbagMessageMetadata:
     try:
         message = BytesParser(policy=policy.compat32).parsebytes(raw)
-        message_id = str(message.get("Message-ID") or "")
+        message_id = " ".join(part.strip() for part in str(message.get("Message-ID") or "").splitlines())
         parts = message.walk() if message.is_multipart() else (message,)
         attachments = sum(
             part.get_content_disposition() == "attachment" or part.get_filename() is not None

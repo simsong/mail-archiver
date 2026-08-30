@@ -1,0 +1,19 @@
+schema_version = 1
+id = "usenet-comp-mail-mime"
+title = "Historical Usenet comp.mail.mime Archive"
+homepage = "https://archive.org/details/usenet-comp"
+max_unpacked_bytes = 10737418240
+
+[preprocess]
+kind = "mailboxes"
+include = ["*", "**/*"]
+
+[aws]
+instance_type = "m7i.large"
+volume_size_gib = 50
+
+[[sources]]
+kind = "http"
+url = "https://archive.org/download/usenet-comp/comp.mail.mime.mbox.zip"
+filename = "comp.mail.mime.mbox.zip"
+archive = "zip"

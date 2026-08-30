@@ -1,0 +1,20 @@
+schema_version = 1
+id = "sf-lovers"
+title = "SF-LOVERS Digest Archive"
+homepage = "https://archive.org/details/SFLoversDigestArchive"
+max_unpacked_bytes = 10737418240
+
+[preprocess]
+kind = "sf-lovers"
+include = ["*", "**/*"]
+exclude = ["**/*.txt", "**/README*"]
+
+[aws]
+instance_type = "m7i.large"
+volume_size_gib = 50
+
+[[sources]]
+kind = "http"
+url = "https://archive.org/download/SFLoversDigestArchive/sflovers.7z"
+filename = "sflovers.7z"
+archive = "7z"

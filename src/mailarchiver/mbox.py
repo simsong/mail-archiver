@@ -169,17 +169,22 @@ def read_location_candidates(path: Path, location: MboxLocation) -> Iterator[byt
     masks = [fully_unquoted] + ([0] if fully_unquoted else [])
     if len(ambiguous) <= MAX_AMBIGUOUS_FROM_LINES:
         masks.extend(range(1, fully_unquoted))
+    seen: set[bytes] = set()
     for mask in masks:
         candidate = list(lines)
         for bit, index in enumerate(ambiguous):
             if mask & (1 << bit):
                 candidate[index] = candidate[index][1:]
         raw = b"".join(candidate)
-        yield raw
+        variants = [raw]
         if raw.endswith(b"\n"):
-            yield raw[:-1]
+            variants.append(raw[:-1])
         if raw.endswith(b"\r\n"):
-            yield raw[:-2]
+            variants.append(raw[:-2])
+        for variant in variants:
+            if variant not in seen:
+                seen.add(variant)
+                yield variant
 
 
 def read_location(path: Path, location: MboxLocation) -> bytes:

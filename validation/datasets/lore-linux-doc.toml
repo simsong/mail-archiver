@@ -1,0 +1,19 @@
+schema_version = 1
+id = "lore-linux-doc"
+title = "lore.kernel.org linux-doc Public Inbox"
+homepage = "https://lore.kernel.org/linux-doc/"
+max_unpacked_bytes = 21474836480
+
+[preprocess]
+kind = "public-inbox"
+include = ["*"]
+
+[aws]
+instance_type = "m7i.xlarge"
+volume_size_gib = 75
+
+[[sources]]
+kind = "git"
+url = "https://lore.kernel.org/linux-doc/0"
+ref = "848f17872c66137cdf141c56830992123127278a"
+archive = "none"

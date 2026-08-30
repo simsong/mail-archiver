@@ -317,17 +317,22 @@ def _stored_candidates(box: mailbox.mbox, key: object) -> Iterable[bytes]:
     masks = [fully_unquoted] + ([0] if fully_unquoted else [])
     if len(ambiguous) <= MAX_AMBIGUOUS_FROM_LINES:
         masks.extend(range(1, fully_unquoted))
+    seen: set[bytes] = set()
     for mask in masks:
         candidate = list(lines)
         for bit, index in enumerate(ambiguous):
             if mask & (1 << bit):
                 candidate[index] = candidate[index][1:]
         stored = b"".join(candidate)
-        yield stored
+        variants = [stored]
         if stored.endswith(b"\n"):
-            yield stored[:-1]
+            variants.append(stored[:-1])
         if stored.endswith(b"\r\n"):
-            yield stored[:-2]
+            variants.append(stored[:-2])
+        for variant in variants:
+            if variant not in seen:
+                seen.add(variant)
+                yield variant
 
 
 def _check_hashes(tokens: list[str], standards: list[HashStandard], data: bytes) -> list[str]:
