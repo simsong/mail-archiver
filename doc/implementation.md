@@ -600,10 +600,11 @@ subject matches scan the canonical subject column rather than creating
 a second subject store. Ordinary `message_metadata.sha256` is the indexed lookup key for the
 corresponding FTS row IDs; updates and recovery delete FTS rows by row ID rather
 than filtering the virtual tables on their unindexed SHA-256 columns. The
-Makefile's `install-mac` and `install-linux` targets
-download Apache Tika's checksum-verified application JAR to the ignored
-project-local `.tools/tika/<version>/` directory; Tika remains an optional
-future extractor for PDF and Office attachments, not a service.  Rebuild the
+Makefile's `install-mac` and `install-linux` targets download, SHA-512 verify,
+and unpack Tika 4's application ZIP distribution under the ignored
+project-local `.tools/tika/<version>/` directory. The runnable JAR and its
+adjacent `lib/` directory remain together; Tika is an optional future extractor
+for PDF and Office attachments, not a service. Rebuild the
 index in a temporary database,
 validate row identities against `archive.sqlite3`, then atomically replace the
 old search database. Live indexing and `refresh-index` both exclude

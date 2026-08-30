@@ -97,15 +97,17 @@ Every `mailarchiver` and `mailsearch` command below uses this value. Pass
 
 ### Apache Tika status
 
-Apache Tika is **not used by the program yet**. The Makefile can download and
-checksum a Tika application JAR in preparation for opt-in extraction from PDF
-and Office attachments, but no current ingest or search path invokes it.
+Apache Tika is **not used by the program yet**. The Makefile can download,
+verify, and unpack its command-line application distribution in preparation
+for opt-in extraction from PDF and Office attachments, but no current ingest
+or search path invokes it.
 Normal mail ingest and body-only search do not need Java. The current
 `--index-attachments` option indexes text attachments only.
 
-Tika requires Java 17 or newer.  The following installs the current supported
-Tika application JAR into this checkout's ignored `.tools/` directory and
-verifies Apache's published SHA-512 checksum; it does not install a service or
+Tika requires Java 17 or newer. The following downloads Tika 4's ZIP
+distribution, verifies Apache's published SHA-512 checksum, and unpacks the
+application JAR with its required `lib/` directory below this checkout's
+ignored `.tools/tika/4.0.0/` directory. It does not install a service or
 schedule any work:
 
 ```console
@@ -114,8 +116,8 @@ make install-mac
 make install-linux
 ```
 
-The installer uses `TIKA_VERSION=3.3.2`.  To install a later Apache release
-explicitly, set that variable after checking its release notes and checksum:
+The installer uses `TIKA_VERSION=4.0.0`. To install a later Apache release,
+set that variable after checking its release notes and checksum:
 
 ```console
 make install-mac TIKA_VERSION=X.Y.Z
