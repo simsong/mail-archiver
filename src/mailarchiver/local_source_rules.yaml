@@ -1,0 +1,34 @@
+version: 1
+
+ignore:
+  # Historic mail stores commonly came from case-insensitive filesystems.
+  case_sensitive: false
+  globs:
+    # macOS Finder per-directory display metadata.
+    - "**/.DS_Store"
+    # Classic Mac OS and early macOS Find By Content search index.
+    - "**/.FBCIndex"
+    # Apple Mail package metadata, not an RFC 5322 message.
+    - "**/Info.plist"
+    # Classic Apple Mail mailbox table of contents.
+    - "**/table_of_contents"
+    # Eudora mailbox display-name to file-name mapping.
+    - "**/descmap.pce"
+    # Eudora mailbox table-of-contents sidecars.
+    - "**/*.toc"
+    # Courier-IMAP access-control metadata.
+    - "**/courierimapacl"
+    # Courier-IMAP UID bookkeeping database.
+    - "**/courierimapuiddb"
+    # Courier Maildir++ marker identifying a directory as a child folder.
+    - "**/maildirfolder"
+    # Courier-IMAP keyword indexes and per-message keyword state.
+    - "**/courierimapkeywords/**"
+
+file_probe:
+  # Maximum prefix supplied to file recognizers during read-only discovery.
+  bytes: 4096
+
+mbox:
+  # The first validated envelope must occur within this many physical lines.
+  preamble_scan_lines: 16

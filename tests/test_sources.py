@@ -54,22 +54,28 @@ def test_local_source_plugin_generates_containers_and_delegates_mail_objects(tmp
     assert messages[0].source == containers[0].source
 
 
-def test_local_source_silently_ignores_known_mailbox_metadata(tmp_path: Path) -> None:
-    """Requirement: known mailbox metadata files do not produce skipped-input noise."""
+def test_local_source_silently_ignores_empty_files_and_known_metadata(tmp_path: Path) -> None:
+    """Requirement: empty files and known mailbox/system metadata do not produce skip noise."""
+    (tmp_path / "empty.eml").touch()
     mailbox_package = tmp_path / "Archive.mbox"
     mailbox_package.mkdir()
-    (mailbox_package / "message.eml").write_bytes(b"From: sender@example.net\n\nbody\n")
+    message = mailbox_package / "message.eml"
+    message.write_bytes(b"From: sender@example.net\n\nbody\n")
     (mailbox_package / "Info.plist").write_bytes(b"not mail")
     (mailbox_package / "table_of_contents").write_bytes(b"not mail")
     (mailbox_package / "Folder.toc").write_bytes(b"not mail")
     (mailbox_package / "Legacy.TOC").write_bytes(b"not mail")
+    for name in (".DS_Store", ".FBCIndex", "descmap.pce", "courierimapacl", "courierimapuiddb"):
+        (tmp_path / name).write_bytes(b"metadata")
+    keywords = tmp_path / "courierimapkeywords"
+    keywords.mkdir()
+    (keywords / ":list.txt").write_bytes(b"NotJunk\nmessage:0\n")
     plugin = load_plugins().source("file-folder").implementation
 
     discovered = list(plugin.discover(SourceSpec(locator=str(tmp_path))))
 
-    assert len(discovered) == 1
-    assert isinstance(discovered[0], MailContainer)
-    assert discovered[0].source.display_name.endswith("message.eml")
+    assert len(discovered) == 1 and isinstance(discovered[0], MailContainer)
+    assert discovered[0].source.display_name == str(message.resolve())
 
 
 def test_local_source_file_has_a_stable_volume_identity_and_relative_path(tmp_path: Path) -> None:
@@ -288,6 +294,66 @@ def test_mbox_signature_precedes_maildir_location(tmp_path: Path) -> None:
     messages = list(plugin.messages(discovered[0], None))
     assert len(messages) == 1 and isinstance(messages[0], MailObject)
     assert messages[0].raw == raw
+
+
+def test_mbox_parser_accepts_a_short_terminal_transcript_preamble(tmp_path: Path) -> None:
+    """Requirement: a short preamble before a validated MBOX stream is container metadata."""
+    path = tmp_path / "technica"
+    preamble = b"".join(f"terminal output {line}\r\n".encode() for line in range(13))
+    first = b"Message-ID: <first@example>\r\nFrom: first@example.net\r\n\r\nfirst\r\n"
+    second = b"Message-ID: <second@example>\r\nFrom: second@example.net\r\n\r\nsecond\r\n"
+    path.write_bytes(
+        preamble
+        + b"From uucp Wed Mar 15 12:41:48 1989\r\n"
+        + first
+        + b"From uucp Thu Mar 16 12:41:48 1989\r\n"
+        + second
+    )
+
+    source = next(source_files(path))
+
+    assert source.kind == "mbox"
+    assert [message.raw for message in source_messages(source)] == [first, second]
+
+
+def test_mbox_preamble_recognition_is_bounded_and_requires_headers(tmp_path: Path) -> None:
+    """Requirement: preamble recovery must not claim arbitrary text containing a From line."""
+    too_long = tmp_path / "too-long"
+    too_long.write_bytes(
+        b"prose\n" * 16
+        + b"From uucp Wed Mar 15 12:41:48 1989\nMessage-ID: <late@example>\n\nbody\n"
+    )
+    no_headers = tmp_path / "no-headers"
+    no_headers.write_bytes(b"cat no-headers\nFrom uucp Wed Mar 15 12:41:48 1989\nbody\n")
+    plugin = load_plugins().source("file-folder").implementation
+
+    discovered = list(plugin.discover(SourceSpec(locator=str(tmp_path))))
+
+    assert len(discovered) == 2
+    assert all(isinstance(item, SkippedInput) for item in discovered)
+
+
+def test_mbox_parser_removes_mmdf_control_framing(tmp_path: Path) -> None:
+    """Requirement: MMDF control lines frame, but are not part of, an RFC 5322 message."""
+    path = tmp_path / "credit"
+    first = b"Message-ID: <first-credit@example>\nFrom: sender@example.net\n\nfirst\n"
+    second = b"Message-ID: <second-credit@example>\nFrom: sender@example.net\n\nsecond\n"
+    delimiter = b"\x01\x01\x01\x01\n"
+    path.write_bytes(
+        delimiter
+        + b"From root Sat Nov 18 03:05:30 1989\n"
+        + first
+        + delimiter
+        + delimiter
+        + b"From root Sun Nov 19 03:05:30 1989\n"
+        + second
+        + delimiter
+    )
+
+    source = next(source_files(path))
+
+    assert source.kind == "mbox"
+    assert [message.raw for message in source_messages(source)] == [first, second]
 
 
 def test_mbox_parser_excludes_mbcp_metadata_and_unwraps_xxx_records(tmp_path: Path) -> None:

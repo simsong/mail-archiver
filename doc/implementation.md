@@ -136,7 +136,11 @@ without hashing or retaining message contents. The framework spools typed
 container metadata to a temporary SQLite work snapshot, deduplicates scoped
 container identities, and verifies a second discovery only for plug-ins that
 declare stable inventory. Live providers are discovered once. The local plug-in also emits every
-unrecognized regular filename and reason; the framework prints each once. The
+unrecognized regular filename and reason; the framework prints each once. It
+silently discards zero-length files and paths matching the case-insensitive
+globs in packaged `local_source_rules.yaml` before file-parser recognition.
+PyYAML loads that versioned file once into immutable Pydantic models; unknown
+keys and nonpositive probe limits fail validation. The
 main thread then starts or validates ClamAV and waits for its
 health probe before creating the mailfile worker pool. This gives the scoreboard
 a stable overall byte and file percentage and ETA; the terminal highlights that
@@ -208,9 +212,9 @@ message uses the MBOX parser without becoming a separate mailbox.
 A Maildir coincident with its mounted volume uses the mount directory name, or
 `Maildir` at an unnamed filesystem root, instead of an empty hierarchy. Any
 competing match involving an external file plug-in remains a fatal preflight
-ambiguity. Local discovery discards exact-basename `Info.plist` and
-`table_of_contents` plus case-insensitive `.toc` mailbox metadata before parser
-recognition, without emitting `SkippedInput` events.
+ambiguity. Each ignored path glob and its rationale are maintained beside the
+file-probe byte limit and MBOX preamble-line limit in the YAML file, rather than
+being duplicated in Python.
 
 The loader scans only packaged and repeatable `--plugin-dir` roots, validates
 every `plugin.toml` before importing external code, sorts by priority and kind,
@@ -641,7 +645,13 @@ messages when virus definitions or policy changes.
 
 Input detection must validate a stream rather than trust filename extensions.
 The MBOX reader recognizes separator lines, handles mboxrd `>From ` escaping,
-and reports malformed boundaries without silently merging messages.
+and reports malformed boundaries without silently merging messages. It also
+accepts a first separator within the first 16 lines when the separator has a
+classic ctime timestamp and an RFC header block follows. This recovers short
+terminal-capture preambles without claiming later `From ` text in documents.
+An MMDF `0x01 0x01 0x01 0x01` line may frame such an MBOX record; opening and
+closing control lines are source-container bytes, not RFC 5322 message bytes.
+The packaged YAML supplies both the prefix byte budget and preamble line limit.
 
 Writers produce an envelope `From ` line plus mboxrd-escaped message bytes under
 `data/mbox/`.
@@ -756,6 +766,11 @@ adapter has layout-specific readers and emits explicit incomplete records for
 headers-only placeholders, evicted bodies, and detached parts. It never falls
 through to a network fetch.
 
+Printed-email PDFs follow the staged, source-preserving plan in
+[PDF_OCR_STRATEGY.md](PDF_OCR_STRATEGY.md). OCR text remains derived evidence;
+it is not published as byte-preserved RFC 5322 mail. Canonical PDF payload and
+document-derived catalog support require an explicit archive-format decision.
+
 Redaction is a separate derivative pipeline over hash-verified canonical
 messages. A versioned Pydantic policy selects header values, body spans, MIME
 parts, attachments, or derived entities; the exporter writes a new corpus plus
@@ -772,7 +787,8 @@ browser-acceptance, native-WKWebView, and optional XCUITest layers, including
 which layer owns macOS menu-bar verification.
 
 Tests use small, hand-authored MBOX, Babyl, and EMLX fixtures covering mboxrd
-quoting, MBOX-formatted files under Maildir paths, trimmed Received medians and
+quoting, bounded terminal-preamble and MMDF-framed MBOX, silent empty/metadata
+files, MBOX-formatted files under Maildir paths, trimmed Received medians and
 Date outliers, exact MBCP exclusion,
 `From XXX` unwrapping, parser registration, missing IDs,
 same-ID/different-content messages, autosaves,
