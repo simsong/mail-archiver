@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and verify mailarchiver integrity files using only the stdlib."""
+"""Independently generate and verify Mailbag and message fixity using only stdlib."""
 
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ SHA256_PATTERN = re.compile(r"[0-9A-Fa-f]{64}")
 MAILBAG_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
 SPLIT_CSV_PATTERN = re.compile(r"mailbag-([1-9][0-9]*)\.csv")
 MAILBAG_ROW_LIMIT = 100_000
+MAX_AMBIGUOUS_FROM_LINES = 12
 FIELD_NAME_PATTERN = re.compile(rb"[!-9;-~]+")
 ALGORITHMS = {"sha256": 64, "sha512": 128}
 
@@ -308,24 +309,25 @@ def _parse_token(token: object, standards: list[HashStandard]) -> tuple[HashStan
 
 
 def _stored_candidates(box: mailbox.mbox, key: object) -> Iterable[bytes]:
+    """Independently try stored, mboxrd-unquoted, and writer-added-LF alternatives."""
     raw = box.get_bytes(key, from_=False)
     lines = raw.splitlines(keepends=True)
     ambiguous = [index for index, line in enumerate(lines) if line.startswith(b">From ")]
-    masks = [(1 << len(ambiguous)) - 1, 0]
-    if len(ambiguous) <= 12:
-        masks.extend(range(1 << len(ambiguous)))
-    seen: set[bytes] = set()
+    fully_unquoted = (1 << len(ambiguous)) - 1
+    masks = [fully_unquoted] + ([0] if fully_unquoted else [])
+    if len(ambiguous) <= MAX_AMBIGUOUS_FROM_LINES:
+        masks.extend(range(1, fully_unquoted))
     for mask in masks:
         candidate = list(lines)
         for bit, index in enumerate(ambiguous):
             if mask & (1 << bit):
                 candidate[index] = candidate[index][1:]
-        restored = b"".join(candidate)
-        if restored not in seen:
-            seen.add(restored)
-            yield restored
-    if raw == b"\n":
-        yield b""
+        stored = b"".join(candidate)
+        yield stored
+        if stored.endswith(b"\n"):
+            yield stored[:-1]
+        if stored.endswith(b"\r\n"):
+            yield stored[:-2]
 
 
 def _check_hashes(tokens: list[str], standards: list[HashStandard], data: bytes) -> list[str]:

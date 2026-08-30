@@ -1,4 +1,4 @@
-"""Typed read-only services for the graphical archive browser."""
+"""Provide typed, read-only search, MIME rendering, and safe export services."""
 
 from __future__ import annotations
 
@@ -112,6 +112,11 @@ class AttachmentContent(BaseModel):
     filename: str
     content_type: str
     content_base64: str
+
+
+class AttachmentDescriptor(BaseModel):
+    filename: str
+    content_type: str
 
 
 def search_page(
@@ -272,17 +277,18 @@ def render_part(archive: Path, message_pk: int, part_id: int, allow_remote: bool
 
 
 def attachment_content(archive: Path, message_pk: int, part_id: int) -> AttachmentContent:
-    _, message = parsed_message(archive, message_pk)
-    part = _part(message, part_id)
-    content_type = part.get_content_type()
-    filename = safe_filename(part.get_filename(), part_id, content_type)
-    if not (is_attachment(part) or content_type.startswith("image/") or content_type == "application/pdf"):
-        raise ValueError(f"MIME part {part_id} is not an attachment")
+    part, descriptor = _attachment(archive, message_pk, part_id)
     return AttachmentContent(
-        filename=filename,
-        content_type=content_type,
+        filename=descriptor.filename,
+        content_type=descriptor.content_type,
         content_base64=base64.b64encode(_payload_bytes(part)).decode("ascii"),
     )
+
+
+def attachment_descriptor(archive: Path, message_pk: int, part_id: int) -> AttachmentDescriptor:
+    """Return attachment naming and type metadata without base64-encoding its payload."""
+    _, descriptor = _attachment(archive, message_pk, part_id)
+    return descriptor
 
 
 def write_message(archive: Path, message_pk: int, destination: Path) -> None:
@@ -291,10 +297,7 @@ def write_message(archive: Path, message_pk: int, destination: Path) -> None:
 
 
 def write_attachment(archive: Path, message_pk: int, part_id: int, destination: Path) -> None:
-    _, message = parsed_message(archive, message_pk)
-    part = _part(message, part_id)
-    if not (is_attachment(part) or part.get_content_type().startswith("image/") or part.get_content_type() == "application/pdf"):
-        raise ValueError(f"MIME part {part_id} is not an attachment")
+    part, _ = _attachment(archive, message_pk, part_id)
     _write_bytes(destination, _payload_bytes(part))
 
 
@@ -380,6 +383,18 @@ def _part(message: Message, part_id: int) -> Message:
     if part_id < 0 or part_id >= len(parts):
         raise ValueError(f"no MIME part {part_id}")
     return parts[part_id]
+
+
+def _attachment(archive: Path, message_pk: int, part_id: int) -> tuple[Message, AttachmentDescriptor]:
+    _, message = parsed_message(archive, message_pk)
+    part = _part(message, part_id)
+    content_type = part.get_content_type()
+    if not _is_gui_attachment(part):
+        raise ValueError(f"MIME part {part_id} is not an attachment")
+    return part, AttachmentDescriptor(
+        filename=safe_filename(part.get_filename(), part_id, content_type),
+        content_type=content_type,
+    )
 
 
 def _payload_bytes(part: Message) -> bytes:

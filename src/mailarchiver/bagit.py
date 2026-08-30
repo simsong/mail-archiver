@@ -1,4 +1,4 @@
-"""Create native Mailbag/BagIt metadata and fixity checkpoints."""
+"""Publish native Mailbag metadata, payload manifests, and durable tag fixity."""
 
 from __future__ import annotations
 
@@ -291,6 +291,7 @@ def _write_bag_info(archive: Path, byte_count: int, file_count: int, packaged_at
             f"Payload-Oxum: {byte_count}.{file_count}",
             "MBOX-Format-Details: mboxrd",
             "MBOX-Agent: Python mailbox",
+            "Mailarchiver-Message-Newline-Policy: preserve-source; add-final-LF-for-MBOX-framing",
         )
     ) + "\n"
     _write_atomic(archive / BAG_INFO, content.encode("utf-8"))

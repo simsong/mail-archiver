@@ -1,5 +1,6 @@
-"""Requirements: FTS indexes preferred body text, excluding attachments by default."""
+"""Verify disposable FTS extraction, attachment metadata, updates, and failure isolation."""
 
+import hashlib
 import sqlite3
 import warnings
 from pathlib import Path
@@ -97,6 +98,56 @@ def test_index_records_attachment_count_names_and_mime_types(tmp_path: Path) -> 
     ]
 
 
+def test_reindex_uses_indexed_sha_mapping_and_fts_rowids(tmp_path: Path) -> None:
+    """Requirement: updating disposable FTS rows never scans FTS by its unindexed SHA-256 column."""
+    first = b"\n".join(
+        (
+            b"Content-Type: multipart/mixed; boundary=x",
+            b"",
+            b"--x",
+            b"Content-Type: text/plain",
+            b"",
+            b"first body",
+            b"--x",
+            b"Content-Type: text/plain; name=attachment.txt",
+            b"Content-Disposition: attachment",
+            b"",
+            b"attachment body",
+            b"--x--",
+        )
+    )
+    second = b"Content-Type: text/plain\n\nsecond body"
+    search = create_search(tmp_path / "search.sqlite3")
+    try:
+        index_message(search, first, True)
+        index_message(search, second, False)
+        digest = hashlib.sha256(first).hexdigest()
+        old_rowids = search.execute(
+            "SELECT message_fts_rowid, attachment_fts_rowid FROM message_metadata WHERE sha256 = ?", (digest,)
+        ).fetchone()
+        assert old_rowids is not None and old_rowids[1] is not None
+
+        plan = search.execute(
+            "EXPLAIN QUERY PLAN SELECT message_fts_rowid, attachment_fts_rowid "
+            "FROM message_metadata WHERE sha256 = ?",
+            (digest,),
+        ).fetchone()[3]
+        index_message(search, first, False)
+        new_rowids = search.execute(
+            "SELECT message_fts_rowid, attachment_fts_rowid FROM message_metadata WHERE sha256 = ?", (digest,)
+        ).fetchone()
+        old_message_count = search.execute("SELECT count(*) FROM message_fts WHERE rowid = ?", (old_rowids[0],)).fetchone()
+        old_attachment_count = search.execute(
+            "SELECT count(*) FROM attachment_fts WHERE rowid = ?", (old_rowids[1],)
+        ).fetchone()
+    finally:
+        search.close()
+
+    assert "USING INDEX" in plan and "sha256=?" in plan
+    assert new_rowids is not None and new_rowids[0] != old_rowids[0] and new_rowids[1] is None
+    assert old_message_count == old_attachment_count == (0,)
+
+
 def test_body_preview_collapses_and_bounds_words() -> None:
     """Requirement: indexed result previews contain the first 18 body words on one line."""
     body = "one two\nthree four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen"
@@ -118,4 +169,4 @@ def test_index_failure_is_recorded_without_raising() -> None:
 
     field, detail = catalog.execute("SELECT field, detail FROM metadata_defects").fetchone()
     assert field == "search-index"
-    assert "no such table: message_fts" in detail
+    assert "no such table: message_metadata" in detail

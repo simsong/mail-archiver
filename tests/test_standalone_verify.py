@@ -1,4 +1,4 @@
-"""Requirements: archives use the versioned hybrid integrity format."""
+"""Verify the installed stdlib checker enforces BagIt, Mailbag, and message fixity."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from mailarchiver.standalone_verify import (
     IntegrityMessage,
     install_archive_verifier,
     semantic_bytes,
+    verify_mbox,
     write_integrity_file,
 )
 
@@ -131,6 +132,45 @@ def test_integrity_serialization_is_deterministic(tmp_path: Path) -> None:
         1,
     )
     assert integrity.read_bytes() == first
+
+
+def test_verifier_recovers_multiple_ambiguous_from_lines(tmp_path: Path) -> None:
+    """Requirement: independent verification tests every bounded MBOX quote interpretation."""
+    raw = b"Message-ID: <quoted@example>\n\nFrom one\n>From two\nFrom three\n"
+    path = tmp_path / "quoted.mbox"
+    box = mailbox.mbox(path)
+    try:
+        box.add(raw)
+        box.flush()
+    finally:
+        box.close()
+    sidecar = tmp_path / "quoted.mbox.integrity"
+    digest = hashlib.sha256(raw).hexdigest()
+    write_integrity_file(path, sidecar, (IntegrityMessage("quoted@example", digest, raw),), 1)
+
+    assert verify_mbox(path, sidecar) == []
+
+
+def test_verifier_recovers_message_without_source_final_newline(tmp_path: Path) -> None:
+    """Regression: independent verification recognizes one writer-added final LF."""
+    raw = b"Message-ID: <no-final-newline@example>\n\nbody"
+    path = tmp_path / "no-final-newline.mbox"
+    box = mailbox.mbox(path)
+    try:
+        box.add(raw)
+        box.flush()
+    finally:
+        box.close()
+    sidecar = tmp_path / "no-final-newline.mbox.integrity"
+    digest = hashlib.sha256(raw).hexdigest()
+    write_integrity_file(
+        path,
+        sidecar,
+        (IntegrityMessage("no-final-newline@example", digest, raw),),
+        1,
+    )
+
+    assert verify_mbox(path, sidecar) == []
 
 
 def test_verifier_accepts_multiple_digest_algorithms_for_one_standard(tmp_path: Path) -> None:

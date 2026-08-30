@@ -1,24 +1,35 @@
-"""Black-box acceptance tests for requirements in doc/end-to-end-tests.md."""
+"""Exercise complete ingest, recovery, reporting, and failure behavior as subprocesses."""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import json
 import mailbox
 import os
 import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
+from collections import Counter
 from pathlib import Path
 from shutil import copy, copytree
 
 import pytest
 
+from mailarchiver.__main__ import nonnegative_integer, positive_integer, report_years
+from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.layout import mbox_directory
+from mailarchiver.mbox import add_message
+from mailarchiver.source_volume import METADATA_CURRENT_MOUNT_PATH
 from mailarchiver.standalone_verify import semantic_bytes
 
 
 TEST_DATA = Path(__file__).parent / "data"
+CLAMD_ENV = "MAILARCHIVER_CLAMD"
+CLAMD_CONFIG_ENV = "MAILARCHIVER_CLAMD_CONFIG"
+CLAMD_SOCKET_ENV = "MAILARCHIVER_CLAMD_SOCKET"
 
 
 def emlx_message_bytes(path: Path) -> bytes:
@@ -43,7 +54,12 @@ def source_mail(tmp_path: Path) -> tuple[Path, dict[str, bytes]]:
     }
 
 
-def run_ingest(source: Path, archive: Path, owner_names: Path) -> subprocess.CompletedProcess[str]:
+def run_ingest(
+    source: Path,
+    archive: Path,
+    owner_names: Path,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             sys.executable,
@@ -60,6 +76,7 @@ def run_ingest(source: Path, archive: Path, owner_names: Path) -> subprocess.Com
         check=False,
         capture_output=True,
         text=True,
+        env=environment,
     )
 
 
@@ -73,6 +90,35 @@ def mailbox_message_bytes(path: Path) -> list[bytes]:
 
 def assert_success(result: subprocess.CompletedProcess[str]) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cli_numeric_ranges_fail_early() -> None:
+    """Requirement: nonsensical concurrency, report counts, and year ranges fail at parsing."""
+    assert positive_integer("1") == 1
+    assert nonnegative_integer("0") == 0
+    assert report_years("2020-2024") == (2020, 2024)
+    with pytest.raises(argparse.ArgumentTypeError, match="greater than zero"):
+        positive_integer("0")
+    with pytest.raises(argparse.ArgumentTypeError, match="zero or positive"):
+        nonnegative_integer("-1")
+    with pytest.raises(ValueError, match="ascending"):
+        report_years("2024-2020")
+
+
+def catalog_source_path(catalog: sqlite3.Connection, path: Path) -> str:
+    """Return the recorded volume-relative path that reconstructs *path*."""
+    resolved = path.resolve()
+    matches = []
+    for source_path, metadata_json in catalog.execute(
+        "SELECT source_files.source_path, source_volumes.metadata_json FROM source_files "
+        "JOIN source_volumes USING (source_volume_pk)"
+    ):
+        metadata = json.loads(metadata_json)
+        mount_path = Path(metadata[METADATA_CURRENT_MOUNT_PATH])
+        if (mount_path / source_path).resolve() == resolved:
+            matches.append(source_path)
+    assert len(matches) == 1
+    return str(matches[0])
 
 
 def test_ingest_routes_preserves_and_indexes_messages(
@@ -90,18 +136,26 @@ def test_ingest_routes_preserves_and_indexes_messages(
     assert "files_processed=4" in result.stderr
     assert "started:" in result.stderr
     assert "waiting for ClamAV startup:" in result.stderr
+    assert "discovering sources:" in result.stderr
     assert "ingesting:" in result.stderr
-    assert "file=" in result.stderr
+    startup = result.stderr.index("waiting for ClamAV startup:")
+    ingesting = result.stderr.index("ingesting:")
+    assert startup < ingesting
+    assert "processed=0 active_workers=0" in result.stderr[startup:ingesting]
+    assert "workers=" in result.stderr
+    assert "peak_workers=4" in result.stderr
     assert "seen_skipped=" in result.stderr
+    assert "overall_percent=100.0%" in result.stderr
+    assert "files_total=4" in result.stderr
+    assert "eta=0s" in result.stderr
     assert "  year    sent    received    people" in result.stdout
     assert "  2024       1           2" in result.stdout
     assert "top senders" in result.stdout
 
     assert mailbox_message_bytes(mbox_directory(archive) / "2024-Sent1.mbox") == [raw["sent"]]
-    assert mailbox_message_bytes(mbox_directory(archive) / "2024-Archive1.mbox") == [
-        raw["collision_one"],
-        raw["collision_two"],
-    ]
+    assert Counter(mailbox_message_bytes(mbox_directory(archive) / "2024-Archive1.mbox")) == Counter(
+        (raw["collision_one"], raw["collision_two"])
+    )
     assert len(mailbox_message_bytes(mbox_directory(archive) / "INFECTED1.mbox")) == 1
     assert all(
         b"autosave@example" not in item
@@ -119,7 +173,8 @@ def test_ingest_routes_preserves_and_indexes_messages(
             "SELECT count(*) FROM observations WHERE disposition = 'duplicate' AND message_pk IS NULL"
         ).fetchone() == (0,)
         raw_hash, semantic_hash = catalog.execute(
-            "SELECT raw_sha256, semantic_sha256 FROM observations WHERE message_pk IS NOT NULL ORDER BY observation_pk LIMIT 1"
+            "SELECT raw_sha256, semantic_sha256 FROM observations "
+            "JOIN messages USING (message_pk) WHERE messages.category = 'Sent'"
         ).fetchone()
         assert raw_hash == hashlib.sha256(raw["sent"]).hexdigest()
         assert semantic_hash == hashlib.sha256(semantic_bytes(raw["sent"])).hexdigest()
@@ -132,7 +187,7 @@ def test_ingest_routes_preserves_and_indexes_messages(
         for path in source.rglob("*"):
             if path.is_file():
                 stat = path.stat()
-                assert fingerprints[path.resolve().relative_to(source.anchor).as_posix()] == (
+                assert fingerprints[catalog_source_path(catalog, path)] == (
                     stat.st_mtime_ns,
                     stat.st_size,
                     hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -161,6 +216,22 @@ def test_ingest_routes_preserves_and_indexes_messages(
         assert search.execute("SELECT count(*) FROM message_fts WHERE sha256 = ?", (infected_sha256,)).fetchone() == (0,)
     finally:
         search.close()
+
+    (archive / "search.sqlite3").unlink()
+    obsolete = sqlite3.connect(archive / "search.sqlite3")
+    obsolete.execute("CREATE TABLE message_metadata (sha256 TEXT PRIMARY KEY, fts_rowid INTEGER NOT NULL)")
+    obsolete.close()
+    upgraded = run_ingest(source, archive, owner_names)
+    assert_success(upgraded)
+    assert "rebuilding obsolete search index:" in upgraded.stderr
+    rebuilt = sqlite3.connect(archive / "search.sqlite3")
+    try:
+        assert rebuilt.execute("SELECT count(*) FROM message_fts").fetchone() == (3,)
+        assert rebuilt.execute(
+            "SELECT count(*) FROM message_fts WHERE sha256 = ?", (infected_sha256,)
+        ).fetchone() == (0,)
+    finally:
+        rebuilt.close()
 
     refreshed = subprocess.run(
         [sys.executable, "-m", "mailarchiver", "--archive", str(archive), "refresh-index"],
@@ -198,17 +269,42 @@ def test_refresh_index_excludes_quarantine_mailboxes(tmp_path: Path) -> None:
     archive.mkdir()
     mbox_directory(archive).mkdir(parents=True)
     messages = {
-        "2024-Archive1.mbox": b"Message-ID: <normal@example>\nSubject: normal\n\nnormal body\n",
+        "2024-Archive1.mbox": (
+            b"Message-ID: <normal@example>\nSubject: normal\n\nnormal body\nFrom ordinary\n>From literal\n"
+        ),
         "INFECTED1.mbox": b"Message-ID: <infected@example>\nSubject: infected\n\ninfected body\n",
         "MALFORMED1.mbox": b"Message-ID: <malformed@example>\nSubject: malformed\n\nmalformed body\n",
     }
+    locations = {}
     for filename, raw in messages.items():
-        box = mailbox.mbox(mbox_directory(archive) / filename, create=True)
+        path = mbox_directory(archive) / filename
+        box = mailbox.mbox(path, create=True)
         try:
-            box.add(raw)
-            box.flush()
+            locations[filename] = add_message(box, path, raw)
         finally:
             box.close()
+    catalog = create_catalog(archive / "archive.sqlite3")
+    try:
+        sender_pk = address_pk(catalog, "sender@example.net")
+        for filename, raw in messages.items():
+            category = "Archive" if filename.startswith("2024-") else filename.split("1.", 1)[0]
+            message_pk = catalog.execute(
+                "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
+                "VALUES (?, ?, ?, '', '2024-01-01T00:00:00+00:00', 'date', ?)",
+                (filename, hashlib.sha256(raw).hexdigest(), sender_pk, category),
+            ).lastrowid
+            generation_pk = catalog.execute(
+                "INSERT INTO mbox_generations(filename, sha256, message_count, byte_count) VALUES (?, '', 1, ?)",
+                (filename, (mbox_directory(archive) / filename).stat().st_size),
+            ).lastrowid
+            location = locations[filename]
+            catalog.execute(
+                "INSERT INTO locations(message_pk, generation_pk, byte_offset, byte_length) VALUES (?, ?, ?, ?)",
+                (message_pk, generation_pk, location.byte_offset, location.byte_length),
+            )
+        catalog.commit()
+    finally:
+        catalog.close()
 
     refreshed = subprocess.run(
         [sys.executable, "-m", "mailarchiver", "--archive", str(archive), "refresh-index"],
@@ -223,6 +319,39 @@ def test_refresh_index_excludes_quarantine_mailboxes(tmp_path: Path) -> None:
         assert search.execute("SELECT sha256 FROM message_fts").fetchall() == [
             (hashlib.sha256(messages["2024-Archive1.mbox"]).hexdigest(),)
         ]
+    finally:
+        search.close()
+
+
+def test_refresh_index_preserves_prior_index_when_mbox_and_catalog_disagree(tmp_path: Path) -> None:
+    """Requirement: FTS replacement fails closed unless every normal MBOX row is catalogued."""
+    archive = tmp_path / "archive"
+    mbox_directory(archive).mkdir(parents=True)
+    path = mbox_directory(archive) / "2024-Archive1.mbox"
+    box = mailbox.mbox(path, create=True)
+    try:
+        box.add(b"Message-ID: <uncatalogued@example>\n\nbody\n")
+        box.flush()
+    finally:
+        box.close()
+    create_catalog(archive / "archive.sqlite3").close()
+    old_search = create_search(archive / "search.sqlite3")
+    old_search.execute("CREATE TABLE preserved(value TEXT)")
+    old_search.execute("INSERT INTO preserved VALUES ('old index')")
+    old_search.commit()
+    old_search.close()
+
+    refreshed = subprocess.run(
+        [sys.executable, "-m", "mailarchiver", "--archive", str(archive), "refresh-index"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert refreshed.returncode != 0
+    search = sqlite3.connect(archive / "search.sqlite3")
+    try:
+        assert search.execute("SELECT value FROM preserved").fetchone() == ("old index",)
     finally:
         search.close()
 
@@ -250,7 +379,7 @@ def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, d
         assert catalog.execute("SELECT count(*) FROM source_files WHERE completed_run = 2").fetchone() == (4,)
         assert catalog.execute(
             "SELECT modified_at_ns FROM source_files WHERE source_path = ?",
-            (touched.resolve().relative_to(touched.anchor).as_posix(),),
+            (catalog_source_path(catalog, touched),),
         ).fetchone() == (touched.stat().st_mtime_ns,)
     finally:
         catalog.close()
@@ -258,15 +387,14 @@ def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, d
     assert "files_processed=4" in rerun.stderr
 
 
-def test_completed_file_is_published_before_later_source_failure(tmp_path: Path) -> None:
-    """Requirement: source discovery never delays publication of an earlier complete file."""
+def test_discovery_failure_prevents_partial_ingest(tmp_path: Path) -> None:
+    """Requirement: metadata discovery failures stop before MBOX publication."""
     source = tmp_path / "first.eml"
-    raw = (
+    source.write_bytes(
         b"Message-ID: <first-before-failure@example>\n"
         b"From: sender@example.net\n"
         b"Date: Thu, 1 Feb 2024 12:00:00 +0000\n\nfirst body\n"
     )
-    source.write_bytes(raw)
     archive = tmp_path / "archive"
     owner_names = Path(__file__).parents[1] / "owner-names.txt"
 
@@ -291,11 +419,11 @@ def test_completed_file_is_published_before_later_source_failure(tmp_path: Path)
 
     assert result.returncode == 1
     assert "source not found" in result.stderr
-    assert mailbox_message_bytes(mbox_directory(archive) / "2024-Archive1.mbox") == [raw]
+    assert not any(mbox_directory(archive).glob("*.mbox"))
     catalog = sqlite3.connect(archive / "archive.sqlite3")
     try:
-        assert catalog.execute("SELECT count(*) FROM messages").fetchone() == (1,)
-        assert catalog.execute("SELECT count(*) FROM source_files").fetchone() == (1,)
+        assert catalog.execute("SELECT count(*) FROM messages").fetchone() == (0,)
+        assert catalog.execute("SELECT count(*) FROM source_files").fetchone() == (0,)
     finally:
         catalog.close()
 
@@ -477,7 +605,7 @@ def test_parser_failure_records_source_identity_and_failed_run(tmp_path: Path) -
             "SELECT source_files.source_path, source_offset, raw_sha256, disposition, detail FROM observations "
             "JOIN source_files USING (source_file_pk)"
         ).fetchone() == (
-            source.resolve().relative_to(source.anchor).as_posix(), 0, digest, "error",
+            catalog_source_path(catalog, source), 0, digest, "error",
             f"ValueError: no date or year path fallback for {source}",
         )
     finally:
@@ -527,3 +655,101 @@ def test_unusable_source_fails_cleanly(
     assert diagnostic in result.stderr
     assert "Traceback" not in result.stderr
     assert not list(mbox_directory(archive).glob("*.mbox"))
+
+
+def test_clamav_startup_failure_prevents_worker_activity(tmp_path: Path) -> None:
+    """Regression: clamd must become ready before workers can parse or publish mail."""
+    source = tmp_path / "source.eml"
+    source.write_bytes(
+        b"Message-ID: <one@example>\nDate: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"
+    )
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+    missing_clamd = tmp_path / "missing-clamd"
+    environment = os.environ.copy()
+    environment[CLAMD_ENV] = str(missing_clamd)
+    environment[CLAMD_SOCKET_ENV] = str(tmp_path / "clamd.sock")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mailarchiver",
+            "--archive",
+            str(archive),
+            "ingest",
+            "--owner-names-file",
+            str(owner_names),
+            "--clamav",
+            str(source),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 1
+    assert f"ClamAV startup failed: cannot start {missing_clamd}" in result.stderr
+    assert "processed=0 active_workers=0 peak_workers=0" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not list(mbox_directory(archive).glob("*.mbox"))
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT count(*) FROM source_files").fetchone() == (0,)
+        assert catalog.execute("SELECT count(*) FROM observations").fetchone() == (0,)
+        assert catalog.execute("SELECT result FROM ingest_runs").fetchone() == ("failed",)
+    finally:
+        catalog.close()
+
+
+def test_clamav_start_uses_private_runtime_instead_of_configured_files(tmp_path: Path) -> None:
+    """Regression: stale configured log and PID paths cannot break an owned daemon."""
+    source = tmp_path / "source.eml"
+    source.write_bytes(
+        b"Message-ID: <private-clamd-log@example>\n"
+        b"Date: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"
+    )
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+    configured_socket = Path(os.environ.get(CLAMD_SOCKET_ENV, "/private/tmp/clamd.sock"))
+    configured_path = Path(
+        os.environ.get(CLAMD_CONFIG_ENV, "/opt/homebrew/etc/clamav/clamd.conf")
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="mailarchiver-clamd-test-", dir=configured_path.parent
+    ) as test_runtime_name:
+        test_runtime = Path(test_runtime_name)
+        blocked_log = test_runtime / "configured-clamd.log"
+        blocked_log.touch(mode=0o000)
+        configured_pid = test_runtime / "configured-clamd.pid"
+        configuration_path = test_runtime / "clamd.conf"
+        base_configuration = configured_path.read_text(encoding="utf-8")
+        configured_directives = (
+            ("LocalSocket", configured_socket),
+            ("PidFile", configured_pid),
+            ("LogFile", blocked_log),
+        )
+        directive_names = {directive for directive, _value in configured_directives}
+        lines = [
+            line
+            for line in base_configuration.splitlines()
+            if not line.strip()
+            or line.lstrip().startswith("#")
+            or line.split(maxsplit=1)[0] not in directive_names
+        ]
+        lines.extend(f"{directive} {value}" for directive, value in configured_directives)
+        base_configuration = "\n".join(lines) + "\n"
+        configuration_path.write_text(base_configuration, encoding="utf-8")
+        environment = os.environ.copy()
+        environment[CLAMD_CONFIG_ENV] = str(configuration_path)
+        environment[CLAMD_SOCKET_ENV] = str(configured_socket)
+
+        result = run_ingest(source, archive, owner_names, environment)
+
+        assert_success(result)
+        assert blocked_log.stat().st_mode & 0o777 == 0
+        assert blocked_log.stat().st_size == 0
+        assert not configured_pid.exists()
+        assert not configured_socket.exists()
+        assert not list(test_runtime.glob("mailarchiver-clamd-*"))

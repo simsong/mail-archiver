@@ -1,4 +1,4 @@
-"""macOS-first pywebview shell for read-only archive search."""
+"""Expose the read-only archive services through a macOS-first pywebview shell."""
 
 from __future__ import annotations
 
@@ -16,11 +16,11 @@ import webview
 from pydantic import BaseModel
 
 from .gui_service import (
-    AttachmentContent,
     MessageView,
     MessagePreview,
     PreviewBatch,
     attachment_content,
+    attachment_descriptor,
     describe_message,
     export_filename,
     is_risky,
@@ -167,7 +167,7 @@ class GuiApi:
         return str(destination)
 
     def save_attachment(self, message_pk: int, part_id: int) -> str | None:
-        attachment = attachment_content(self._archive(), message_pk, part_id)
+        attachment = attachment_descriptor(self._archive(), message_pk, part_id)
         selected = self.window.create_file_dialog(
             webview.FileDialog.SAVE,
             directory=str(Path.home() / "Desktop"),
@@ -187,14 +187,16 @@ class GuiApi:
         return DragExport(filename=destination.name, url=destination.as_uri()).model_dump()
 
     def open_attachment(self, message_pk: int, part_id: int, confirmed: bool = False) -> dict[str, object]:
-        content: AttachmentContent = attachment_content(self._archive(), message_pk, part_id)
-        risky = is_risky(content.filename, content.content_type)
+        descriptor = attachment_descriptor(self._archive(), message_pk, part_id)
+        risky = is_risky(descriptor.filename, descriptor.content_type)
         if risky and not confirmed:
-            return OpenResult(filename=content.filename, requires_confirmation=True).model_dump()
-        destination = self.temporary_directory / safe_filename(content.filename, part_id, content.content_type)
+            return OpenResult(filename=descriptor.filename, requires_confirmation=True).model_dump()
+        destination = self.temporary_directory / safe_filename(
+            descriptor.filename, part_id, descriptor.content_type
+        )
         write_attachment(self._archive(), message_pk, part_id, destination)
         subprocess.Popen(["/usr/bin/open", str(destination)], close_fds=True)
-        return OpenResult(filename=content.filename, opened=True).model_dump()
+        return OpenResult(filename=descriptor.filename, opened=True).model_dump()
 
     def open_message_window(self, message_pk: int) -> None:
         view: MessageView = describe_message(self._archive(), message_pk)
@@ -213,8 +215,18 @@ class GuiApi:
         child_api.set_window(child)
         self.children.append(child_api)
 
+        def close_child(*_args: object) -> None:
+            child_api.close()
+            if child_api in self.children:
+                self.children.remove(child_api)
+
+        child.events.closed += close_child
+
     def close(self, *_args: object) -> None:
         self._preview_executor.shutdown(wait=False, cancel_futures=True)
+        for child in tuple(self.children):
+            child.close()
+        self.children.clear()
         if self._temporary:
             self._temporary.cleanup()
 

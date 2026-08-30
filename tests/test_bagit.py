@@ -1,4 +1,4 @@
-"""Requirements: native Mailbags expose independently verifiable file and message fixity."""
+"""Verify Mailbag metadata and manifests detect payload, tag, and layout damage."""
 
 from __future__ import annotations
 

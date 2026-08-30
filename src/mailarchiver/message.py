@@ -1,4 +1,4 @@
-"""Raw-message metadata parsing and date resolution."""
+"""Derive robust message identity, addresses, subjects, and dates from raw mail."""
 
 from __future__ import annotations
 

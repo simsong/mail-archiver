@@ -1,4 +1,4 @@
-"""Canonical MBOX writes, retrieval, recovery, and integrity generation."""
+"""Publish canonical MBOX bytes and recover or verify their direct locations."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import mailbox
 import os
 import shutil
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from .layout import integrity_path, mbox_directory, mbox_path
 from .message import ParsedMessage
+from .search import delete_indexed_message
 from .standalone_verify import IntegrityMessage, write_integrity_file
 
 
@@ -89,9 +90,7 @@ def recover_publication(archive: Path, catalog: sqlite3.Connection, search: sqli
         return PublicationRecovery.COMMITTED
     path = mbox_path(archive, publication.filename)
     if not path.exists() and not publication.file_existed:
-        search.execute("DELETE FROM message_fts WHERE sha256 = ?", (publication.sha256,))
-        search.execute("DELETE FROM attachment_fts WHERE sha256 = ?", (publication.sha256,))
-        search.execute("DELETE FROM message_metadata WHERE sha256 = ?", (publication.sha256,))
+        delete_indexed_message(search, publication.sha256)
         search.commit()
         clear_publication_journal(archive)
         return PublicationRecovery.ROLLED_BACK
@@ -104,9 +103,7 @@ def recover_publication(archive: Path, catalog: sqlite3.Connection, search: sqli
             os.fsync(output.fileno())
     else:
         path.unlink()
-    search.execute("DELETE FROM message_fts WHERE sha256 = ?", (publication.sha256,))
-    search.execute("DELETE FROM attachment_fts WHERE sha256 = ?", (publication.sha256,))
-    search.execute("DELETE FROM message_metadata WHERE sha256 = ?", (publication.sha256,))
+    delete_indexed_message(search, publication.sha256)
     search.commit()
     clear_publication_journal(archive)
     return PublicationRecovery.ROLLED_BACK
@@ -156,26 +153,33 @@ def _read_stored_payload(path: Path, location: MboxLocation) -> bytes:
     return raw
 
 
-def read_location_candidates(path: Path, location: MboxLocation):
-    """Yield possible originals for the standard library's ambiguous From quoting."""
+def read_location_candidates(path: Path, location: MboxLocation) -> Iterator[bytes]:
+    """Yield stored and alternate original-byte interpretations of one MBOX record.
+
+    For each possible mboxrd ``>From`` interpretation, yield the complete
+    stored payload first. If it ends in a line break, then yield alternatives
+    with one terminal LF or CRLF removed because Python's MBOX writer adds a
+    final line break when the source lacks one. Callers hash each candidate and
+    accept only the one matching the catalogued original-byte SHA-256.
+    """
     stored = _read_stored_payload(path, location)
     lines = stored.splitlines(keepends=True)
     ambiguous = [index for index, line in enumerate(lines) if line.startswith(b">From ")]
-    masks = [(1 << len(ambiguous)) - 1, 0]
+    fully_unquoted = (1 << len(ambiguous)) - 1
+    masks = [fully_unquoted] + ([0] if fully_unquoted else [])
     if len(ambiguous) <= MAX_AMBIGUOUS_FROM_LINES:
-        masks.extend(range(1 << len(ambiguous)))
-    seen: set[bytes] = set()
+        masks.extend(range(1, fully_unquoted))
     for mask in masks:
         candidate = list(lines)
         for bit, index in enumerate(ambiguous):
             if mask & (1 << bit):
                 candidate[index] = candidate[index][1:]
         raw = b"".join(candidate)
-        if raw not in seen:
-            seen.add(raw)
-            yield raw
-    if stored == b"\n":
-        yield b""
+        yield raw
+        if raw.endswith(b"\n"):
+            yield raw[:-1]
+        if raw.endswith(b"\r\n"):
+            yield raw[:-2]
 
 
 def read_location(path: Path, location: MboxLocation) -> bytes:
@@ -184,7 +188,7 @@ def read_location(path: Path, location: MboxLocation) -> bytes:
 
 
 def read_verified_location(path: Path, location: MboxLocation, expected_sha256: str) -> bytes:
-    """Select the original MBOX interpretation by its catalogued identity."""
+    """Try each stored-byte interpretation until one matches the original hash."""
     for raw in read_location_candidates(path, location):
         if hashlib.sha256(raw).hexdigest() == expected_sha256:
             return raw

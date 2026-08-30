@@ -45,6 +45,8 @@ archiving system. It currently ingests local MBOX, EML, Maildir, and complete
 Apple Mail `.emlx` messages. Outlook `.pst`/`.ost`, Eudora, working IMAP cache
 directories, Gmail, live IMAP, redaction, richer research data, sorting/repacking,
 and rollover remain planned; see [doc/implementation.md](doc/implementation.md).
+The [current source-code audit](doc/source-code-audit.md) distinguishes completed
+tightening from the remaining architectural gaps.
 The [competitive analysis](doc/competitive_analysis.md) explains how this
 combination differs from preservation, migration, search, forensic, and
 commercial compliance products. [Project direction](doc/project_direction.md)
@@ -109,10 +111,14 @@ socket.
 
 `--clamav` is currently required on every ingest.  It scans each new
 message through the locally configured `clamd` socket before the message is
-written to a normal MBOX.  If no healthy daemon is listening, mailarchiver
-starts one foreground daemon for this ingest only, reusing its loaded
-signatures, and stops it afterward.  If a healthy local daemon already owns
-the socket, mailarchiver uses it and leaves it running.
+written to a normal MBOX. Before starting any mailfile workers, the main
+ingest thread verifies that ClamAV is ready. If no healthy daemon is listening,
+mailarchiver starts one foreground daemon for this ingest only, reusing its
+loaded signatures, and stops it afterward. Each daemon started by mailarchiver
+uses a verified private per-run log and no PID file, so stale configured log or
+PID paths cannot prevent startup. An advisory lock serializes mailarchiver-owned
+daemons that share one configured socket. If a healthy external daemon already
+owns that socket, mailarchiver uses it and leaves it running.
 `MAILARCHIVER_CLAMD`, `MAILARCHIVER_CLAMDSCAN`,
 `MAILARCHIVER_CLAMD_CONFIG`, and `MAILARCHIVER_CLAMD_SOCKET` override the
 macOS Homebrew defaults for another local environment, including CI.
@@ -132,8 +138,14 @@ For example, with the project's supplied owner-token list and a new archive:
 MAIL_ARCHIVE_DIR="$HOME/arch-local/normalized-mail" uv run mailarchiver ingest --owner-names-file owner-names.txt --clamav "$HOME/arch-local/SLG Mail"
 ```
 
-ClamAV scan workers default to the CPU count, capped at eight.  Override the
-limit for a benchmark or a less capable machine with `--workers N`.
+Mailfile workers default to the CPU count, capped at eight. Override the limit
+for a benchmark or a less capable machine with a positive `--workers N`.
+After the ClamAV preflight succeeds, independent source mailfiles are read,
+parsed, and scanned concurrently;
+canonical MBOX and SQLite publication remains single-writer. Before workers
+start, mailarchiver makes a lightweight read-only pass to count recognized
+source files and bytes; it does not hash or retain the source tree during this
+inventory.
 
 Messages are classified as `Sent` when their parsed `From:` address contains a
 case-insensitive token in `owner-names.txt`; they go to the year's
@@ -167,6 +179,10 @@ From this checkout, the equivalent command is:
 make verify ARCHIVE=/path/to/mail-archive
 ```
 
+`bag-info.txt` explicitly records that MBOX framing adds a final LF when a
+source message lacks one. No archival `X-` header is inserted; the original
+source-byte SHA-256 disambiguates the stored and recovered representations.
+
 The default index contains normalized headers and message body text only:
 `text/plain` when available, otherwise rendered `text/html`.  It excludes
 attachments, MIME structure, and base64 payloads. Use `--index-attachments`
@@ -185,13 +201,16 @@ report: yearly sent/received/people totals and the 10 most frequent senders
 and recipients.
 
 During ingest, a heartbeat is written to standard error immediately, every 250
-milliseconds, and when the run finishes.  It shows the elapsed
-time, processed-message count, average messages per second, earliest and
-latest resolved message dates, current message year, that year's count, and
-the current source file with its byte-completion percentage.  On a terminal it
-redraws as a five-line scoreboard; redirected output stays line-oriented for
-logs.  It also counts archived mail, previously-seen duplicate skips,
-autosave exclusions, and infected messages.
+milliseconds, and when the run finishes. Its highlighted top line shows total
+source byte and file completion plus an estimated time remaining. It also shows
+elapsed time, processed-message count, average messages per second, earliest
+and latest resolved message dates, current message year, that year's count,
+and active and peak worker counts. Each worker has a numbered row showing its
+current mailfile, byte-completion percentage, and phase. Workers send status
+events to the main thread, which alone renders the terminal. Long paths are
+fitted to the terminal width so the dashboard does not scroll. Redirected
+output stays line-oriented for logs. It also counts archived mail,
+previously-seen duplicate skips, autosave exclusions, and infected messages.
 
 ## Interrupts and disk space
 
@@ -299,9 +318,15 @@ small platform adapters and testing before Windows is supported.
 
 ## Test
 
-The end-to-end tests use static MBOX and `.emlx` fixtures, including an EICAR
-attachment that exercises the actual on-demand ClamAV route:
+The ordinary suite uses static MBOX and `.emlx` fixtures, including an EICAR
+attachment that exercises the actual on-demand ClamAV route. The separately
+runnable end-to-end suite creates a fresh archive from representative EML
+messages, publishes all fixity, and runs the installed standalone verifier:
 
 ```console
+make test
+make test-e2e
 make check
 ```
+
+`make check` runs both suites.

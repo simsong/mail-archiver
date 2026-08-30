@@ -25,7 +25,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mailarchiver = ["*.swift"]
+mailarchiver = ["*.swift", "sql/*.sql"]
 
 [dependency-groups]
 dev = ["pylint>=3.3", "pytest>=8.0"]

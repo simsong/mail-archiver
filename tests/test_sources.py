@@ -1,4 +1,4 @@
-"""Requirements: source fingerprints verify complete files and prior-length prefixes."""
+"""Verify read-only source discovery, EMLX/MBOX streaming, and append fingerprints."""
 
 import hashlib
 import json
@@ -12,6 +12,7 @@ from mailarchiver.sources import (
     emlx_bytes,
     sha256_file_with_prefix,
     source_files,
+    source_inventory,
     source_messages,
 )
 
@@ -41,6 +42,24 @@ def test_local_source_file_has_a_stable_volume_identity_and_relative_path(tmp_pa
     assert metadata["current_mount_path"] == str(source.volume.mount_path)
     assert source.path == path.resolve()
     assert source.source_path == path.resolve().relative_to(source.volume.mount_path).as_posix()
+
+
+def test_source_inventory_totals_only_recognized_message_files(tmp_path: Path) -> None:
+    """Requirement: metadata discovery totals eligible files without hashing the source tree."""
+    source = tmp_path / "source"
+    source.mkdir()
+    eml = source / "message.eml"
+    eml.write_bytes(b"Message-ID: <source@example>\n\nbody\n")
+    mbox = source / "mailbox"
+    mbox.write_bytes(b"From sender@example Fri Feb  2 00:00:00 2024\nmessage\n")
+    (source / "ignored.plist").write_bytes(b"not mail" * 100)
+    updates: list[tuple[int, int]] = []
+
+    inventory = source_inventory([source], progress=lambda files, size: updates.append((files, size)))
+
+    assert inventory.file_count == 2
+    assert inventory.byte_count == eml.stat().st_size + mbox.stat().st_size
+    assert updates[-1] == (inventory.file_count, inventory.byte_count)
 
 
 def test_modern_apple_mail_package_reads_complete_emlx_only(tmp_path: Path) -> None:

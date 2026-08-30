@@ -1,4 +1,4 @@
-"""Native Mailbag/BagIt archive paths."""
+"""Centralize canonical Mailbag payload and integrity-tag path construction."""
 
 from __future__ import annotations
 

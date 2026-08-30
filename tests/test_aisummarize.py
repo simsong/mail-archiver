@@ -1,4 +1,4 @@
-"""Requirements: summarize consumes nonempty standard input without changing archives."""
+"""Verify the summarizer validates input and leaves canonical archives untouched."""
 
 from __future__ import annotations
 

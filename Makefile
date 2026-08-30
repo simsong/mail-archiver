@@ -1,4 +1,4 @@
-.PHONY: check fixture-bagit gui gui-smoke pylint run search summary-smoke test test-bagit test-gui test-mailsearch test-headers test-provenance verify install-mac install-linux install-tika
+.PHONY: check fixture-bagit gui gui-smoke pylint run search summary-smoke test test-bagit test-e2e test-gui test-mailsearch test-headers test-progress test-provenance verify install-mac install-linux install-tika
 
 TIKA_VERSION ?= 3.3.2
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
@@ -6,13 +6,13 @@ TIKA_JAR := $(TIKA_DIR)/tika-app-$(TIKA_VERSION).jar
 TIKA_SHA512 := $(TIKA_JAR).sha512
 TIKA_URL := https://downloads.apache.org/tika/$(TIKA_VERSION)/tika-app-$(TIKA_VERSION).jar
 
-check: test
+check: test test-e2e
 
 fixture-bagit:
 	uv run python tests/generate_bagit_fixture.py tests/data/three-message-mailbag
 
 pylint:
-	uv run pylint src tests
+	uv run pylint src tests e2e_tests
 
 run:
 	uv run mailarchiver $(ARGS)
@@ -36,6 +36,9 @@ gui-smoke:
 test:
 	uv run pytest -q
 
+test-e2e:
+	uv run pytest -q e2e_tests
+
 test-bagit:
 	uv run pytest -q tests/test_bagit.py tests/test_standalone_verify.py
 
@@ -50,6 +53,9 @@ test-provenance:
 
 test-headers:
 	uv run pytest -q tests/test_message.py tests/test_search.py
+
+test-progress:
+	uv run pytest -q tests/test_progress.py tests/test_sources.py
 
 install-mac:
 	@test "$$(uname -s)" = Darwin || { echo "install-mac must run on macOS"; exit 1; }
