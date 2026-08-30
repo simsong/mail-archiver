@@ -24,7 +24,7 @@ from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.layout import mbox_directory
 from mailarchiver.gui_service import message_locations
 from mailarchiver.mailbox_tree import mailbox_tree
-from mailarchiver.mbox import add_message
+from mailarchiver.mbox import MboxLocation, add_message, read_verified_location
 from mailarchiver.source_volume import METADATA_CURRENT_MOUNT_PATH
 from mailarchiver.standalone_verify import semantic_bytes
 from e2e_tests.eicar_fixture import write_eicar_emlx
@@ -837,6 +837,60 @@ def test_ingest_accepts_an_empty_babyl_mailbox(tmp_path: Path) -> None:
         ).fetchone() == (len(raw), hashlib.sha256(raw).hexdigest(), 1)
     finally:
         catalog.close()
+
+
+def test_ingest_checkpoints_babyl_message_with_leading_from_line(tmp_path: Path) -> None:
+    """Requirement: Babyl saved headers beginning From survive ingest and independent verification."""
+    source = tmp_path / "legacy-rmail"
+    saved_headers = (
+        b"From legacy.example Sat Jan 01 00:00:00 2000\n"
+        b"From: sender@example.net\n"
+        b"Date: Sat, 1 Jan 2000 00:00:00 +0000\n"
+        b"Message-ID: <babyl-envelope@example>\n"
+        b"Subject: source envelope\n"
+    )
+    visible_headers = (
+        b"From: sender@example.net\n"
+        b"Date: Sat, 1 Jan 2000 00:00:00 +0000\n"
+        b"Message-ID: <babyl-envelope@example>\n"
+        b"Subject: source envelope\n"
+    )
+    expected = saved_headers + b"\nbody\nFrom body"
+    source.write_bytes(
+        b"BABYL OPTIONS:\nVersion: 5\nLabels:\n\x1f\x0c\n1,,\n"
+        + saved_headers
+        + b"*** EOOH ***\n"
+        + visible_headers
+        + b"\nbody\nFrom body\n\x1f"
+    )
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+
+    result = run_ingest(source, archive, owner_names)
+
+    assert_success(result)
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        filename, offset, length, digest = catalog.execute(
+            "SELECT g.filename, l.byte_offset, l.byte_length, m.sha256 "
+            "FROM messages m JOIN locations l USING(message_pk) "
+            "JOIN mbox_generations g USING(generation_pk)"
+        ).fetchone()
+    finally:
+        catalog.close()
+    recovered = read_verified_location(
+        mbox_directory(archive) / filename,
+        MboxLocation(byte_offset=offset, byte_length=length),
+        digest,
+    )
+    assert recovered == expected
+    verified = subprocess.run(
+        [sys.executable, "-I", str(archive / "verify_mail_archive.py"), str(archive)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert_success(verified)
 
 
 def test_interrupt_stops_cleanly(source_mail: tuple[Path, dict[str, bytes]], tmp_path: Path) -> None:

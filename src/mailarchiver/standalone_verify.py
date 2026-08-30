@@ -309,8 +309,11 @@ def _parse_token(token: object, standards: list[HashStandard]) -> tuple[HashStan
 
 
 def _stored_candidates(box: mailbox.mbox, key: object) -> Iterable[bytes]:
-    """Independently try stored, mboxrd-unquoted, and writer-added-LF alternatives."""
-    raw = box.get_bytes(key, from_=False)
+    """Independently try envelope, mboxrd, and writer-added-LF alternatives."""
+    record = box.get_bytes(key, from_=True)
+    envelope, separator, raw = record.partition(b"\n")
+    if not separator or not envelope.startswith(b"From "):
+        raise ValueError("invalid MBOX record")
     lines = raw.splitlines(keepends=True)
     ambiguous = [index for index, line in enumerate(lines) if line.startswith(b">From ")]
     fully_unquoted = (1 << len(ambiguous)) - 1
@@ -318,21 +321,22 @@ def _stored_candidates(box: mailbox.mbox, key: object) -> Iterable[bytes]:
     if len(ambiguous) <= MAX_AMBIGUOUS_FROM_LINES:
         masks.extend(range(1, fully_unquoted))
     seen: set[bytes] = set()
-    for mask in masks:
-        candidate = list(lines)
-        for bit, index in enumerate(ambiguous):
-            if mask & (1 << bit):
-                candidate[index] = candidate[index][1:]
-        stored = b"".join(candidate)
-        variants = [stored]
-        if stored.endswith(b"\n"):
-            variants.append(stored[:-1])
-        if stored.endswith(b"\r\n"):
-            variants.append(stored[:-2])
-        for variant in variants:
-            if variant not in seen:
-                seen.add(variant)
-                yield variant
+    for prefix in (b"", envelope + separator):
+        for mask in masks:
+            candidate = list(lines)
+            for bit, index in enumerate(ambiguous):
+                if mask & (1 << bit):
+                    candidate[index] = candidate[index][1:]
+            stored = prefix + b"".join(candidate)
+            variants = [stored]
+            if stored.endswith(b"\n"):
+                variants.append(stored[:-1])
+            if stored.endswith(b"\r\n"):
+                variants.append(stored[:-2])
+            for variant in variants:
+                if variant not in seen:
+                    seen.add(variant)
+                    yield variant
 
 
 def _check_hashes(tokens: list[str], standards: list[HashStandard], data: bytes) -> list[str]:

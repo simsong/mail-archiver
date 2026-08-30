@@ -13,6 +13,7 @@ from mailarchiver.mbox import (
     add_message,
     journal_publication,
     read_location_candidates,
+    read_verified_location,
     recover_publication,
 )
 from mailarchiver.search import index_message
@@ -126,8 +127,8 @@ def test_ambiguous_from_recovery_yields_each_interpretation_once(tmp_path: Path)
 
     candidates = list(read_location_candidates(path, location))
 
-    assert len(candidates) == 16
-    assert len(set(candidates)) == 16
+    assert len(candidates) == 32
+    assert len(set(candidates)) == 32
     assert raw in candidates
 
 
@@ -145,3 +146,20 @@ def test_location_recovery_removes_one_writer_added_final_newline(tmp_path: Path
 
     assert raw in candidates
     assert raw + b"\n" in candidates
+
+
+def test_location_recovery_includes_original_leading_from_envelope(tmp_path: Path) -> None:
+    """Requirement: an original leading From line remains recoverable as message bytes."""
+    path = tmp_path / "source-envelope.mbox"
+    raw = (
+        b"From legacy.example Sat Jan 01 00:00:00 2000\n"
+        b"Message-ID: <source-envelope@example>\n\nFrom body\n>From literal\n"
+    )
+    digest = hashlib.sha256(raw).hexdigest()
+    box = mailbox.mbox(path, create=True)
+    try:
+        location = add_message(box, path, raw)
+    finally:
+        box.close()
+
+    assert read_verified_location(path, location, digest) == raw

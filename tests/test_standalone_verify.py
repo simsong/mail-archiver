@@ -201,6 +201,31 @@ def test_verifier_recovers_message_without_source_final_newline(tmp_path: Path) 
     assert verify_mbox(path, sidecar) == []
 
 
+def test_verifier_recovers_original_leading_from_envelope(tmp_path: Path) -> None:
+    """Requirement: independent h2 verification considers a source-supplied envelope line."""
+    raw = (
+        b"From legacy.example Sat Jan 01 00:00:00 2000\n"
+        b"Message-ID: <source-envelope@example>\n\nFrom body\n>From literal\n"
+    )
+    path = tmp_path / "source-envelope.mbox"
+    box = mailbox.mbox(path)
+    try:
+        box.add(raw)
+        box.flush()
+    finally:
+        box.close()
+    sidecar = tmp_path / "source-envelope.mbox.integrity"
+    digest = hashlib.sha256(raw).hexdigest()
+    write_integrity_file(
+        path,
+        sidecar,
+        (IntegrityMessage("source-envelope@example", digest, raw),),
+        1,
+    )
+
+    assert verify_mbox(path, sidecar) == []
+
+
 def test_verifier_accepts_multiple_digest_algorithms_for_one_standard(tmp_path: Path) -> None:
     """Requirement: one file may tag SHA-256 and SHA-512 digests of the same semantic input."""
     _, integrity, raw = make_integrity_archive(tmp_path)
