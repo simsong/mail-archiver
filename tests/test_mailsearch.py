@@ -20,7 +20,9 @@ from mailarchiver.mailsearch import (
     SortField,
     _search_statement,
     format_header,
+    parse_query,
     render_message,
+    search_headers,
 )
 from mailarchiver.mbox import add_message
 from mailarchiver.search import index_message
@@ -103,6 +105,12 @@ def test_mailsearch_finds_structured_and_full_text_matches(tmp_path: Path) -> No
     )
     assert result.returncode == 0, result.stderr
     assert "from:sender@example.net subject:planning meeting" in result.stdout
+
+
+def test_mid_lookup_finds_one_catalogued_message(tmp_path: Path) -> None:
+    archive, _ = make_archive(tmp_path)
+    result = search_headers(archive, parse_query("mid-1"), 2)
+    assert [(item.message_pk, item.mail_id) for item in result] == [(1, "mid-1")]
 
 
 def test_address_selectors_preserve_from_to_cc_bcc_and_any_roles(tmp_path: Path) -> None:

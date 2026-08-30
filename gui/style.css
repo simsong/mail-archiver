@@ -68,7 +68,9 @@ button { min-height: 28px; }
 .result { padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: default; user-select: none; }
 .result:hover { background: color-mix(in srgb, AccentColor 10%, transparent); }
 .result.selected { background: var(--selection); }
+.result.bulk-selected { outline: 2px solid AccentColor; outline-offset: -2px; }
 .result-subject-line { display: flex; align-items: center; gap: 6px; }
+.result-id { flex: none; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .result-subject { flex: 1; min-width: 0; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result-attachment { flex: none; color: var(--muted); font-size: 14px; }
 .result-line { margin-top: 3px; display: flex; gap: 8px; color: var(--muted); }
@@ -77,9 +79,16 @@ button { min-height: 28px; }
 .result-preview { min-height: 1.25em; margin-top: 3px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .result.selected .result-line, .result.selected .result-preview, .result.selected .result-attachment { color: inherit; opacity: 0.76; }
 .load-more { display: block; margin: 12px auto; }
+.bulk-drag { width: max-content; margin: 10px auto 14px; padding: 7px 11px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); background: var(--surface); cursor: grab; user-select: none; }
+.bulk-drag:active { cursor: grabbing; }
+.bulk-drag:hover { color: CanvasText; background: var(--selection); }
 
 .message { overflow: auto; min-width: 0; }
 .message-actions { position: sticky; top: 0; z-index: 3; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, Canvas 92%, transparent); backdrop-filter: blur(16px); }
+.message-find { position: sticky; top: 48px; z-index: 3; display: flex; align-items: center; gap: 6px; width: min(420px, calc(100% - 28px)); margin: 8px 14px -2px auto; padding: 5px 7px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); box-shadow: 0 3px 12px #0003; }
+.message-find input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; }
+.message-find span { min-width: 52px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.message-find button { min-height: 22px; width: 22px; padding: 0; border: 0; color: var(--muted); background: transparent; font-size: 18px; }
 #part-select { min-width: 180px; margin-right: auto; }
 #message-well { padding: 22px 30px 40px; min-height: 100%; }
 #message-well.computed-date { background: color-mix(in srgb, #d44 5%, Canvas); }
@@ -90,6 +99,9 @@ button { min-height: 28px; }
 #message-headers { margin: 0 0 22px; display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; }
 #message-headers dt { color: var(--muted); text-align: right; }
 #message-headers dd { margin: 0; overflow-wrap: anywhere; }
+.message-heading:focus { outline: 2px solid AccentColor; outline-offset: 4px; border-radius: 3px; }
+.message-well mark.message-find-hit { padding: 0; color: inherit; background: #f6d66a; }
+.message-well mark.message-find-hit.active { outline: 2px solid AccentColor; background: #f2ad2e; }
 .message-file-well { flex: none; width: 104px; padding: 8px 6px; border: 1px solid transparent; border-radius: 7px; color: var(--muted); text-align: center; user-select: none; cursor: grab; }
 .message-file-well:hover { border-color: var(--border); background: var(--surface); }
 .message-file-well:active { cursor: grabbing; }

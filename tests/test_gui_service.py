@@ -9,6 +9,7 @@ import mailbox
 import sqlite3
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -144,6 +145,14 @@ def test_gui_search_field_preserves_selector_and_quote_semantics(tmp_path: Path)
     assert [result.subject for result in search_page(archive, "subject:annual report").results] == ["annual plan"]
     assert search_page(archive, 'subject:"annual report"').results == []
     assert [result.subject for result in search_page(archive, 'subject:"annual plan" report').results] == ["annual plan"]
+
+
+def test_gui_results_and_message_views_expose_stable_mail_ids(tmp_path: Path) -> None:
+    """Requirement: users can copy a stable mid identifier from both panes."""
+    archive = make_gui_archive(tmp_path)
+
+    assert search_page(archive, "mid-1").results[0].mail_id == "mid-1"
+    assert describe_message(archive, 1).mail_id == "mid-1"
 
 
 def test_gui_application_metadata_names_the_product() -> None:
@@ -428,6 +437,25 @@ def test_gui_exports_exact_eml_and_decoded_attachment(tmp_path: Path) -> None:
     content = attachment_content(archive, 2, pdf.part_id)
     assert base64.b64decode(content.content_base64) == pdf_path.read_bytes()
     assert content.filename == "report.pdf"
+
+
+def test_gui_prepares_named_single_and_multi_message_exports(tmp_path: Path) -> None:
+    """Requirement: drag-out exports use stable IDs and preserve exact message bytes."""
+    archive = make_gui_archive(tmp_path)
+    exports = tmp_path / "exports"
+    api = GuiApi(archive, temporary_directory=exports)
+    try:
+        single = api.prepare_drag(1)
+        bundle = api.prepare_drag_zip([1, 2])
+    finally:
+        api.close()
+
+    assert single["filename"] == "mid-1.eml"
+    assert (exports / "mid-1.eml").read_bytes() == SIMPLE_MESSAGE
+    with zipfile.ZipFile(exports / "selected-messages.zip") as zipped:
+        assert zipped.namelist() == ["mid-1.eml", "mid-2.eml"]
+        assert zipped.read("mid-1.eml") == SIMPLE_MESSAGE
+    assert bundle["filename"] == "selected-messages.zip"
 
 
 def test_gui_flags_executable_attachment_types() -> None:

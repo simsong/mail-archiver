@@ -120,6 +120,13 @@ email history begins in 1983, use `--earliest-year 1983`; earlier `Date:` and
 `Received:` values are rejected and the remaining source, stream, or path-year
 fallbacks apply without rewriting the message.
 
+When no usable `Received:` timestamp exists and a message has a missing or
+epoch-like `Date:` through 1980, Mail Archiver also scans decoded text bodies
+for embedded `Date:` headers and standard quoted `On ... wrote:` dates. The
+most recent plausible candidate controls routing and is recorded as
+`body-embedded`. See [`DATE_HANDLING.md`](DATE_HANDLING.md) for the complete
+resolution order.
+
 The progress display shows overall bytes or completed unknown-size containers,
 processed messages, estimated time remaining, provider phases, and each active
 worker. Publication to the canonical MBOX files and catalog remains
@@ -253,6 +260,26 @@ Useful search forms include:
 
 All supplied terms must match. Use the sort controls above the result list to
 sort by date, subject, or sender.
+
+Every result displays a stable `mid-####` Mail ID. Entering an exact ID, such
+as `mid-535102`, selects that message immediately; this is the preferred way
+to retrieve a known catalog record. The message heading repeats the ID.
+
+Command-F opens a find bar inside the message pane and highlights matches in
+the visible headers and body. Press Return or Command-F to move to the next
+match; Escape closes the bar. Command-Shift-U opens the message's raw RFC 5322
+source in a new window. Command-A while the message heading has focus selects
+only the heading text. Command-A in the result list selects all visible rows;
+when at least two are selected, drag the ZIP control below the list to export
+exact `mid-####.eml` files.
+
+The viewer's **Locations** section distinguishes the canonical archive MBOX
+from source discoveries. A suffix such as `:64858852` in older displays means
+the byte offset within that source container; the current display labels it as
+**Source offset (bytes)**. This is provenance, not a standalone file path.
+The stable Mail ID and the viewer's verified retrieval are the modern way to
+refer to a message; source offsets remain useful for forensic tools such as
+bulk-extractor and for independent byte-level review.
 
 Select **Search attachments** to include indexed text attachments. This works
 only after an attachment index has been built:

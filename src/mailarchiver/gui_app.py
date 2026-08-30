@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
 from pathlib import Path
@@ -29,6 +30,7 @@ from .gui_service import (
     export_filename,
     is_risky,
     message_previews,
+    read_message_bytes,
     render_part,
     safe_filename,
     searchable_message_count,
@@ -337,9 +339,27 @@ class GuiApi:
         return str(destination)
 
     def prepare_drag(self, message_pk: int) -> dict[str, str]:
-        view = describe_message(self._archive(), message_pk)
-        destination = self.temporary_directory / export_filename(view)
+        destination = self.temporary_directory / f"mid-{message_pk}.eml"
         write_message(self._archive(), message_pk, destination)
+        return DragExport(filename=destination.name, url=destination.as_uri()).model_dump()
+
+    def open_message_file(self, message_pk: int) -> bool:
+        info = self.prepare_drag(message_pk)
+        if self.e2e_directory is not None:
+            return True
+        subprocess.Popen(["/usr/bin/open", info["url"][7:]], close_fds=True)
+        return True
+
+    def prepare_drag_zip(self, message_pks: list[int]) -> dict[str, str]:
+        unique = list(dict.fromkeys(message_pks))
+        if not unique or len(unique) > DEFAULT_PAGE_SIZE:
+            raise ValueError(f"request between 1 and {DEFAULT_PAGE_SIZE} messages")
+        destination = self.temporary_directory / "selected-messages.zip"
+        temporary = destination.with_suffix(".zip.tmp")
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+            for message_pk in unique:
+                archive.writestr(f"mid-{message_pk}.eml", read_message_bytes(self._archive(), message_pk))
+        temporary.replace(destination)
         return DragExport(filename=destination.name, url=destination.as_uri()).model_dump()
 
     def open_attachment(self, message_pk: int, part_id: int, confirmed: bool = False) -> dict[str, object]:
@@ -354,7 +374,7 @@ class GuiApi:
         subprocess.Popen(["/usr/bin/open", str(destination)], close_fds=True)
         return OpenResult(filename=descriptor.filename, opened=True).model_dump()
 
-    def open_message_window(self, message_pk: int) -> bool:
+    def open_message_window(self, message_pk: int, part_id: int | None = None) -> bool:
         view: MessageView = describe_message(self._archive(), message_pk)
         if self.e2e_directory is not None:
             return True
@@ -362,9 +382,10 @@ class GuiApi:
         child_api = GuiApi(
             self._archive(), self.temporary_directory, self.e2e_directory, self.filter_sets.path
         )
+        part = "" if part_id is None else f"&part={part_id}"
         child = webview.create_window(
             view.subject,
-            f"{base_url}?message={message_pk}&standalone=1",
+            f"{base_url}?message={message_pk}&standalone=1{part}",
             js_api=child_api,
             width=900,
             height=760,
