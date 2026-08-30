@@ -541,9 +541,11 @@ a selective ordinary B-tree, but their bounded traversal and relational joins
 remain indexed.
 
 `search.sqlite3` has its own packaged, versioned `sql/V1__search.sql` schema and
-does not use cross-database foreign keys. Existing unversioned or incompatible
-search databases are rejected and may be removed or rebuilt with
-`refresh-index`. Its main FTS5 table includes an unindexed `sha256` column plus
+does not use cross-database foreign keys. `create_search()` rejects unversioned
+or incompatible layouts. Ingest catches that specific condition, completes any
+pending publication recovery against a temporary current-layout index, and
+uses the same validated, atomic rebuild as `refresh-index` before starting
+workers. Its main FTS5 table includes an unindexed `sha256` column plus
 searchable headers and selected body text: `text/plain` first, otherwise rendered
 `text/html`, otherwise a safe single-part fallback. A second FTS5 table stores
 text-attachment content only when requested, allowing the GUI to include it
@@ -691,9 +693,12 @@ already started it. Before starting an owned daemon, the archiver creates a
 unique mode-`0700` runtime directory beside the configured file, pre-creates
 and verifies a mode-`0600` log, and derives a private configuration without
 `LogFile`, `LogSyslog`, or `PidFile`. The owned foreground subprocess needs no
-PID file, and its stdout and stderr go to the private log for startup
-diagnostics. Shutdown removes the private directory.
-`clamscan` remains a diagnostic fallback. Neither an
+PID file, and its output goes to the private log for startup diagnostics. The
+configured file itself supplies an advisory interprocess lock held for the
+complete lifetime of an owned daemon, preventing archiver runs from racing its
+configured `LocalSocket` without creating a persistent lock artifact. A healthy
+external daemon is reused and left running. Shutdown removes only owned runtime
+files. `clamscan` remains a diagnostic fallback. Neither an
 on-access scanner, a login service, nor a scheduled scan is enabled.  Run
 `freshclam` only when an operator explicitly wants new signatures.
 `MAILARCHIVER_CLAMD`, `MAILARCHIVER_CLAMDSCAN`, `MAILARCHIVER_CLAMD_CONFIG`,

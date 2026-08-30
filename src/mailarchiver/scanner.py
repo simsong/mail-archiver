@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
 import tempfile
@@ -32,20 +33,24 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         self.status_callback = status_callback
         self.diagnostics: BinaryIO | None = None
         self.runtime_directory: tempfile.TemporaryDirectory[str] | None = None
+        self.start_lock: BinaryIO | None = None
         self.log_path: Path | None = None
+        self.configuration_path = Path(CLAMD_CONFIG)
+        self.socket_path = CLAMD_SOCKET
+        self.owns_socket = False
 
     def __enter__(self) -> "ClamScanner":
+        self.start_lock = Path(CLAMD_CONFIG).open("rb")
+        fcntl.flock(self.start_lock.fileno(), fcntl.LOCK_EX)
         if CLAMD_SOCKET.exists() and self.available():
+            self.release_start_lock()
             return self
         CLAMD_SOCKET.unlink(missing_ok=True)
         configuration_path = self.prepare_runtime_files()
+        self.configuration_path = configuration_path
         try:
             self.process = subprocess.Popen(
-                [
-                    CLAMD,
-                    "--foreground",
-                    f"--config-file={configuration_path}",
-                ],
+                [CLAMD, "--foreground", f"--config-file={configuration_path}"],
                 stdout=self.diagnostics,
                 stderr=self.diagnostics,
             )
@@ -57,7 +62,8 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
             while time.monotonic() < deadline:
                 if self.status_callback is not None:
                     self.status_callback()
-                if CLAMD_SOCKET.exists() and self.available():
+                if self.socket_path.exists() and self.available():
+                    self.owns_socket = True
                     return self
                 returncode = self.process.poll()
                 if returncode is not None:
@@ -126,7 +132,11 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-            CLAMD_SOCKET.unlink(missing_ok=True)
+        if self.owns_socket:
+            self.socket_path.unlink(missing_ok=True)
+        self.configuration_path = Path(CLAMD_CONFIG)
+        self.socket_path = CLAMD_SOCKET
+        self.owns_socket = False
         diagnostics, self.diagnostics = self.diagnostics, None
         if diagnostics is not None:
             diagnostics.close()
@@ -134,17 +144,32 @@ class ClamScanner(AbstractContextManager["ClamScanner"]):
         runtime_directory, self.runtime_directory = self.runtime_directory, None
         if runtime_directory is not None:
             runtime_directory.cleanup()
+        self.release_start_lock()
 
-    @staticmethod
-    def available() -> bool:
-        return subprocess.run([CLAMDSCAN, f"--config-file={CLAMD_CONFIG}", "--ping=1"], check=False, capture_output=True).returncode == 0
+    def release_start_lock(self) -> None:
+        """Release this process's advisory ownership of the configured socket."""
+        start_lock, self.start_lock = self.start_lock, None
+        if start_lock is not None:
+            fcntl.flock(start_lock.fileno(), fcntl.LOCK_UN)
+            start_lock.close()
+
+    def available(self) -> bool:
+        return subprocess.run(
+            [CLAMDSCAN, f"--config-file={self.configuration_path}", "--ping=1"],
+            check=False,
+            capture_output=True,
+        ).returncode == 0
 
     def infected(self, raw: bytes) -> bool:
         with tempfile.NamedTemporaryFile(prefix="mailarchiver-", delete=False) as handle:
             handle.write(raw)
             temporary = handle.name
         try:
-            result = subprocess.run([CLAMDSCAN, f"--config-file={CLAMD_CONFIG}", "--stream", temporary], check=False, capture_output=True)
+            result = subprocess.run(
+                [CLAMDSCAN, f"--config-file={self.configuration_path}", "--stream", temporary],
+                check=False,
+                capture_output=True,
+            )
             if result.returncode not in (0, 1):
                 raise RuntimeError(result.stderr.decode("utf-8", "replace"))
             return result.returncode == 1

@@ -229,6 +229,22 @@ def test_ingest_routes_preserves_and_indexes_messages(
     finally:
         search.close()
 
+    (archive / "search.sqlite3").unlink()
+    obsolete = sqlite3.connect(archive / "search.sqlite3")
+    obsolete.execute("CREATE TABLE message_metadata (sha256 TEXT PRIMARY KEY, fts_rowid INTEGER NOT NULL)")
+    obsolete.close()
+    upgraded = run_ingest(source, archive, owner_names)
+    assert_success(upgraded)
+    assert "rebuilding obsolete search index:" in upgraded.stderr
+    rebuilt = sqlite3.connect(archive / "search.sqlite3")
+    try:
+        assert rebuilt.execute("SELECT count(*) FROM message_fts").fetchone() == (3,)
+        assert rebuilt.execute(
+            "SELECT count(*) FROM message_fts WHERE sha256 = ?", (infected_sha256,)
+        ).fetchone() == (0,)
+    finally:
+        rebuilt.close()
+
     refreshed = subprocess.run(
         [sys.executable, "-m", "mailarchiver", "--archive", str(archive), "refresh-index"],
         check=False,
@@ -1061,8 +1077,8 @@ def test_clamav_start_failure_reports_daemon_diagnostics(tmp_path: Path) -> None
     assert "Traceback" not in result.stderr
 
 
-def test_clamav_start_uses_a_private_log_instead_of_configured_log(tmp_path: Path) -> None:
-    """Regression: an unusable shared LogFile cannot block an on-demand daemon."""
+def test_clamav_start_uses_private_runtime_instead_of_configured_files(tmp_path: Path) -> None:
+    """Regression: stale configured log and PID paths cannot break an owned daemon."""
     source = tmp_path / "source.eml"
     source.write_bytes(
         b"Message-ID: <private-clamd-log@example>\n"
@@ -1083,16 +1099,21 @@ def test_clamav_start_uses_a_private_log_instead_of_configured_log(tmp_path: Pat
         configured_pid = test_runtime / "configured-clamd.pid"
         configuration_path = test_runtime / "clamd.conf"
         base_configuration = configured_path.read_text(encoding="utf-8")
-        for directive, value in (
+        configured_directives = (
             ("LocalSocket", configured_socket),
             ("PidFile", configured_pid),
             ("LogFile", blocked_log),
-        ):
-            base_configuration, count = re.subn(
-                rf"(?m)^{directive}\s+.*$", f"{directive} {value}", base_configuration, count=1
-            )
-            if count == 0:
-                base_configuration += f"{directive} {value}\n"
+        )
+        directive_names = {directive for directive, _value in configured_directives}
+        lines = [
+            line
+            for line in base_configuration.splitlines()
+            if not line.strip()
+            or line.lstrip().startswith("#")
+            or line.split(maxsplit=1)[0] not in directive_names
+        ]
+        lines.extend(f"{directive} {value}" for directive, value in configured_directives)
+        base_configuration = "\n".join(lines) + "\n"
         configuration_path.write_text(base_configuration, encoding="utf-8")
         environment = os.environ.copy()
         environment[CLAMD_CONFIG_ENV] = str(configuration_path)
@@ -1104,4 +1125,5 @@ def test_clamav_start_uses_a_private_log_instead_of_configured_log(tmp_path: Pat
         assert blocked_log.stat().st_mode & 0o777 == 0
         assert blocked_log.stat().st_size == 0
         assert not configured_pid.exists()
+        assert not configured_socket.exists()
         assert not list(test_runtime.glob("mailarchiver-clamd-*"))

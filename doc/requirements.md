@@ -210,8 +210,12 @@ existing evidence and must not modify source mail or the canonical archive.
   enables on-access or scheduled scanning. A daemon started by mailarchiver
   must capture its output in a verified, mode-`0600` log in a unique
   mode-`0700` per-run directory and remove the installed configuration's
-  `LogFile` and `PidFile`; the owned foreground subprocess requires no PID
-  file. The directory and its files are removed after the daemon stops.
+  `LogFile`, `LogSyslog`, and `PidFile`; the owned foreground subprocess needs
+  no PID file. Mailarchiver-owned daemons sharing one configured `LocalSocket`
+  must be serialized by an advisory lock held for the daemon's complete
+  lifetime. A healthy external daemon is reused without holding that lock or
+  stopping or unlinking its socket. Owned private files are removed after the
+  daemon stops.
 * `ingest --workers N` controls the number of source containers ingested
   simultaneously. Its default is the detected CPU count capped at eight, and
   `N` must be positive. Each worker reads and parses its mailfile and submits
@@ -575,8 +579,10 @@ No source mailbox is modified by this program.
 The complete current catalog DDL is the packaged `sql/V1__archive.sql` resource
 and is created only for a fresh archive. An unversioned catalog or any version
 other than V1 is rejected rather than migrated. The separate disposable search
-database likewise has exactly one packaged `sql/V1__search.sql`; an obsolete
-search database is rebuilt, not migrated in place. A fresh catalog is also
+database likewise has exactly one packaged `sql/V1__search.sql`; before ingest
+workers start, an obsolete search database is rebuilt from catalogued canonical
+MBOX into a temporary file and atomically replaced, not migrated in place. A
+failed rebuild preserves the prior database. A fresh catalog is also
 refused beside existing canonical MBOX or `.mbox.integrity` output because that
 would defeat deduplication. Those outputs are detected in `data/mbox/` and
 `integrity/`; unsupported root-level legacy output is never imported.
