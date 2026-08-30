@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+* Add an OCR-engine-independent standalone printed-email PDF extractor. It
+  streams page-addressable native text through Poppler, accounts for message
+  and non-message pages, records PDF/page/policy and handwriting provenance,
+  and atomically writes a standard derived MBOX without modifying the source.
+  A focused real-PDF pytest compares the six-page SIPBADMIN fixture with its
+  human-reviewed MBOX ground truth.
 * Persist each ingest's typed progress and final statistics in its own
   atomically updated `status/ingest-*.json` operational BagIt tag file. Add a
   bottom GUI status line plus a singleton **Windows → Ingest** history window

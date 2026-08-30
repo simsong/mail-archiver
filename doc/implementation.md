@@ -77,6 +77,7 @@ mail-archiver/
     __main__.py         CLI, ingest framework, worker/status coordinator
     plugin_api.py       versioned immutable plug-in contracts
     plugin_loader.py    trusted manifest discovery and frozen registries
+    pdf_mail.py         standalone printed-email PDF extraction and derived MBOX
     plugins/            packaged source and physical-file manifests
     sources.py          local source plus MBOX/Babyl/EMLX/message generators
     source_stubs.py     explicit unavailable provider/stream source names
@@ -106,6 +107,36 @@ default. The scripts open the archive catalog read-only, verify bytes retrieved
 from canonical MBOX locations, leave all source and archive files unchanged,
 and refuse to replace existing evidence files. The generated MBOX, CSV, and
 JSON files are investigation artifacts, not repository fixtures.
+
+### Standalone printed-email PDF extractor
+
+`pdf_mail.py` provides the first OCR-independent implementation slice for
+standalone scans of printed email. The Makefile `extract-pdf-mail` target
+validates PDF magic, streams a complete SHA-256, and invokes Poppler
+`pdftotext -layout` without rewriting the source. Form-feed-delimited page text
+is consumed incrementally. A conservative page classifier requires a leading
+header block containing Date, Subject, and at least one of From or To. Every
+page is retained in the typed result as `printed-email` or `non-message`.
+The public `segment_pdf_mail()` boundary accepts typed page text plus its
+extraction-policy identifier, so another OCR engine can supply the same
+segmentation and MBOX path without changing message interpretation logic.
+
+The current segmentation policy emits at most one provisional message per
+qualifying page. This deliberately supports the reviewed `sipbadmin.pdf`
+acceptance fixture before implementing messages that span pages or share a
+page. Each typed record retains its unmodified extracted page text, observed
+headers, body interpretation, source page, subject, and an explicitly supplied
+handwriting flag. The flag is metadata only; handwriting is not transcribed or
+indexed.
+
+`write_pdf_mbox()` refuses to replace an existing output, writes through a
+same-directory temporary file, and atomically installs standard MBOX. Each
+record has a deterministic synthetic Message-ID, PDF SHA-256 and page range,
+extraction and segmentation policy, `machine-unreviewed` status, handwriting
+status, selected observed headers, and an unmodified observed Message-ID in a
+separate provenance header. The source PDF remains unchanged. Archive copying
+to `data/pdf/`, routing to `data/pdf-mbox/`, search indexing, duplicate
+relations, and viewer page navigation remain the next integration layer.
 
 ## Current acceptance implementation
 
@@ -678,8 +709,13 @@ source already contained a literal `>From ` line. The reader enumerates a
 bounded set of quote interpretations and selects only the candidate matching
 the authoritative raw-message SHA-256. Candidates are yielded once and not
 retained as a second in-memory copy of the message set; unresolved
-high-ambiguity input fails closed. The installed stdlib verifier uses the same
-bounded interpretation order independently.
+high-ambiguity input fails closed. A second ambiguity occurs when source bytes
+begin with `From `: `mailbox.mbox` promotes that source line to the record
+separator. Recovery tries payload-only first and then the stored separator plus
+payload, applying the same quoting and terminal-line-break candidates to both.
+The installed stdlib verifier uses the same bounded interpretation order
+independently. See the per-container transformation ledger in
+[INTEGRITY_CONTROLS.md](INTEGRITY_CONTROLS.md).
 
 Planned run-completion sorting will order each touched normal mailbox by
 `(resolved_date_utc, sha256)`. The sorter will write a new MBOX under
@@ -861,6 +897,15 @@ The installed `verify_mail_archive.py
 DIRECTORY` performs read-only validation of a supplied bag. The first acceptance run is against a copied
 small subset of `SLG Mail`, followed by a full read-only inventory comparison
 before any canonical archive is published.
+
+`make test-pdf-mail` runs the real Poppler text extractor against the six-page
+`tests/data/sipbadmin.pdf` scan and the human-reviewed
+`tests/data/sipbadmin.mbox` ground truth. It verifies four printed messages on
+pages 2 through 5, explicit exclusion of non-message pages 1 and 6, the page-2
+handwriting flag, reviewed subjects, generated MBOX structure and provenance,
+and byte-for-byte source-PDF immutability. Ordinary pytest skips this focused
+integration test when `pdftotext` is unavailable; the focused Make target
+requires it and fails clearly.
 
 ## Delivery sequence
 

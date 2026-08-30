@@ -19,6 +19,7 @@ mailsearch-gui = "mailarchiver.gui_app:main"
 summarize = "mailarchiver.aisummarize:main"
 verify-mail-archive = "mailarchiver.standalone_verify:main"
 mailarchiver-validation = "mailarchiver.validation:main"
+extract-pdf-mail = "mailarchiver.pdf_mail:main"
 
 [build-system]
 requires = ["setuptools>=69"]

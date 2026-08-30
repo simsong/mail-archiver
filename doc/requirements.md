@@ -89,6 +89,11 @@ directory, and a `data/mbox/` payload directory.
   source `From ` line from an original literal `>From ` line, direct retrieval
   considers the bounded possible interpretations and accepts only the one whose
   SHA-256 matches the catalogued original bytes.
+* A source message may itself begin with an MBOX-style `From ` line, notably in
+  an Emacs RMAIL Babyl original-header block. The standard-library writer uses
+  that line as the canonical MBOX record separator. Direct retrieval therefore
+  considers both payload-only and separator-plus-payload interpretations, with
+  the catalogued original SHA-256 selecting the source representation.
 
 `archive.sqlite3` and the disposable `search.sqlite3` are operational BagIt
 tag files but are deliberately not listed in the tag manifest; their live
@@ -107,6 +112,38 @@ evidence from a source tree and canonical archive. Those outputs contain
 private message content and metadata, must default to an ignored temporary
 directory, and must never be committed. The tools must refuse to overwrite
 existing evidence and must not modify source mail or the canonical archive.
+
+## Standalone printed-email PDFs
+
+A standalone PDF containing scans of printed email is a source document, not
+an attachment and not preserved RFC 5322 bytes. It is distinct from a PDF MIME
+part inside a canonical message and from OCR or quoted-message text contained
+in an actual message body.
+
+* Extraction never rewrites the PDF. It records the complete PDF SHA-256,
+  byte length, page count, exact source page for every derived message, the
+  extraction and segmentation policies, and every page classified as
+  message or non-message.
+* Page text is an interchangeable input to segmentation. Native PDF text,
+  local OCR, cloud OCR, and human transcription are versioned candidates;
+  the message extractor must not depend on one OCR engine.
+* Standard derived MBOX is the first validation and interchange format. Its
+  records use synthetic identities and explicit `X-Mailarchiver-*` provenance,
+  transcription status, PDF/page, policy, and handwriting declarations.
+* A generated MBOX is written atomically and never over an existing file.
+  It is not placed under canonical `data/mbox/`. Planned archive integration
+  preserves source PDFs under `data/pdf/` and writes their reproducible
+  `Archive-PDF` and `Sent-PDF` MBOX interpretations under `data/pdf-mbox/`.
+* Handwritten annotations are recorded as a boolean page/message fact but
+  their text is not indexed. Human review changes transcription status and
+  corrected derived text without changing or obscuring the machine extract.
+* Derived messages will appear immediately in ordinary search with a textual
+  PDF badge and a color distinction. Every result opens its extracted text and
+  exact source PDF page. Color must not be the only distinction.
+* When normalized Date, Subject, To, and From are all present and identical to
+  canonical email, the derived hit may be suppressed but remains stored and
+  linked to its PDF pages. Edit-distance similarity creates only a suspected
+  duplicate relation and does not suppress or merge the record.
 
 ## Deduplication and provenance
 

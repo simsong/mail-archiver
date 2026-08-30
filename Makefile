@@ -1,4 +1,4 @@
-.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika pylint run search summary-smoke test test-bagit test-data-quality test-e2e test-gui test-headers test-mailsearch test-native-gui test-plugins test-progress test-provenance validation-aws-start validation-aws-start-all validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
+.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality test-e2e test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance validation-aws-start validation-aws-start-all validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
 
 TIKA_VERSION ?= 3.3.2
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
@@ -10,6 +10,11 @@ AUDIT_OUTPUT ?= $(CURDIR)/.tmp/data-quality-audit
 VALIDATION_DATA_DIR ?= $(CURDIR)/data
 VALIDATION_CONFIG_DIR ?= $(CURDIR)/validation/datasets
 VALIDATION_SAM_CONFIG ?= validation/samconfig.toml
+OCR_OUTPUT ?= $(CURDIR)/ocr-text
+OCR_WORKERS ?= 4
+OCR_ENGINES ?= native,ocrmypdf,tesseract
+OCR_INVENTORY_ARGS ?=
+OCR_RUN_ARGS ?=
 
 check: test test-e2e
 
@@ -35,6 +40,9 @@ fixture-bagit:
 
 fixture-e2e:
 	uv run python e2e_tests/generate_corpus.py e2e_tests/data/source
+
+extract-pdf-mail:
+	uv run extract-pdf-mail $(ARGS)
 
 pylint:
 	uv run pylint src tests e2e_tests scripts
@@ -66,6 +74,10 @@ test-e2e:
 
 test-native-gui:
 	MAILARCHIVER_NATIVE_GUI_E2E=1 uv run pytest -q e2e_tests/test_ingest_verify.py::test_native_search_ui_end_to_end
+
+test-pdf-mail:
+	@command -v pdftotext >/dev/null || { echo 'test-pdf-mail requires Poppler pdftotext'; exit 1; }
+	uv run pytest -q tests/test_pdf_mail.py
 
 test-bagit:
 	uv run pytest -q tests/test_bagit.py tests/test_standalone_verify.py
@@ -159,3 +171,27 @@ install-tika:
 	curl --fail --location --output "$(TIKA_SHA512)" "$(TIKA_URL).sha512"
 	@expected=$$(awk '{print $$1}' "$(TIKA_SHA512)"); actual=$$(shasum -a 512 "$(TIKA_JAR)" | awk '{print $$1}'); test "$$expected" = "$$actual" || { echo "Tika SHA-512 verification failed"; rm -f "$(TIKA_JAR)" "$(TIKA_SHA512)"; exit 1; }
 	@echo "Installed and verified $(TIKA_JAR)"
+
+ocr-inventory:
+	@test -n "$(ARCHIVE)" || { echo 'usage: make ocr-inventory ARCHIVE=/path/to/mailbag'; exit 2; }
+	@echo "Reading PDF attachments without modifying $(ARCHIVE)"
+	@echo "Writing private, resumable experiment data under $(OCR_OUTPUT)"
+	uv run python scripts/ocr_experiment.py inventory --archive "$(ARCHIVE)" --output "$(OCR_OUTPUT)" $(OCR_INVENTORY_ARGS)
+
+ocr-profile:
+	@test -f "$(OCR_OUTPUT)/documents.jsonl" || { echo "missing OCR inventory: $(OCR_OUTPUT)/documents.jsonl"; exit 2; }
+	@echo "Profiling every unique PDF without changing it"
+	uv run python scripts/ocr_experiment.py profile --output "$(OCR_OUTPUT)" --workers "$(OCR_WORKERS)"
+
+ocr-analyze:
+	@test -f "$(OCR_OUTPUT)/documents.jsonl" || { echo "missing OCR inventory: $(OCR_OUTPUT)/documents.jsonl"; exit 2; }
+	@echo "Scanning every available text result for OCR artifacts and email-like structure"
+	uv run python scripts/ocr_experiment.py analyze --output "$(OCR_OUTPUT)" --engines "$(OCR_ENGINES)"
+
+ocr-run:
+	@test -f "$(OCR_OUTPUT)/documents.jsonl" || { echo "missing OCR inventory: $(OCR_OUTPUT)/documents.jsonl"; exit 2; }
+	@echo "Running OCR engines: $(OCR_ENGINES)"
+	@echo "Each successful engine result is a separate text file; source PDFs are never rewritten."
+	uv run python scripts/ocr_experiment.py run --output "$(OCR_OUTPUT)" --engines "$(OCR_ENGINES)" --workers "$(OCR_WORKERS)" $(OCR_RUN_ARGS)
+
+ocr-experiment: ocr-inventory ocr-run

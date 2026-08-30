@@ -13,3 +13,4 @@ dist/
 data/
 validation/samconfig.toml
 .aws-sam/
+/ocr-text/

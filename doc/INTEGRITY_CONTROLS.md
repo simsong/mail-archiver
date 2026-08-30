@@ -39,6 +39,127 @@ BagIt and mailarchiver provide complementary integrity layers:
 The installed `verify_mail_archive.py` implements all three layers using only
 the Python standard library and without consulting SQLite.
 
+## Canonical message transformation ledger
+
+This section is the authoritative inventory of how each currently supported
+source container becomes `MailObject.raw`, what is deliberately omitted, and
+how the canonical MBOX representation remains reversible. The `h2` digest is
+always SHA-256 of `MailObject.raw`; metadata parsing, date resolution, Sent
+classification, indexing, and reporting never change those bytes.
+
+### MBOX, including Google Takeout and envelope-prefixed Maildir files
+
+* **Extraction:** recognize the `From ` record framing by content and use
+  `mailbox.mbox.get_bytes(..., from_=False)`. The source record separator is
+  container framing and is not normally part of `MailObject.raw`. The bytes
+  returned by the standard-library MBOX reader, including its stored `>From `
+  representation, become the message bytes.
+* **Container-only records:** an exact empty Eudora MBCP status record is
+  observed as `source-metadata-excluded` and is not a canonical message. A
+  narrowly recognized `From XXX` status wrapper is removed, one quoting level
+  is removed from its nested MBOX envelope, and the nested RFC 5322 bytes become
+  `MailObject.raw`; the outer source offset remains provenance.
+* **Problems and adopted solutions:** mboxrd cannot distinguish storage-added
+  quoting from an original literal `>From ` line, so recovery enumerates the
+  bounded interpretations and uses `h2` to select one. Unescaped body lines
+  that resemble record separators can make a legacy dialect structurally
+  ambiguous; unsupported dialects fail rather than silently inventing bytes,
+  pending evidence-based dialect adapters.
+
+### Emacs RMAIL Babyl
+
+* **Extraction:** recognize a case-insensitive `BABYL OPTIONS:` signature.
+  Babyl options, labels, record markers, and the redundant visible-header copy
+  are container metadata. Use the original-header block, or the visible headers
+  only when the original block is empty, followed by one restored blank-line
+  separator using the header block's line ending and the record body. Remove
+  the one line ending that belongs to the following Babyl record marker.
+* **Problems and adopted solutions:** Babyl does not store the header/body
+  separator independently, so the adapter restores exactly one separator with
+  the selected headers' LF or CRLF convention. Some original-header blocks
+  begin with a Unix `From ` line. Python's MBOX writer promotes that line to the
+  canonical record separator; recovery therefore tries both payload-only and
+  separator-plus-payload candidates and accepts only the `h2` match. A valid
+  `0x1f` terminator before any record is an empty mailbox; EOF without a record
+  or terminator is a truncation error.
+
+### Apple EMLX
+
+* **Extraction:** parse the leading decimal byte count and copy exactly that
+  many following bytes into `MailObject.raw`. The decimal prefix and trailing
+  Apple plist metadata remain source-container evidence and are not canonical
+  message bytes.
+* **Problems and adopted solutions:** `.partial.emlx` can omit detached
+  attachment bytes, so it is rejected instead of being represented as a
+  complete message. Complete EMLX files retain physical-file hashes over the
+  prefix, message, and trailing metadata while `h2` covers only the declared
+  RFC 5322 byte region.
+
+### EML and structurally recognized Maildir messages
+
+* **Extraction:** the complete physical file is `MailObject.raw`; no header,
+  status flag, filename suffix, or line ending is removed. Maildir `cur`/`new`
+  placement and filename flags are provenance only.
+* **Problems and adopted solutions:** a Maildir child can itself contain MBOX
+  framing. Packaged parser priority selects EMLX, Babyl, MBOX, then the
+  single-message reader, so content-defined MBOX parsing wins. A complete EML
+  beginning with `From ` uses the same separator-plus-payload `h2` recovery as
+  any other source-supplied leading envelope line.
+
+### Typed virtual providers
+
+* **Extraction:** the strict `MailObject.raw` bytes supplied by the source
+  plug-in are canonical without further source-container conversion. Opaque
+  cursors, provider IDs, labels, folder paths, and source dates are provenance
+  or metadata, not message bytes.
+* **Problems and adopted solutions:** text values cannot be coerced to bytes,
+  and a proprietary reconstruction must identify its tool and version rather
+  than claim byte identity. The current Gmail, IMAP, O365, Exchange, and
+  standard-input manifests are unavailable stubs and therefore perform no
+  canonical transformation.
+
+### Standalone PDFs containing printed email
+
+* **Extraction:** the PDF is the source artifact. The focused extractor checks
+  PDF magic, hashes the complete file, and obtains page-addressable text through
+  a versioned extraction policy without writing the PDF. A conservative
+  segmentation policy interprets qualifying pages as derived messages and
+  writes them to standard MBOX outside `data/mbox/`.
+* **Problems and adopted solutions:** OCR text can omit headers, contain typos,
+  or include an incorrect embedded text layer. Derived records therefore use
+  synthetic identity plus explicit PDF hash, page, policy, review, and
+  handwriting headers. Observed Message-ID text is provenance rather than the
+  synthetic record identity. Non-message pages remain accounted for, human
+  correction never changes the PDF, and derived bytes are never described by
+  the canonical-message `h2` contract.
+
+### Common disposition and canonical MBOX framing
+
+`X-Apple-Auto-Saved` and recognized source metadata are observed but produce no
+canonical record. A ClamAV-positive message keeps identical `MailObject.raw`
+bytes and is routed to a numbered `INFECTED` MBOX. Deduplication changes only
+whether another canonical copy is written.
+
+For every retained message, `mailbox.mbox.add(raw_bytes)` performs the common
+storage transformation: it writes or adopts an outer `From ` separator,
+mboxrd-quotes payload lines beginning `From `, and supplies a final LF when the
+source lacks one. If `raw_bytes` begins with `From `, the writer adopts that
+first source line as the separator instead of generating one. The catalogued
+location covers the complete stored record.
+
+Recovery reverses the storage representation by streaming candidates in this
+order:
+
+1. interpret the record as payload-only, then as stored separator plus payload;
+2. within each interpretation, try the fully unquoted, fully stored, and then
+   bounded partial `>From ` combinations; and
+3. for each combination, try the complete bytes, one terminal LF removed, and
+   one terminal CRLF removed when applicable.
+
+Only the candidate matching the catalogued `h2` is accepted. Candidates are
+not canonicalized, retained, or selected heuristically. No match is an
+integrity failure.
+
 ## Native directory layout
 
 ```text
@@ -85,6 +206,49 @@ own status file and leaves it as historical run evidence when finished. Their
 internal consistency is outside BagIt fixity validation. All
 canonical messages remain recoverable and independently verifiable without
 them.
+
+### Planned standalone printed-email PDF extension
+
+Standalone PDFs containing scans of printed email require a separate payload
+representation from preserved electronic mail. The planned layout is:
+
+```text
+archive/
+├── bagit.txt
+├── bag-info.txt
+├── mailbag.csv
+├── manifest-sha256.txt
+├── tagmanifest-sha256.txt
+├── verify_mail_archive.py
+├── integrity/
+│   ├── 1989-Archive1.mbox.integrity
+│   ├── 1989-Sent1.mbox.integrity
+│   ├── 1989-Archive-PDF1.mbox.integrity
+│   └── 1989-Sent-PDF1.mbox.integrity
+├── data/
+│   ├── mbox/                         # preserved electronic email
+│   │   ├── 1989-Archive1.mbox
+│   │   └── 1989-Sent1.mbox
+│   ├── pdf/                          # preserved source documents
+│   │   └── <pdf-sha256>.pdf
+│   └── pdf-mbox/                     # reproducible interpretations
+│       ├── 1989-Archive-PDF1.mbox
+│       ├── 1989-Sent-PDF1.mbox
+│       └── Undated-Archive-PDF1.mbox
+├── status/
+├── archive.sqlite3
+└── search.sqlite3
+```
+
+`data/pdf/` preserves the only surviving source artifact byte-for-byte.
+`data/pdf-mbox/` contains standard MBOX records reconstructed from printed
+messages for validation, interchange, viewing, and search. Those records are
+explicitly derived: they do not enter `data/mbox/`, canonical electronic-message
+counts, or ordinary message deduplication. Exact matches remain linked to their
+PDF and page provenance even when the derived result is suppressed from the
+default search listing. This extension is tracked by
+[GitHub issue #18](https://github.com/simsong/mail-archiver/issues/18) and is
+not part of the implemented native layout above.
 
 ## BagIt declaration and manifests
 
@@ -250,9 +414,11 @@ disagreement between the layers.
 
 ### `h2`: recovered raw-message SHA-256
 
-`h2` hashes the recovered original RFC 5322 bytes, excluding the MBOX `From `
-separator and storage quoting. No header, body, line-ending, MIME, whitespace,
-or character-set canonicalization is applied.
+`h2` hashes the source adapter's `MailObject.raw`, normally excluding a
+generated MBOX `From ` separator and storage quoting. When the source bytes
+themselves began with `From ` and the writer adopted that line as the record
+separator, that source line remains part of `h2`. No header, body, line-ending,
+MIME, whitespace, or character-set canonicalization is applied.
 
 Python's MBOX writer cannot distinguish storage quoting from an original
 literal `>From ` body line. It also adds a final line break when the source
@@ -261,14 +427,13 @@ terminal-line-break interpretations and accepts only a candidate matching
 `h2`. This includes mapping a one-line-break payload back to a zero-byte message
 only when its digest is SHA-256 of empty bytes.
 
-For each quoting interpretation, verification follows this explicit order:
+Verification follows this explicit order:
 
-1. hash the complete stored message payload and compare it with `h2`;
-2. if that fails and the payload ends in LF, hash it with that one terminal LF
-   removed and compare again;
-3. if that fails and the payload ends in CRLF, hash it with that one terminal
-   CRLF removed and compare again; and
-4. fail verification if none of the candidates matches `h2`.
+1. try payload-only, then stored separator plus payload;
+2. for each, enumerate the bounded mboxrd quoting interpretations;
+3. hash each complete candidate, then one terminal LF removed and one terminal
+   CRLF removed when applicable; and
+4. fail verification if none matches `h2`.
 
 This is not a rule that the final byte is generally ignored. If the source
 message contained its final line break, the complete stored candidate matches
