@@ -70,6 +70,13 @@ distinguish validated behavior from untested assumptions.
 Preserve dirty worktrees and unrelated changes. Use project-local linked
 worktrees under `<project-root>/.tmp/` for branch work.
 
+Before starting branch work or creating, updating, or merging a pull request,
+query GitHub for every open pull request in the repository. If any are open,
+warn the user before proceeding and identify each PR's number, title, base, and
+head. Check for overlapping files or commits, stale bases, and changes already
+integrated or superseded by another PR; never silently duplicate or overwrite
+open PR work.
+
 Do not commit, push, open or modify pull requests, approve, merge, close
 issues, or change remote services unless the user explicitly requests it.
 When authorized, Codex GitHub activity uses `@simsong-codex`; signed commits use
