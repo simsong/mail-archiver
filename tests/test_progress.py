@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import traceback
+from collections import Counter
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -26,7 +27,9 @@ from mailarchiver.__main__ import (
     overall_progress,
     run_file_workers,
 )
+from mailarchiver.plugin_api import ProgressEvent
 from mailarchiver.sources import SourceInventory
+from mailarchiver.ingest_status import IngestStatusFile, new_status_id, read_ingest_history
 
 
 def test_overall_progress_uses_concurrent_source_bytes_for_percentage_and_eta() -> None:
@@ -69,6 +72,20 @@ def test_overall_progress_reports_finalizing_before_last_checkpoint() -> None:
     )
 
     assert overall_progress(state, now=20).eta == "finalizing"
+
+
+def test_unknown_byte_inventory_uses_completed_containers_for_percentage() -> None:
+    """Requirement: provider work with no byte estimate cannot display 100% before completion."""
+    state = ProgressState(
+        started_at=datetime.now(timezone.utc),
+        started_monotonic=0,
+        files_processed=1,
+        source_files_total=4,
+        source_bytes_total=0,
+        inventory_complete=True,
+    )
+
+    assert overall_progress(state, now=20).percent == 25
 
 
 def test_worker_file_progress_does_not_regress_during_post_ingest_hashing() -> None:
@@ -123,6 +140,62 @@ def test_redirected_overall_progress_has_no_terminal_controls(capsys: pytest.Cap
     assert "\x1b" not in output
 
 
+def test_framework_prints_each_skipped_file_and_reason_once(capsys: pytest.CaptureFixture[str]) -> None:
+    """Requirement: importer diagnostics identify every unrecognized input without duplicate-pass output."""
+    progress = ProgressReporter()
+    progress.tty = False
+    skipped = Path("/source/ignored.plist")
+
+    progress.record_skipped_file(skipped, "no file parser recognized it")
+    progress.finish_inventory(SourceInventory(file_count=0, byte_count=0, skipped_file_count=1))
+    progress.finish("completed")
+
+    output = capsys.readouterr().err
+    assert output.count(f"skipped input: {skipped} (no file parser recognized it)") == 1
+    assert "skipped_files=1" in output
+
+
+def test_unchanged_integrity_skip_is_rendered_by_framework(capsys: pytest.CaptureFixture[str]) -> None:
+    """Requirement: worker plug-ins queue skip evidence; only the status framework prints it."""
+    progress = ProgressReporter()
+    progress.tty = False
+    source = Path("/source/archive.mbox")
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="mailfile") as pool:
+        pool.submit(progress.record_unchanged_source, source, "complete SHA-256 matched").result(timeout=5)
+
+    progress.finish("completed")
+
+    output = capsys.readouterr().err
+    assert output.count(f"skipped unchanged: {source} (complete SHA-256 matched)") == 1
+    assert "unchanged_sources=1" in output
+
+
+def test_framework_renders_provider_phase_and_message_progress() -> None:
+    """Requirement: plug-in status is typed data rendered only by the framework."""
+    progress = ProgressReporter()
+    event = ProgressEvent(
+        work_id="account:inbox",
+        phase="fetching\nprovider messages",
+        completed=25,
+        total=100,
+        unit="messages",
+    )
+
+    producer = threading.Thread(
+        name="mailfile_0",
+        target=progress.record_plugin_event,
+        args=(event, Path("Provider Inbox")),
+    )
+    producer.start()
+    producer.join()
+    progress.refresh()
+
+    worker = progress.state.workers[0]
+    assert worker.phase == "fetching provider messages"
+    assert (worker.activity_done, worker.activity_total, worker.activity_unit) == (25, 100, "messages")
+    assert "25/100 messages" in progress._worker_line(worker, 120)
+
+
 def test_clamav_preflight_is_repeated_before_workers_start(capsys: pytest.CaptureFixture[str]) -> None:
     """Requirement: the main status driver reports ClamAV readiness before worker activity."""
     progress = ProgressReporter(worker_count=2)
@@ -175,6 +248,39 @@ def test_file_worker_pool_runs_no_more_than_requested_mailfiles() -> None:
     assert sorted([*first_wave, *(started.get_nowait() for _ in range(3))]) == list(range(6))
 
 
+def test_framework_enforces_source_plugin_concurrency_by_key() -> None:
+    """Requirement: source plug-ins declare limits while the framework owns thread scheduling."""
+    stop = threading.Event()
+    active: Counter[str] = Counter()
+    maximum: Counter[str] = Counter()
+    maximum_total = 0
+    lock = threading.Lock()
+
+    def process(item: tuple[str, int]) -> None:
+        nonlocal maximum_total
+        key, _number = item
+        with lock:
+            active[key] += 1
+            maximum[key] = max(maximum[key], active[key])
+            maximum_total = max(maximum_total, sum(active.values()))
+        time.sleep(0.02)
+        with lock:
+            active[key] -= 1
+
+    items = [("account-a", number) for number in range(4)] + [("account-b", number) for number in range(4)]
+    run_file_workers(
+        items,
+        4,
+        process,
+        stop,
+        lambda: None,
+        concurrency=lambda item: (item[0], 1 if item[0] == "account-a" else 2),
+    )
+
+    assert maximum == Counter({"account-b": 2, "account-a": 1})
+    assert maximum_total == 3
+
+
 def test_file_worker_pool_preserves_deferred_discovery_traceback() -> None:
     """Regression: a second-pass discovery error identifies its original failure site."""
     stop = threading.Event()
@@ -214,3 +320,94 @@ def test_numbered_worker_rows_are_main_rendered_without_wrapping(capsys: pytest.
     rendered = [part.split("\n", 1)[0] for part in output.split("\r\x1b[2K")[1:]]
     plain = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in rendered]
     assert plain and all(len(line) <= progress.terminal_columns for line in plain)
+
+
+def test_progress_status_file_preserves_final_run_statistics(tmp_path: Path) -> None:
+    """Requirement: one atomic JSON file retains each ingest's final typed statistics."""
+    archive = tmp_path / "archive"
+    started_at = datetime.now(timezone.utc)
+    status_file = IngestStatusFile(archive, new_status_id(started_at, 7, 1234))
+    progress = ProgressReporter(
+        worker_count=2,
+        status_file=status_file,
+        archive=archive,
+        run_pk=7,
+        source_roots=["/source/one", "/source/two"],
+        started_at=started_at,
+    )
+    progress.tty = False
+    progress.start()
+    progress.finish_inventory(SourceInventory(file_count=1, byte_count=100))
+
+    def produce() -> None:
+        progress.record_worker("ingesting", "/source/one/mailbox.mbox", 80, 100)
+        progress.record_disposition("archived")
+        progress.record_file_complete("/source/one/mailbox.mbox", 100)
+
+    producer = threading.Thread(name="mailfile_0", target=produce)
+    producer.start()
+    producer.join()
+    progress.finish("completed")
+
+    history = read_ingest_history(archive)
+    assert history.errors == []
+    assert len(history.statuses) == 1
+    status = history.statuses[0]
+    assert status.state == "completed"
+    assert status.run_pk == 7
+    assert status.source_roots == ["/source/one", "/source/two"]
+    assert status.files_processed == 1
+    assert status.bytes_processed == 100
+    assert status.counts.archived == 1
+    assert status.completed_at is not None
+    assert status.workers[0].phase == "idle"
+
+
+def test_status_history_retains_prior_runs_and_reports_corruption(tmp_path: Path) -> None:
+    """Requirement: starting a later ingest neither replaces nor hides prior run evidence."""
+    archive = tmp_path / "archive"
+    for run_pk in (1, 2):
+        started_at = datetime.now(timezone.utc)
+        status_file = IngestStatusFile(archive, new_status_id(started_at, run_pk, 1234))
+        progress = ProgressReporter(
+            status_file=status_file,
+            archive=archive,
+            run_pk=run_pk,
+            started_at=started_at,
+        )
+        progress.tty = False
+        progress.start()
+        progress.finish("completed")
+    (archive / "status" / "ingest-corrupt.json").write_text("not JSON", encoding="utf-8")
+
+    history = read_ingest_history(archive)
+
+    assert [status.run_pk for status in history.statuses] == [2, 1]
+    assert [error.filename for error in history.errors] == ["ingest-corrupt.json"]
+
+
+def test_status_history_marks_an_abandoned_running_snapshot_stale(tmp_path: Path) -> None:
+    """Requirement: the UI cannot present an expired heartbeat as a live ingest."""
+    archive = tmp_path / "archive"
+    started_at = datetime(2026, 8, 29, 12, tzinfo=timezone.utc)
+    status_file = IngestStatusFile(archive, new_status_id(started_at, 1, 1234))
+    progress = ProgressReporter(
+        status_file=status_file,
+        archive=archive,
+        run_pk=1,
+        started_at=started_at,
+    )
+    progress.tty = False
+    progress.start()
+    status = read_ingest_history(
+        archive, now=datetime(2026, 8, 29, 12, 0, 1, tzinfo=timezone.utc)
+    ).statuses[0]
+    assert status.state == "running"
+    status_file.write(status.model_copy(update={"state": "running", "updated_at": started_at}))
+
+    expired = read_ingest_history(
+        archive, now=datetime(2026, 8, 29, 12, 0, 6, tzinfo=timezone.utc)
+    ).statuses[0]
+
+    assert expired.state == "stale"
+    assert expired.phase == "status heartbeat lost"

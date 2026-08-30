@@ -25,14 +25,24 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mailarchiver = ["*.swift", "sql/*.sql"]
+mailarchiver = [
+    "*.swift",
+    "sql/*.sql",
+    "plugins/sources/*/plugin.toml",
+    "plugins/files/*/plugin.toml",
+]
 
 [dependency-groups]
-dev = ["pylint>=3.3", "pytest>=8.0"]
+dev = [
+    "pylint>=3.3",
+    "pytest>=8.0",
+    "pytest-playwright>=0.9.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+pythonpath = ["."]
 
 [tool.pylint."messages control"]
 disable = ["C", "R", "W", "no-member"]

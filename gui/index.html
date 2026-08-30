@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; frame-src blob: data:; object-src 'none'; connect-src 'self'">
-    <title>Mail Archive</title>
+    <title>Mail Archiver</title>
     <link rel="stylesheet" href="style.css">
   </head>
   <body>
@@ -12,13 +12,31 @@
       <header class="toolbar no-print">
         <button id="choose-archive" type="button">Choose Archive…</button>
         <form id="search-form" role="search">
-          <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder='Search mail — from:alice@example.com subject:"annual report"'>
+          <div id="search-control" class="search-control">
+            <div id="search-filters" class="search-filters"></div>
+            <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder='Search mail — from:alice@example.com subject:"annual report"' aria-autocomplete="list" aria-controls="search-suggestions">
+            <div id="search-suggestions" class="search-suggestions" role="listbox" aria-label="Search suggestions" hidden></div>
+          </div>
         </form>
         <label class="attachment-search"><input id="search-attachments" type="checkbox"> Search attachments</label>
+        <label class="attachment-search"><input id="show-original-folders" type="checkbox"> Show original folder structure</label>
         <span id="archive-label"></span>
       </header>
 
       <section class="workspace">
+        <aside id="mailbox-browser" class="mailbox-browser no-print" hidden>
+          <h2>Original mailboxes</h2>
+          <div class="mailbox-controls">
+            <label for="filter-set">Filter set:</label>
+            <select id="filter-set" aria-label="Original-mailbox filter set">
+              <option value="">None</option>
+              <option value="__save__">Save...</option>
+            </select>
+            <button id="manage-filter-sets" type="button" aria-label="Manage filter sets">...</button>
+          </div>
+          <label class="volume-toggle"><input id="show-source-volumes" type="checkbox"> Show source volumes</label>
+          <div id="mailbox-tree" role="tree" aria-label="Original mailboxes" aria-multiselectable="true"></div>
+        </aside>
         <aside class="results no-print">
           <div class="result-controls">
             <div id="result-status" class="status">Choose an archive to begin.</div>
@@ -43,6 +61,9 @@
               <button id="print-message" type="button">Print…</button>
             </div>
             <div id="message-well">
+              <div id="computed-date-banner" class="computed-date-banner" role="status" hidden>
+                Date adjusted: the Date header is more than two days from the Received-header median. Archive routing uses the computed UTC date.
+              </div>
               <div class="message-summary">
                 <div class="message-heading">
                   <h1 id="message-subject"></h1>
@@ -67,7 +88,25 @@
           </div>
         </article>
       </section>
+      <button id="ingest-status-line" class="ingest-status-line no-print" type="button" hidden></button>
       <div id="error" role="alert" hidden></div>
+      <dialog id="save-filter-dialog">
+        <form id="save-filter-form">
+          <h2>Save Filter Set</h2>
+          <label>Name <input id="filter-set-name" required autocomplete="off"></label>
+          <div class="dialog-actions">
+            <button id="cancel-save-filter" type="button">Cancel</button>
+            <button type="submit">Save</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="manage-filter-dialog">
+        <div class="filter-manager">
+          <h2>Filter Sets</h2>
+          <div id="filter-set-list"></div>
+          <div class="dialog-actions"><button id="close-filter-manager" type="button">Close</button></div>
+        </div>
+      </dialog>
     </main>
     <script src="app.js"></script>
   </body>

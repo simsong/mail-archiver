@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from .archive_path import add_archive_argument, require_archive
 from .layout import mbox_path
+from .mailbox_tree import MailboxSelection
 from .message import decoded_header
 from .mbox import MboxLocation, read_verified_location
 from .search import SEARCH_CATEGORIES, decoded_part, html_text, is_attachment
@@ -32,8 +33,11 @@ RESET = "\033[0m"
 class SearchTerms(BaseModel):
     """Structured selectors and free-text terms accepted by mailsearch."""
 
+    any_address: list[str] = Field(default_factory=list)
     to: list[str] = Field(default_factory=list)
     from_: list[str] = Field(default_factory=list)
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
     subject: list[str] = Field(default_factory=list)
     date: list[CalendarDate] = Field(default_factory=list)
     before: list[CalendarDate] = Field(default_factory=list)
@@ -71,7 +75,7 @@ def parse_terms(tokens: list[str]) -> SearchTerms:
     for token in tokens:
         key, separator, value = token.partition(":")
         key = key.lower()
-        if separator and key in {"to", "from", "subject", "date", "before", "after"}:
+        if separator and key in {"any", "to", "from", "cc", "bcc", "subject", "date", "before", "after"}:
             if not value:
                 raise ValueError(f"{key}: requires a value")
             if key in {"date", "before", "after"}:
@@ -80,7 +84,8 @@ def parse_terms(tokens: list[str]) -> SearchTerms:
                 except ValueError as error:
                     raise ValueError(f"{key}: requires a YYYY-MM-DD date") from error
             else:
-                getattr(terms, "from_" if key == "from" else key).append(value.casefold())
+                field = {"any": "any_address", "from": "from_"}.get(key, key)
+                getattr(terms, field).append(value.casefold())
         else:
             terms.text.append(token)
     return terms
@@ -111,15 +116,26 @@ def _search_statement(
     sort_by: SortField = SortField.DATE,
     direction: SortDirection = SortDirection.DESCENDING,
     search_attachments: bool = False,
+    mailbox_selections: list[MailboxSelection] | None = None,
 ) -> SearchStatement:
     clauses = ["m.category IN (?, ?)"]
     parameters: list[str | int] = list(SEARCH_CATEGORIES)
-    for address in terms.to:
+    for address in terms.any_address:
+        pattern = contains(address)
         clauses.append(
-            "EXISTS (SELECT 1 FROM recipients r JOIN email_addresses a ON a.address_pk = r.address_pk "
-            "WHERE r.message_pk = m.message_pk AND lower(a.address) LIKE ? ESCAPE '\\')"
+            "(lower(sender.address) LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM recipients r "
+            "JOIN email_addresses a ON a.address_pk = r.address_pk WHERE r.message_pk = m.message_pk "
+            "AND lower(a.address) LIKE ? ESCAPE '\\'))"
         )
-        parameters.append(contains(address))
+        parameters.extend((pattern, pattern))
+    for role, addresses in (("to", terms.to), ("cc", terms.cc), ("bcc", terms.bcc)):
+        for address in addresses:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM recipients r INDEXED BY recipients_message_role_address "
+                "JOIN email_addresses a ON a.address_pk = r.address_pk "
+                "WHERE r.message_pk = m.message_pk AND r.role = ? AND lower(a.address) LIKE ? ESCAPE '\\')"
+            )
+            parameters.extend((role, contains(address)))
     for address in terms.from_:
         clauses.append("lower(sender.address) LIKE ? ESCAPE '\\'")
         parameters.append(contains(address))
@@ -147,6 +163,25 @@ def _search_statement(
         else:
             clauses.append("m.sha256 IN (SELECT sha256 FROM search.message_fts WHERE message_fts MATCH ?)")
             parameters.append(fts_query(terms.text))
+    if mailbox_selections:
+        alternatives = []
+        for selection in mailbox_selections:
+            selected = []
+            if selection.volume_identity is not None:
+                selected.append("source_volumes.identity_json = ?")
+                parameters.append(selection.volume_identity)
+            if selection.path:
+                selected.append(
+                    "(source_files.hierarchy_path = ? OR "
+                    "(source_files.hierarchy_path >= ? AND source_files.hierarchy_path < ?))"
+                )
+                parameters.extend((selection.path, selection.path + "/", selection.path + "0"))
+            alternatives.append("(" + (" AND ".join(selected) if selected else "1") + ")")
+        clauses.append(
+            "EXISTS (SELECT 1 FROM observations INDEXED BY observations_message_pk "
+            "JOIN source_files USING (source_file_pk) JOIN source_volumes USING (source_volume_pk) "
+            "WHERE observations.message_pk = m.message_pk AND (" + " OR ".join(alternatives) + "))"
+        )
     candidate_order = {
         SortField.DATE: "m.date_utc",
         SortField.SUBJECT: "lower(m.subject)",
@@ -207,6 +242,7 @@ def search_headers(
     sort_by: SortField = SortField.DATE,
     direction: SortDirection = SortDirection.DESCENDING,
     search_attachments: bool = False,
+    mailbox_selections: list[MailboxSelection] | None = None,
 ) -> list[MessageHeader]:
     catalog_path, search_path = archive / "archive.sqlite3", archive / "search.sqlite3"
     if not catalog_path.is_file() or not search_path.is_file():
@@ -214,7 +250,9 @@ def search_headers(
     database = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
     try:
         database.execute("ATTACH DATABASE ? AS search", (f"file:{search_path}?mode=ro",))
-        statement = _search_statement(terms, limit, offset, sort_by, direction, search_attachments)
+        statement = _search_statement(
+            terms, limit, offset, sort_by, direction, search_attachments, mailbox_selections
+        )
         fields = ("message_pk", "recipients", "sender", "subject", "date_utc", "attachment_count")
         return [MessageHeader.model_validate(dict(zip(fields, row))) for row in database.execute(statement.sql, statement.parameters)]
     finally:
@@ -297,8 +335,11 @@ def terminal_width() -> int:
 def search_epilog() -> str:
     width = terminal_width()
     selectors = (
-        ("to:ADDRESS", "recipient address"),
+        ("any:ADDRESS", "sender or To, Cc, or Bcc recipient address"),
         ("from:ADDRESS", "sender address"),
+        ("to:ADDRESS", "To recipient address"),
+        ("cc:ADDRESS", "Cc recipient address"),
+        ("bcc:ADDRESS", "Bcc recipient address"),
         ("subject:TEXT", "subject text"),
         ("date:YYYY-MM-DD", "messages on that UTC calendar day"),
         ("before:YYYY-MM-DD", "messages before that UTC calendar day"),

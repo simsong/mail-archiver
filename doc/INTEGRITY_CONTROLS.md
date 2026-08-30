@@ -1,4 +1,18 @@
-# BagIt and Mailbag interoperability
+# Archive integrity controls: BagIt and Mailbag interoperability
+
+## Scope
+
+This document defines integrity controls for the canonical message archive. It
+does not define how an input source proves that a local file, Gmail account,
+IMAP mailbox, O365 account, or stream is unchanged or safely resumable. Those
+source-specific controls belong to the source plug-in contract described in
+[PLUGINS.md](PLUGINS.md).
+
+The per-message raw SHA-256 is the bridge between the layers: it is recorded
+with the source observation when a mail object is ingested and declared as
+`h2` for the recovered canonical RFC 5322 message. Source-container evidence
+and archive checkpoint fixity remain distinct even when both happen to use
+SHA-256.
 
 ## Status
 
@@ -44,6 +58,9 @@ archive/
 │       ├── 2024-Archive1.mbox
 │       ├── 2024-Sent1.mbox
 │       └── INFECTED1.mbox
+├── status/
+│   ├── ingest-20260829T120000.000000Z-run-41-pid-1234-abcd1234.json
+│   └── ingest-20260829T140000.000000Z-run-42-pid-5678-efab5678.json
 ├── archive.sqlite3
 └── search.sqlite3
 ```
@@ -58,11 +75,14 @@ not themselves canonical email. This placement lets ordinary BagIt tools hash
 the declarations through the tag manifest without presenting them to Mailbag
 tools as another email representation.
 
-`archive.sqlite3` and `search.sqlite3` are operational tag files. The catalog
+`archive.sqlite3`, `search.sqlite3`, and the per-run JSON files under `status/`
+are operational tag files. The catalog
 is authoritative metadata and the search database is disposable, but neither
-is listed in `tagmanifest-sha256.txt`: they can change independently of a
-preservation checkpoint, and SQLite may use transient journal files while
-open. Their internal consistency is outside BagIt fixity validation. All
+database nor the status files are listed in `tagmanifest-sha256.txt`: they can
+change independently of a preservation checkpoint, and SQLite may use
+transient journal files while open. Each ingest atomically replaces only its
+own status file and leaves it as historical run evidence when finished. Their
+internal consistency is outside BagIt fixity validation. All
 canonical messages remain recoverable and independently verifiable without
 them.
 
@@ -100,8 +120,9 @@ hashes:
 * every `integrity/*.mbox.integrity` tag; and
 * `verify_mail_archive.py` when it is installed.
 
-The tag manifest never lists itself or a `data/` payload. The SQLite files and
-transient publication journal are deliberately outside this list.
+The tag manifest never lists itself or a `data/` payload. The SQLite files,
+`status/` history, and transient publication journal are deliberately outside
+this list.
 
 SHA-256 is the only supported BagIt checksum algorithm. BagIt permits adding a
 second manifest algorithm later, but mailarchiver must implement and document

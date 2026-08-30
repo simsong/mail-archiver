@@ -1,0 +1,7 @@
+api_version = 1
+plugin_type = "file"
+kind = "mbox"
+name = "MBOX"
+implementation_version = "1"
+priority = 300
+entrypoint = "mailarchiver.sources:MboxFileParser"

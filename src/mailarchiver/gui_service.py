@@ -17,11 +17,19 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
 from .mailsearch import MessageHeader, SortDirection, SortField, parse_query, read_message_bytes, search_headers
+from .mailbox_tree import MailboxSelection
 from .message import decoded_header
-from .search import decoded_part, is_attachment
+from .plugin_api import SourceContainerMetadata
+from .search import SEARCH_CATEGORIES, decoded_part, is_attachment
 
 PAGE_SIZE = 100
 RAW_PART_ID = -1
+PROVIDER_LABELS = {
+    "gmail": "Gmail",
+    "imap": "IMAP",
+    "microsoft-exchange": "Microsoft Exchange",
+    "o365": "Microsoft 365",
+}
 BLOCKED_ELEMENTS = {"base", "button", "embed", "form", "frame", "frameset", "iframe", "input", "link", "meta", "object", "script"}
 RISKY_SUFFIXES = {
     ".app",
@@ -47,6 +55,24 @@ class SearchPage(BaseModel):
     results: list[MessageHeader]
     offset: int
     has_more: bool
+
+
+class AddressSuggestion(BaseModel):
+    address: str
+    display_name: str
+    message_count: int
+    last_seen: str
+
+
+class SubjectSuggestion(BaseModel):
+    subject: str
+    message_count: int
+
+
+class SearchSuggestions(BaseModel):
+    query: str
+    addresses: list[AddressSuggestion]
+    subjects: list[SubjectSuggestion]
 
 
 class MessagePreview(BaseModel):
@@ -84,14 +110,17 @@ class AttachmentInfo(BaseModel):
 class SourceLocation(BaseModel):
     volume: str
     path: str
-    offset: int
+    offset: int | None
     raw_sha256: str
     semantic_sha256: str | None
+    origin: str
+    preferred: bool = False
 
 
 class MessageView(BaseModel):
     message_pk: int
     subject: str
+    date_source: str
     headers: list[HeaderField]
     body_parts: list[BodyPart]
     preferred_part_id: int
@@ -127,20 +156,69 @@ def search_page(
     sort_by: SortField | str = SortField.DATE,
     direction: SortDirection | str = SortDirection.DESCENDING,
     search_attachments: bool = False,
+    mailbox_selections: list[str] | None = None,
 ) -> SearchPage:
     """Return one bounded page using exactly the CLI query language."""
     if offset < 0 or limit < 1:
         raise ValueError("search offset and limit must be positive")
+    selections = [MailboxSelection.from_token(token) for token in mailbox_selections or []]
     found = search_headers(
-        archive,
-        parse_query(query),
-        limit + 1,
-        offset,
-        SortField(sort_by),
-        SortDirection(direction),
-        search_attachments,
+        archive, parse_query(query), limit + 1, offset, SortField(sort_by),
+        SortDirection(direction), search_attachments, selections,
     )
     return SearchPage(results=found[:limit], offset=offset, has_more=len(found) > limit)
+
+
+def search_suggestions(archive: Path, query: str, limit: int = 20) -> SearchSuggestions:
+    """Return ranked completions; only email substrings use a derived accelerator."""
+    value = " ".join(query.split()).strip()
+    if not 1 <= limit <= 50:
+        raise ValueError("suggestion limit must be between 1 and 50")
+    if len(value) < 3:
+        return SearchSuggestions(query=value, addresses=[], subjects=[])
+    match = f'"{value.replace(chr(34), chr(34) * 2)}"'
+    database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
+    try:
+        database.execute("ATTACH DATABASE ? AS search", (f"file:{archive / 'search.sqlite3'}?mode=ro",))
+        address_rows = database.execute(
+            "WITH matching(suggestion_pk) AS ("
+            "SELECT rowid FROM search.address_suggestion_fts WHERE address_suggestion_fts MATCH ? "
+            "UNION SELECT suggestion_pk FROM search.address_suggestions "
+            "WHERE instr(lower(display_name), lower(?)) > 0) "
+            "SELECT suggestions.address, suggestions.display_name, suggestions.message_count, suggestions.last_seen "
+            "FROM matching JOIN search.address_suggestions suggestions USING (suggestion_pk) "
+            "ORDER BY suggestions.message_count DESC, suggestions.last_seen DESC, "
+            "lower(suggestions.address) LIMIT ?",
+            (match, value, limit),
+        )
+        subject_rows = database.execute(
+            "SELECT subject, count(*) AS message_count FROM messages "
+            "WHERE category IN (?, ?) AND subject <> '' AND instr(lower(subject), lower(?)) > 0 "
+            "GROUP BY subject ORDER BY message_count DESC, lower(subject) LIMIT ?",
+            (*SEARCH_CATEGORIES, value, limit),
+        )
+        return SearchSuggestions(
+            query=value,
+            addresses=[
+                AddressSuggestion(address=address, display_name=name, message_count=count, last_seen=last_seen)
+                for address, name, count, last_seen in address_rows
+            ],
+            subjects=[SubjectSuggestion(subject=subject, message_count=count) for subject, count in subject_rows],
+        )
+    finally:
+        database.close()
+
+
+def searchable_message_count(archive: Path) -> int:
+    """Count deduplicated canonical messages visible to search."""
+    database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
+    try:
+        row = database.execute(
+            "SELECT count(*) FROM messages WHERE category IN (?, ?)", SEARCH_CATEGORIES
+        ).fetchone()
+        return 0 if row is None else int(row[0])
+    finally:
+        database.close()
 
 
 def message_previews(archive: Path, message_pks: list[int]) -> list[MessagePreview]:
@@ -205,9 +283,11 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
     html_part = next((part.part_id for part in body_parts if part.content_type == "text/html"), None)
     text_part = next((part.part_id for part in body_parts if part.content_type == "text/plain"), RAW_PART_ID)
     archive_path, source_locations = message_locations(archive, message_pk)
+    date_source = message_date_source(archive, message_pk)
     return MessageView(
         message_pk=message_pk,
         subject=decoded_header(str(message.get("Subject", "(no subject)"))),
+        date_source=date_source,
         headers=headers,
         body_parts=body_parts,
         preferred_part_id=html_part if html_part is not None else text_part,
@@ -215,6 +295,17 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
         archive_path=archive_path,
         source_locations=source_locations,
     )
+
+
+def message_date_source(archive: Path, message_pk: int) -> str:
+    database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
+    try:
+        row = database.execute("SELECT date_source FROM messages WHERE message_pk = ?", (message_pk,)).fetchone()
+        if row is None:
+            raise ValueError(f"unknown message {message_pk}")
+        return str(row[0])
+    finally:
+        database.close()
 
 
 def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[SourceLocation]]:
@@ -227,22 +318,19 @@ def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[
             (message_pk,),
         ).fetchone()
         rows = database.execute(
-            "SELECT source_volumes.metadata_json, source_files.source_path, observations.source_offset, "
+            "SELECT source_volumes.metadata_json, source_files.metadata_json, source_files.source_path, "
+            "source_files.path_kind, source_files.source_plugin, observations.source_offset, "
             "observations.raw_sha256, observations.semantic_sha256 FROM observations "
             "JOIN source_files USING (source_file_pk) JOIN source_volumes USING (source_volume_pk) "
             "WHERE observations.message_pk = ? ORDER BY observations.observation_pk",
             (message_pk,),
         )
-        return (
-            None if archive_row is None else str(archive_row[0]),
-            [
-                SourceLocation(
-                    volume=_volume_label(metadata_json), path=source_path, offset=source_offset,
-                    raw_sha256=raw_sha256, semantic_sha256=semantic_sha256,
-                )
-                for metadata_json, source_path, source_offset, raw_sha256, semantic_sha256 in rows
-            ],
-        )
+        locations = [
+            _source_location(*row)
+            for row in rows
+        ]
+        locations.sort(key=lambda item: (not item.preferred, item.origin, item.volume, item.path))
+        return None if archive_row is None else str(archive_row[0]), locations
     finally:
         database.close()
 
@@ -254,6 +342,51 @@ def _volume_label(metadata_json: str) -> str:
     label = metadata.get("volume_label")
     mount_path = metadata.get("current_mount_path")
     return str(label or mount_path or "Unknown source volume")
+
+
+def _source_display_path(metadata_json: str, source_path: str, path_kind: str) -> str:
+    if path_kind != "provider":
+        return source_path
+    metadata = json.loads(metadata_json)
+    if not isinstance(metadata, dict):
+        return source_path
+    return str(metadata.get("display_name") or source_path)
+
+
+def _source_location(
+    volume_metadata: str,
+    container_metadata: str,
+    source_path: str,
+    path_kind: str,
+    source_plugin: str,
+    source_offset: int | None,
+    raw_sha256: str,
+    semantic_sha256: str | None,
+) -> SourceLocation:
+    try:
+        relationship = SourceContainerMetadata.model_validate_json(container_metadata).relationship
+    except ValueError:
+        relationship = None
+    cached_provider = None if relationship is None else relationship.upstream_plugin_kind
+    cached = relationship is not None and relationship.role == "cache"
+    preferred = source_plugin != "file-folder" and not cached
+    provider = PROVIDER_LABELS.get(source_plugin, source_plugin)
+    upstream = PROVIDER_LABELS.get(cached_provider, cached_provider) if cached_provider else None
+    if preferred:
+        origin = f"Direct {provider} source"
+    elif cached:
+        origin = f"Local cache of {upstream or 'upstream account'}"
+    else:
+        origin = "Local source" if source_plugin == "file-folder" else f"{provider} source"
+    return SourceLocation(
+        volume=_volume_label(volume_metadata),
+        path=_source_display_path(container_metadata, source_path, path_kind),
+        offset=source_offset,
+        raw_sha256=raw_sha256,
+        semantic_sha256=semantic_sha256,
+        origin=origin,
+        preferred=preferred,
+    )
 
 
 def render_part(archive: Path, message_pk: int, part_id: int, allow_remote: bool = False) -> PartContent:

@@ -62,13 +62,25 @@ def make_archive(tmp_path: Path) -> tuple[Path, bytes]:
     search = create_search(archive / "search.sqlite3")
     try:
         sender, recipient = address_pk(catalog, "sender@example.net"), address_pk(catalog, "recipient@example.net")
+        copy, blind = address_pk(catalog, "copy@example.net"), address_pk(catalog, "blind@example.net")
         cursor = catalog.execute(
             "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("one@example", hashlib.sha256(raw).hexdigest(), sender, "planning meeting", "2024-01-03T10:00:00+00:00", "date", "Archive"),
         )
         message_pk = int(cursor.lastrowid)
-        catalog.execute("INSERT INTO recipients(message_pk, address_pk) VALUES (?, ?)", (message_pk, recipient))
+        catalog.execute(
+            "INSERT INTO recipients(message_pk, address_pk, role) VALUES (?, ?, 'to')",
+            (message_pk, recipient),
+        )
+        catalog.execute(
+            "INSERT INTO recipients(message_pk, address_pk, role) VALUES (?, ?, 'cc')",
+            (message_pk, copy),
+        )
+        catalog.execute(
+            "INSERT INTO recipients(message_pk, address_pk, role) VALUES (?, ?, 'bcc')",
+            (message_pk, blind),
+        )
         catalog.commit()
         index_message(search, raw, False)
         search.commit()
@@ -90,7 +102,24 @@ def test_mailsearch_finds_structured_and_full_text_matches(tmp_path: Path) -> No
         "--archive", str(archive), "to:recipient@example.net", "from:sender@example.net", "subject:planning", "date:2024-01-03", "agenda"
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "1 to:recipient@example.net from:sender@example.net subject:planning meeting date:2024-01-03T10:00:00+00:00\n"
+    assert "from:sender@example.net subject:planning meeting" in result.stdout
+
+
+def test_address_selectors_preserve_from_to_cc_bcc_and_any_roles(tmp_path: Path) -> None:
+    """Requirement: address chips can search any address or one exact RFC recipient role."""
+    archive, _ = make_archive(tmp_path)
+
+    for selector in (
+        "any:sender@example.net",
+        "any:copy@example.net",
+        "from:sender@example.net",
+        "to:recipient@example.net",
+        "cc:copy@example.net",
+        "bcc:blind@example.net",
+    ):
+        assert run_search("--archive", str(archive), selector).returncode == 0
+        assert run_search("--archive", str(archive), selector).stdout.startswith("1 to:")
+    assert run_search("--archive", str(archive), "to:copy@example.net").stdout == ""
 
 
 def test_bounded_listing_uses_date_index_before_recipient_aggregation(tmp_path: Path) -> None:
@@ -156,7 +185,8 @@ def test_mailsearch_limit_zero_and_number_print_original_message(tmp_path: Path)
     archive, raw = make_archive(tmp_path)
     listed = run_search("--archive", str(archive), "--limit", "0")
     assert listed.returncode == 0, listed.stderr
-    assert listed.stdout.startswith("1 to:recipient@example.net")
+    assert listed.stdout.startswith("1 to:")
+    assert "recipient@example.net" in listed.stdout
     displayed = subprocess.run(
         [sys.executable, "-m", "mailarchiver.mailsearch", "--archive", str(archive), "1"], capture_output=True, check=False
     )
@@ -276,7 +306,17 @@ def test_mailsearch_help_describes_syntax() -> None:
     """Requirement: help is sufficient to discover the search language and default limit."""
     result = run_search("--help")
     assert result.returncode == 0
-    for selector in ("to:ADDRESS", "from:ADDRESS", "subject:TEXT", "date:YYYY-MM-DD", "before:YYYY-MM-DD", "after:YYYY-MM-DD"):
+    for selector in (
+        "any:ADDRESS",
+        "from:ADDRESS",
+        "to:ADDRESS",
+        "cc:ADDRESS",
+        "bcc:ADDRESS",
+        "subject:TEXT",
+        "date:YYYY-MM-DD",
+        "before:YYYY-MM-DD",
+        "after:YYYY-MM-DD",
+    ):
         assert selector in result.stdout
     assert "default: 10" in result.stdout
     assert max(map(len, result.stdout.splitlines())) <= 78

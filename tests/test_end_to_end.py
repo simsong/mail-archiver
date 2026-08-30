@@ -7,6 +7,7 @@ import hashlib
 import json
 import mailbox
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -21,9 +22,12 @@ import pytest
 from mailarchiver.__main__ import nonnegative_integer, positive_integer, report_years
 from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.layout import mbox_directory
+from mailarchiver.gui_service import message_locations
+from mailarchiver.mailbox_tree import mailbox_tree
 from mailarchiver.mbox import add_message
 from mailarchiver.source_volume import METADATA_CURRENT_MOUNT_PATH
 from mailarchiver.standalone_verify import semantic_bytes
+from e2e_tests.eicar_fixture import write_eicar_emlx
 
 
 TEST_DATA = Path(__file__).parent / "data"
@@ -45,12 +49,15 @@ def source_mail(tmp_path: Path) -> tuple[Path, dict[str, bytes]]:
     mbox = source / "three_messages.mbox"
     copy(TEST_DATA / "three_messages.mbox", mbox)
     copytree(TEST_DATA / "emlx_maildir", source / "emlx_maildir")
+    infected_path = source / "emlx_maildir/2024/infected/003-infected.emlx"
+    infected = write_eicar_emlx(infected_path.with_suffix(".emlx.template"), infected_path)
+    infected_path.with_suffix(".emlx.template").unlink()
     messages = mailbox_message_bytes(mbox)
     return source, {
         "sent": messages[0],
         "collision_one": messages[2],
         "collision_two": emlx_message_bytes(source / "emlx_maildir/2024/001-collision.emlx"),
-        "infected": emlx_message_bytes(source / "emlx_maildir/2024/infected/003-infected.emlx"),
+        "infected": infected,
     }
 
 
@@ -58,6 +65,7 @@ def run_ingest(
     source: Path,
     archive: Path,
     owner_names: Path,
+    *ingest_args: str,
     environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -71,6 +79,7 @@ def run_ingest(
             "--owner-names-file",
             str(owner_names),
             "--clamav",
+            *ingest_args,
             str(source),
         ],
         check=False,
@@ -130,6 +139,9 @@ def test_ingest_routes_preserves_and_indexes_messages(
     owner_names = Path(__file__).parents[1] / "owner-names.txt"
 
     result = run_ingest(source, archive, owner_names)
+    infected_path = source / "emlx_maildir/2024/infected/003-infected.emlx"
+    infected_path.unlink()
+    assert not infected_path.exists()
     assert_success(result)
     assert "completed:" in result.stderr
     assert "processed=6" in result.stderr
@@ -378,6 +390,16 @@ def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, d
         assert catalog.execute("SELECT count(*) FROM observations").fetchone() == (6,)
         assert catalog.execute("SELECT count(*) FROM source_files WHERE completed_run = 2").fetchone() == (4,)
         assert catalog.execute(
+            "SELECT count(*) FROM source_integrity_checks WHERE run_pk = 2 AND action = 'skip' "
+            "AND completed_at IS NOT NULL"
+        ).fetchone() == (4,)
+        assert catalog.execute(
+            "SELECT count(*) FROM source_integrity_evidence evidence "
+            "JOIN source_integrity_checks checks USING (integrity_check_pk) "
+            "WHERE checks.run_pk = 2 AND evidence.control_id = 'local-file-sha256-v1' "
+            "AND evidence.algorithm = 'sha256'"
+        ).fetchone() == (8,)
+        assert catalog.execute(
             "SELECT modified_at_ns FROM source_files WHERE source_path = ?",
             (catalog_source_path(catalog, touched),),
         ).fetchone() == (touched.stat().st_mtime_ns,)
@@ -385,6 +407,242 @@ def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, d
         catalog.close()
     assert "processed=0" in rerun.stderr
     assert "files_processed=4" in rerun.stderr
+    assert "unchanged_sources=4" in rerun.stderr
+    assert rerun.stderr.count("skipped unchanged:") == 4
+
+
+def test_unrecognized_input_file_is_printed_with_reason(tmp_path: Path) -> None:
+    """Requirement: the importer names every skipped filesystem input once."""
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "message.eml").write_bytes(
+        b"Message-ID: <skip-report@example>\nFrom: sender@example.net\n"
+        b"Date: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"
+    )
+    skipped = source / "Envelope Index"
+    skipped.write_bytes(b"not an RFC 5322 message")
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+
+    result = run_ingest(source, archive, owner_names)
+
+    assert_success(result)
+    diagnostic = f"skipped input: {skipped.resolve()} (no file parser recognized it)"
+    assert result.stderr.count(diagnostic) == 1
+    assert "skipped_files=1" in result.stderr
+
+
+def test_overlapping_local_roots_are_deduplicated_before_workers(
+    source_mail: tuple[Path, dict[str, bytes]], tmp_path: Path
+) -> None:
+    """Requirement: overlapping roots schedule one integrity attempt per physical container."""
+    source, _messages = source_mail
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mailarchiver",
+            "--archive",
+            str(archive),
+            "ingest",
+            "--owner-names-file",
+            str(owner_names),
+            "--clamav",
+            str(source),
+            str(source / "emlx_maildir"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert_success(result)
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT count(*) FROM source_files").fetchone() == (4,)
+        assert catalog.execute("SELECT count(*) FROM source_integrity_checks").fetchone() == (4,)
+        assert catalog.execute(
+            "SELECT max(attempts) FROM (SELECT count(*) AS attempts FROM source_integrity_checks "
+            "GROUP BY run_pk, source_file_pk, control_id)"
+        ).fetchone() == (1,)
+    finally:
+        catalog.close()
+
+
+def test_directory_source_plugin_uses_framework_workers_status_and_catalog(tmp_path: Path) -> None:
+    """Requirement: a provider generator plugs into framework integrity, scanning, and publication."""
+    plugin_root = tmp_path / "plugins"
+    plugin = plugin_root / "sources" / "fixture-source"
+    plugin.mkdir(parents=True)
+    (plugin / "plugin.toml").write_text(
+        """api_version = 1
+plugin_type = "source"
+kind = "fixture-source"
+name = "Fixture provider"
+implementation_version = "1"
+priority = 50
+entrypoint = "plugin:create_plugin"
+""",
+        encoding="utf-8",
+    )
+    raw = (
+        b"Message-ID: <provider-plugin@example>\nFrom: provider@example.net\n\nprovider body\n"
+    )
+    (plugin / "plugin.py").write_text(
+        f"""
+from datetime import datetime, timezone
+
+from mailarchiver.plugin_api import (
+    IntegrityDecision, IntegrityEvidence, MailContainer, MailObject,
+    PluginCapabilities, SourceReference,
+)
+
+RAW = {raw!r}
+
+class Controls:
+    control_id = "fixture-version-v1"
+
+    @staticmethod
+    def evidence(container):
+        return IntegrityEvidence(
+            control_id="fixture-version-v1",
+            subject_id=f"{{container.source.source_id}}:{{container.work_id}}",
+            evidence_kind="version-token", value="version-1",
+        )
+
+    def plan(self, container, prior):
+        yield self.evidence(container)
+        if any(item.value == "version-1" for item in prior):
+            yield IntegrityDecision(action="skip", reason="provider version token matched")
+        else:
+            yield IntegrityDecision(action="read", reason="new provider version token")
+
+    def complete(self, container, planned):
+        del planned
+        yield self.evidence(container)
+
+class Plugin:
+    kind = "fixture-source"
+    capabilities = PluginCapabilities(resumable=True, stable_inventory=False, max_concurrency=1)
+    integrity_controls = Controls()
+
+    def __init__(self):
+        self.discovery_calls = {{}}
+
+    def recognizes(self, source):
+        return source.locator.startswith("fixture://")
+
+    def discover(self, source):
+        self.discovery_calls[source.locator] = self.discovery_calls.get(source.locator, 0) + 1
+        if self.discovery_calls[source.locator] != 1:
+            raise RuntimeError("unstable sources must be discovered exactly once")
+        for folder, native_id in (("Inbox", "message-1"), ("Sent", "message-2")):
+            reference = SourceReference(
+                plugin_kind=self.kind, source_id=source.locator,
+                hierarchy=(folder,), native_id=native_id,
+                display_name=f"{{source.locator}}/{{folder}}/{{native_id}}",
+                provenance_json=f'{{{{"folder":"{{folder}}"}}}}',
+            )
+            yield MailContainer(
+                work_id=f"fixture:{{native_id}}", source=reference,
+                estimated_messages=1, estimated_bytes=len(RAW), concurrency_key=source.locator,
+            )
+
+    def messages(self, container, resume_cursor):
+        del resume_cursor
+        yield MailObject(
+            work_id=container.work_id, raw=RAW, source=container.source,
+            cursor=f"{{container.source.native_id}}-cursor",
+            source_date_utc=datetime(2024, 2, 1, 12, tzinfo=timezone.utc),
+            completed_messages=1, total_messages=1,
+        )
+
+def create_plugin():
+    return Plugin()
+""",
+        encoding="utf-8",
+    )
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mailarchiver",
+            "--archive",
+            str(archive),
+            "ingest",
+            "--owner-names-file",
+            str(owner_names),
+            "--clamav",
+            "--plugin-dir",
+            str(plugin_root),
+            "fixture://account-a",
+            "fixture://account-a",
+            "fixture://account-b",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert_success(result)
+    assert mailbox_message_bytes(mbox_directory(archive) / "2024-Archive1.mbox") == [raw]
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT count(*) FROM source_files").fetchone() == (4,)
+        assert catalog.execute(
+            "SELECT work_id, count(*) FROM source_files GROUP BY work_id ORDER BY work_id"
+        ).fetchall() == [("fixture:message-1", 2), ("fixture:message-2", 2)]
+        rows = catalog.execute(
+            "SELECT hierarchy_path, metadata_json FROM source_files ORDER BY hierarchy_path, source_file_pk"
+        ).fetchall()
+        assert [row[0] for row in rows] == ["Inbox", "Inbox", "Sent", "Sent"]
+        assert [json.loads(row[1])["hierarchy"] for row in rows] == [
+            ["Inbox"], ["Inbox"], ["Sent"], ["Sent"]
+        ]
+        assert Counter(catalog.execute(
+            "SELECT source_cursor, source_offset FROM observations"
+        ).fetchall()) == Counter({("message-1-cursor", None): 2, ("message-2-cursor", None): 2})
+        assert catalog.execute(
+            "SELECT action, completed_at IS NOT NULL FROM source_integrity_checks"
+        ).fetchall() == [("read", 1)] * 4
+        assert catalog.execute(
+            "SELECT evidence_kind, algorithm, value FROM source_integrity_evidence ORDER BY ordinal"
+        ).fetchall() == [("version-token", None, "version-1")] * 8
+        assert catalog.execute("SELECT date_utc, date_source FROM messages").fetchone() == (
+            "2024-02-01T12:00:00+00:00",
+            "source-fallback",
+        )
+    finally:
+        catalog.close()
+
+    assert {node.label for node in mailbox_tree(archive)} == {"Inbox", "Sent"}
+    by_volume = mailbox_tree(archive, show_volumes=True)
+    assert {node.label for node in by_volume} == {"fixture://account-a", "fixture://account-b"}
+    _archive_path, source_locations = message_locations(archive, 1)
+    assert {item.path for item in source_locations} == {
+        "fixture://account-a/Inbox/message-1",
+        "fixture://account-a/Sent/message-2",
+        "fixture://account-b/Inbox/message-1",
+        "fixture://account-b/Sent/message-2",
+    }
+    assert all(item.offset is None for item in source_locations)
+
+    rerun = subprocess.run(result.args, check=False, capture_output=True, text=True)
+    assert_success(rerun)
+    assert rerun.stderr.count("skipped unchanged: fixture://") == 4
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT count(*) FROM messages").fetchone() == (1,)
+        assert catalog.execute(
+            "SELECT action, completed_at IS NOT NULL FROM source_integrity_checks WHERE run_pk = 2"
+        ).fetchall() == [("skip", 1)] * 4
+    finally:
+        catalog.close()
 
 
 def test_discovery_failure_prevents_partial_ingest(tmp_path: Path) -> None:
@@ -461,6 +719,14 @@ def test_mbox_append_resumes_after_verified_prefix(tmp_path: Path) -> None:
         length, sha256 = catalog.execute("SELECT byte_length, sha256 FROM source_files").fetchone()
         assert length == source.stat().st_size > first_length
         assert sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
+        assert catalog.execute(
+            "SELECT action, resume_cursor FROM source_integrity_checks WHERE run_pk = 2"
+        ).fetchone() == ("resume", str(first_length))
+        assert catalog.execute(
+            "SELECT value, byte_length FROM source_integrity_evidence evidence "
+            "JOIN source_integrity_checks checks USING (integrity_check_pk) "
+            "WHERE checks.run_pk = 2 AND evidence.control_id = 'local-file-prefix-sha256-v1'"
+        ).fetchone() == (hashlib.sha256(source.read_bytes()[:first_length]).hexdigest(), first_length)
     finally:
         catalog.close()
 
@@ -508,8 +774,8 @@ def test_report_counts_years_people_and_correspondents(source_mail: tuple[Path, 
     catalog = sqlite3.connect(archive / "archive.sqlite3")
     try:
         catalog.execute(
-            "INSERT OR IGNORE INTO recipients(message_pk, address_pk) "
-            "SELECT message_pk, sender_address_pk FROM messages WHERE category = 'Sent'"
+            "INSERT OR IGNORE INTO recipients(message_pk, address_pk, role) "
+            "SELECT message_pk, sender_address_pk, 'to' FROM messages WHERE category = 'Sent'"
         )
         catalog.commit()
     finally:
@@ -549,6 +815,30 @@ def test_report_labels_missing_sender(tmp_path: Path) -> None:
     assert "(missing sender)" in result.stdout
 
 
+def test_ingest_accepts_an_empty_babyl_mailbox(tmp_path: Path) -> None:
+    """Requirement: a terminated zero-record Babyl source completes and checkpoints."""
+    source = tmp_path / "empty-rmail"
+    raw = b"BABYL OPTIONS:\nVersion: 5\nLabels:\n\x1f"
+    source.write_bytes(raw)
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+
+    result = run_ingest(source, archive, owner_names)
+
+    assert_success(result)
+    assert "processed=0" in result.stderr
+    assert not list(mbox_directory(archive).glob("*.mbox"))
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT count(*) FROM messages").fetchone() == (0,)
+        assert catalog.execute("SELECT count(*) FROM observations").fetchone() == (0,)
+        assert catalog.execute(
+            "SELECT byte_length, sha256, completed_run FROM source_files"
+        ).fetchone() == (len(raw), hashlib.sha256(raw).hexdigest(), 1)
+    finally:
+        catalog.close()
+
+
 def test_interrupt_stops_cleanly(source_mail: tuple[Path, dict[str, bytes]], tmp_path: Path) -> None:
     """Requirement: Ctrl-C exits cleanly without an exception traceback."""
     source, _ = source_mail
@@ -580,6 +870,36 @@ def test_interrupt_stops_cleanly(source_mail: tuple[Path, dict[str, bytes]], tmp
     assert stdout.startswith("year    sent    received    people\n")
 
 
+def test_ingest_applies_archive_earliest_year_before_path_fallback(tmp_path: Path) -> None:
+    """Requirement: the configured archive chronology repairs epoch-like local Date values."""
+    source = tmp_path / "source" / "2002" / "outbox.eml"
+    source.parent.mkdir(parents=True)
+    raw = (
+        b"Message-ID: <epoch-date@example>\n"
+        b"From: sender@example.net\n"
+        b"Date: Thu, 1 Jan 1970 00:00:00 +0000\n\nbody\n"
+    )
+    source.write_bytes(raw)
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+
+    result = run_ingest(source, archive, owner_names, "--earliest-year", "1983")
+
+    assert_success(result)
+    assert mailbox_message_bytes(mbox_directory(archive) / "2002-Archive1.mbox") == [raw]
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT date_utc, date_source FROM messages").fetchone() == (
+            "2002-01-01T00:00:00+00:00",
+            "path-year",
+        )
+        assert catalog.execute(
+            "SELECT detail FROM metadata_defects WHERE field = 'Date'"
+        ).fetchone() == ("invalid or implausible date",)
+    finally:
+        catalog.close()
+
+
 def test_parser_failure_records_source_identity_and_failed_run(tmp_path: Path) -> None:
     """Requirement: an unexpected parser failure is identifiable and safely rerunnable."""
     source = tmp_path / "undated.eml"
@@ -601,6 +921,9 @@ def test_parser_failure_records_source_identity_and_failed_run(tmp_path: Path) -
         assert completed_at is not None
         assert run_result == "failed"
         assert detail.startswith("RuntimeError: failed to parse")
+        assert catalog.execute(
+            "SELECT action, completed_at FROM source_integrity_checks"
+        ).fetchone() == ("read", None)
         assert catalog.execute(
             "SELECT source_files.source_path, source_offset, raw_sha256, disposition, detail FROM observations "
             "JOIN source_files USING (source_file_pk)"
@@ -630,6 +953,35 @@ def test_fresh_catalog_is_refused_beside_existing_mbox(tmp_path: Path) -> None:
     assert "use a new empty archive directory" in result.stderr
     assert existing.read_bytes() == b"existing canonical bytes\n"
     assert not (archive / "archive.sqlite3").exists()
+
+
+def test_incompatible_catalog_cannot_stale_archive_integrity_metadata(tmp_path: Path) -> None:
+    """Requirement: reject incompatible databases before changing archive integrity tags."""
+    source = tmp_path / "source.eml"
+    source.write_bytes(
+        b"Message-ID: <one@example>\nDate: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"
+    )
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "bagit.txt").write_text(
+        "BagIt-Version: 1.0\nTag-File-Character-Encoding: UTF-8\n",
+        encoding="ascii",
+    )
+    verifier = archive / "verify_mail_archive.py"
+    verifier.write_bytes(b"preserved verifier bytes\n")
+    tagmanifest = archive / "tagmanifest-sha256.txt"
+    tagmanifest.write_bytes(b"preserved tag manifest bytes\n")
+    incompatible = sqlite3.connect(archive / "archive.sqlite3")
+    incompatible.executescript("CREATE TABLE schema_info(version INTEGER); INSERT INTO schema_info VALUES (1);")
+    incompatible.close()
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+
+    result = run_ingest(source, archive, owner_names)
+
+    assert result.returncode != 0
+    assert "unsupported archive database V1 layout" in result.stderr
+    assert verifier.read_bytes() == b"preserved verifier bytes\n"
+    assert tagmanifest.read_bytes() == b"preserved tag manifest bytes\n"
 
 
 @pytest.mark.parametrize(
@@ -703,6 +1055,28 @@ def test_clamav_startup_failure_prevents_worker_activity(tmp_path: Path) -> None
         catalog.close()
 
 
+def test_clamav_start_failure_reports_daemon_diagnostics(tmp_path: Path) -> None:
+    """Regression: daemon startup output is retained and reported without a traceback."""
+    source = tmp_path / "source.eml"
+    source.write_bytes(b"Message-ID: <clamd-diagnostic@example>\n\nbody\n")
+    archive = tmp_path / "archive"
+    owner_names = Path(__file__).parents[1] / "owner-names.txt"
+    failed_clamd = tmp_path / "failed-clamd"
+    failed_clamd.write_text(
+        "#!/bin/sh\nprintf 'deliberate clamd diagnostic\\n' >&2\nexit 23\n", encoding="utf-8"
+    )
+    failed_clamd.chmod(0o700)
+    environment = os.environ.copy()
+    environment[CLAMD_ENV] = str(failed_clamd)
+    environment[CLAMD_SOCKET_ENV] = str(tmp_path / "clamd.sock")
+
+    result = run_ingest(source, archive, owner_names, environment=environment)
+
+    assert result.returncode == 1
+    assert "clamd exited with status 23: deliberate clamd diagnostic" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_clamav_start_uses_private_runtime_instead_of_configured_files(tmp_path: Path) -> None:
     """Regression: stale configured log and PID paths cannot break an owned daemon."""
     source = tmp_path / "source.eml"
@@ -745,7 +1119,7 @@ def test_clamav_start_uses_private_runtime_instead_of_configured_files(tmp_path:
         environment[CLAMD_CONFIG_ENV] = str(configuration_path)
         environment[CLAMD_SOCKET_ENV] = str(configured_socket)
 
-        result = run_ingest(source, archive, owner_names, environment)
+        result = run_ingest(source, archive, owner_names, environment=environment)
 
         assert_success(result)
         assert blocked_log.stat().st_mode & 0o777 == 0

@@ -14,8 +14,9 @@ It also asserts the metadata discovery pass and final real-time progress
 summary report total/completed source bytes, processed messages, and
 total/completed source-file counts. `test_progress.py` checks the overall ETA
 calculation, the terminal's white-on-blue top line, and control-free redirected
-output. `test_sources.py` verifies that discovery totals only recognized source
-files without hashing or retaining the tree.
+output. `test_sources.py` verifies that the local generator totals only
+recognized files without hashing or retaining message contents; the framework
+then captures their typed container metadata in a temporary work snapshot.
 
 `test_unchanged_source_files_are_skipped_wholesale` verifies full source-file
 SHA-256 matches avoid per-message parsing, scanning, observations, and MBOX
@@ -38,6 +39,10 @@ error observation's source path, offset, raw SHA-256, and exception detail.
 `test_discovery_failure_prevents_partial_ingest` verifies that a missing root
 found by the metadata sizing pass stops before otherwise valid roots are
 published.
+`test_overlapping_local_roots_are_deduplicated_before_workers` verifies one
+integrity attempt per scoped container. The directory-loaded provider test
+uses two live accounts with repeated work IDs, two hierarchies per account,
+opaque cursors, version-token controls, and unchanged-container reruns.
 `test_fresh_catalog_is_refused_beside_existing_mbox` protects against deleting
 only the database and accidentally appending duplicates to canonical output.
 `test_unusable_source_fails_cleanly` verifies a missing source and an Apple

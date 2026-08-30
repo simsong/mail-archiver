@@ -41,10 +41,23 @@ derived data, while the BagIt payload, Mailbag metadata, and versioned
 integrity tags are the portable durable record.
 
 This is the initial local-ingest implementation, not yet the complete email
-archiving system. It currently ingests local MBOX, EML, Maildir, and complete
-Apple Mail `.emlx` messages. Outlook `.pst`/`.ost`, Eudora, working IMAP cache
-directories, Gmail, live IMAP, redaction, richer research data, sorting/repacking,
-and rollover remain planned; see [doc/implementation.md](doc/implementation.md).
+archiving system. It currently ingests local MBOX, Emacs RMAIL Babyl, EML,
+Maildir, and complete Apple Mail `.emlx` messages. Outlook `.pst`/`.ost`,
+Eudora, working IMAP cache directories, Gmail, live IMAP, redaction, richer
+research data, sorting/repacking, and rollover remain planned; see
+[doc/implementation.md](doc/implementation.md).
+The [archivist-facing user manual](doc/USER_MANUAL.md) gives step-by-step
+instructions for ingest, verification, and search.
+The [plug-in architecture](doc/PLUGINS.md) documents the implemented
+source-neutral generator, trusted-directory discovery, threading, status, and
+integrity boundaries, plus the work required by real Gmail, O365, IMAP, and
+stream adapters.
+See [release notes](doc/RELEASE_NOTES.md) for changes not yet included in a
+release.
+The [data-quality audit](doc/DATA_QUALITY_AUDIT.md) documents the read-only
+diagnostic scripts used to investigate implausible dates, missing senders, and
+previously unsupported Babyl sources. Its generated mail and metadata evidence
+is private and deliberately excluded from Git.
 The [current source-code audit](doc/source-code-audit.md) distinguishes completed
 tightening from the remaining architectural gaps.
 The [competitive analysis](doc/competitive_analysis.md) explains how this
@@ -102,10 +115,15 @@ make install-mac TIKA_VERSION=X.Y.Z
 
 ## Ingest local mail
 
-The following command recursively reads MBOX and `.emlx` files below
+The following command recursively reads MBOX, Emacs RMAIL Babyl, EML, Maildir,
+and `.emlx` files below
 `SOURCE`.  It never changes those source files.  It starts `clamd` temporarily
 for the ingest run if no daemon is already listening on the configured local
 socket.
+
+Maildir message files are grouped at the Maildir root. Apple Mail `.emlx`
+cache files are grouped by their containing `.mbox` package hierarchy rather
+than exposed as UUID, `Data`, `Messages`, and individual filename nodes.
 
 ### `--clamav`
 
@@ -138,20 +156,40 @@ For example, with the project's supplied owner-token list and a new archive:
 MAIL_ARCHIVE_DIR="$HOME/arch-local/normalized-mail" uv run mailarchiver ingest --owner-names-file owner-names.txt --clamav "$HOME/arch-local/SLG Mail"
 ```
 
-Mailfile workers default to the CPU count, capped at eight. Override the limit
+Framework workers default to the CPU count, capped at eight. Override the limit
 for a benchmark or a less capable machine with a positive `--workers N`.
-After the ClamAV preflight succeeds, independent source mailfiles are read,
+After the ClamAV preflight succeeds, independent source containers are read,
 parsed, and scanned concurrently;
 canonical MBOX and SQLite publication remains single-writer. Before workers
 start, mailarchiver makes a lightweight read-only pass to count recognized
-source files and bytes; it does not hash or retain the source tree during this
-inventory.
+source files and bytes; it does not hash or retain message contents during this
+inventory. It spools only typed container metadata to a temporary work
+snapshot. Every ordinary file that no parser recognizes is printed once with
+its path and reason.
 
 Messages are classified as `Sent` when their parsed `From:` address contains a
 case-insensitive token in `owner-names.txt`; they go to the year's
 `{YEAR}-Sent1.mbox` series. Other clean messages go to the year's
 `{YEAR}-Archive1.mbox` series. `X-Apple-Auto-Saved` messages are logged but not
 copied.
+
+Routing dates compare the original `Date:` with the trimmed median of all valid
+UTC-normalized `Received:` timestamps. A difference of more than two days uses
+the median and records `received-median` in the catalog without changing the
+message bytes. The graphical viewer then shows a warning banner and a slight
+red tint. Use `--earliest-year YEAR` when an archive has a known start date;
+earlier header dates become implausible and normal Received/stream/path
+fallbacks apply. Exact empty Eudora MBCP metadata records are logged as
+exclusions, and narrow `From XXX` status wrappers are unwrapped to expose their
+nested message.
+
+Source and file-format generators have separate immutable, manifest-loaded
+registries. Local file/folder traversal and MBOX, Babyl, EMLX, EML, and Maildir
+parsing are active. Gmail, IMAP, O365, Microsoft Exchange, and NUL-delimited
+standard input are reserved stubs, not supported ingest modes yet. Repeatable
+`--plugin-dir DIRECTORY` options load an explicit external plug-in root; Python
+code there executes, so only name directories you trust. See
+[doc/PLUGINS.md](doc/PLUGINS.md).
 
 The archive directory is a native BagIt/Mailbag package containing:
 
@@ -161,8 +199,9 @@ The archive directory is a native BagIt/Mailbag package containing:
 * `integrity/*.mbox.integrity` tags containing versioned `h1` complete-MBOX,
   `h2` raw-message, and `h3` semantic-message SHA-256 digests as specified in
   [doc/INTEGRITY_CONTROLS.md](doc/INTEGRITY_CONTROLS.md);
-* `archive.sqlite3`, the ingest catalog and observation log; and
-* `search.sqlite3`, a separately rebuildable FTS5 index.
+* `archive.sqlite3`, the ingest catalog and observation log;
+* `search.sqlite3`, a separately rebuildable FTS5 index; and
+* `status/ingest-*.json`, one typed operational status/history file per ingest.
 
 Ingest also places `verify_mail_archive.py` in the archive. It is a small,
 single-purpose Python program with no third-party dependencies. Run it to
@@ -210,7 +249,11 @@ current mailfile, byte-completion percentage, and phase. Workers send status
 events to the main thread, which alone renders the terminal. Long paths are
 fitted to the terminal width so the dashboard does not scroll. Redirected
 output stays line-oriented for logs. It also counts archived mail,
-previously-seen duplicate skips, autosave exclusions, and infected messages.
+previously-seen duplicates, autosave exclusions, infected messages,
+unrecognized files, and unchanged containers skipped by source integrity.
+The same state is atomically written to a new run-specific file under the
+archive's `status/` directory. The final update preserves the run statistics;
+later ingests create new files rather than replacing the history.
 
 ## Interrupts and disk space
 
@@ -226,7 +269,8 @@ assume an integrity file can be refreshed when the filesystem is full.
 ## Review ingest observations
 
 Every ingest receives a sequential run number and records one observation for
-each source message: `archived`, `duplicate`, or `autosave-excluded`.  `review`
+each source record: `archived`, `duplicate`, `autosave-excluded`, or
+`source-metadata-excluded`. `review`
 is the audit-log viewer; it does not reindex or refresh anything.  Without a
 selector it prints all observations.  Use `--run` only to restrict the output
 to one numbered ingest run:
@@ -300,15 +344,32 @@ SHA-256; it does not alter canonical message bytes.
 The initial graphical search tool runs on macOS using pywebview and the system
 WKWebView. It has one search field with the same selectors and quoting rules as
 `mailsearch`, sortable results, message and MIME-part viewing, `.eml` export
-and drag-out, printing, and attachment viewing. Start it with:
+and drag-out, printing, and attachment viewing. Typing three characters offers
+ranked address and subject completions. Selected addresses become removable
+filters with **Any**, **From**, **To**, **Cc**, and **Bcc** role menus. The
+window title identifies the archive and its deduplicated searchable-message
+count. Start it with:
 
 ```console
 make gui ARGS="--archive /path/to/mail-archive"
 ```
 
+The bottom status line shows the current ingest, or the latest completed run.
+Click it to open the separate ingest-history and worker-detail window. The same
+window is available from **Windows → Ingest**; choosing it again brings the
+existing window to the front.
+
 Select **Search attachments** to include the separate text-attachment index in
 ordinary full-text searches. Build the attachment index with `uv run
 mailarchiver refresh-index --index-attachments` so that table has content.
+
+Select **Show original folder structure** to filter before sorting and paging
+by one or more remembered source folders or logical mailboxes. Counts are
+deduplicated canonical messages. Directories containing only EML/EMLX messages
+and Maildir `cur`/`new` contents collapse into one mailbox. Source volumes merge
+by default and can be shown explicitly. Named filter sets are stored atomically
+in the operating system's per-user preferences location, outside the archive.
+See [`doc/USER_MANUAL.md`](doc/USER_MANUAL.md#filter-by-original-mailbox).
 
 pywebview also supports Windows and Linux, but this application is not yet
 portable: attachment opening currently calls the macOS `open` command, Finder
@@ -318,10 +379,20 @@ small platform adapters and testing before Windows is supported.
 
 ## Test
 
-The ordinary suite uses static MBOX and `.emlx` fixtures, including an EICAR
-attachment that exercises the actual on-demand ClamAV route. The separately
-runnable end-to-end suite creates a fresh archive from representative EML
-messages, publishes all fixity, and runs the installed standalone verifier:
+The full test architecture and its explicit browser/Cocoa coverage boundary are
+documented in [`doc/END_TO_END_TESTING.md`](doc/END_TO_END_TESTING.md).
+
+The ordinary suite uses static MBOX and `.emlx` fixtures. Antivirus tests build
+the EICAR signature from fragments only inside a pytest temporary directory,
+ingest it with the real on-demand ClamAV daemon, and immediately delete the
+generated source; no complete virus-test signature is tracked in Git. The
+separate end-to-end suite copies its tracked, virus-free source corpus, ingests
+110 discoveries, verifies deduplication, autosave exclusion, quarantine,
+newline preservation, attachment indexing, BagIt fixity, and the installed
+standalone verifier. Headless Chromium drives the shipped HTML and JavaScript
+through the real Python service bridge, including pagination, search,
+sorting, message and MIME views, provenance, remote-content blocking, previews,
+exports, printing, drag-out, keyboard navigation, and error display:
 
 ```console
 make test
@@ -329,4 +400,8 @@ make test-e2e
 make check
 ```
 
-`make check` runs both suites.
+Install the pinned headless Chromium once with `make install-test-browser`.
+`make check` then runs both suites without showing a window. On macOS,
+`make test-native-gui` additionally exercises the hidden Cocoa/WKWebView bridge.
+Regenerate the committed safe corpus after an
+intentional fixture change with `make fixture-e2e`.

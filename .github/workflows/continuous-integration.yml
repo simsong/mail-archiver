@@ -66,6 +66,8 @@ jobs:
           rm -f "$MAILARCHIVER_CLAMD_SOCKET" /run/clamav/clamd.pid
       - name: Install dependencies
         run: uv sync --locked --all-groups
+      - name: Install headless test browser
+        run: make install-test-browser PLAYWRIGHT_INSTALL_ARGS="--with-deps chromium"
       - name: Pytest
         run: make check
 
@@ -85,3 +87,46 @@ jobs:
         run: uv sync --locked --all-groups
       - name: Pylint
         run: make pylint
+
+  native-gui-e2e:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+      - name: Install and configure ClamAV
+        shell: bash
+        run: |
+          brew install clamav
+          clamav_prefix="$(brew --prefix)"
+          database_directory="${RUNNER_TEMP}/clamav-database"
+          configuration_directory="${RUNNER_TEMP}/mailarchiver-clamav"
+          mkdir -p "${database_directory}" "${configuration_directory}"
+          printf '%s\n' \
+            "DatabaseDirectory ${database_directory}" \
+            "DatabaseOwner $(id -un)" \
+            'DatabaseMirror database.clamav.net' \
+            > "${configuration_directory}/freshclam.conf"
+          "${clamav_prefix}/bin/freshclam" --config-file="${configuration_directory}/freshclam.conf"
+          printf '%s\n' \
+            "DatabaseDirectory ${database_directory}" \
+            "User $(id -un)" \
+            "LocalSocket ${configuration_directory}/clamd.sock" \
+            "PidFile ${configuration_directory}/clamd.pid" \
+            > "${configuration_directory}/clamd.conf"
+          {
+            echo "MAILARCHIVER_CLAMD=${clamav_prefix}/sbin/clamd"
+            echo "MAILARCHIVER_CLAMDSCAN=${clamav_prefix}/bin/clamdscan"
+            echo "MAILARCHIVER_CLAMD_CONFIG=${configuration_directory}/clamd.conf"
+            echo "MAILARCHIVER_CLAMD_SOCKET=${configuration_directory}/clamd.sock"
+          } >> "${GITHUB_ENV}"
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+      - name: Full lifecycle and native UI E2E
+        run: make test-native-gui

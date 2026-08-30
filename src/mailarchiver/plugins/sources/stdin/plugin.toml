@@ -1,0 +1,7 @@
+api_version = 1
+plugin_type = "source"
+kind = "stdin"
+name = "NUL-delimited standard input (reserved)"
+implementation_version = "0"
+priority = 240
+entrypoint = "mailarchiver.source_stubs:StdinSourcePlugin"

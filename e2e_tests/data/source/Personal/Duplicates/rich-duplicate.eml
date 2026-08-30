@@ -1,0 +1,37 @@
+Message-ID: <rich-e2e@example>
+Date: Tue, 31 Dec 2024 12:00:00 +0000
+Received: by old-outlier.example; Wed, 31 Jan 2024 12:00:00 +0000
+Received: by first.example; Thu, 1 Feb 2024 12:00:00 +0000
+Received: by second.example; Fri, 2 Feb 2024 12:00:00 +0000
+Received: by new-outlier.example; Sun, 4 Feb 2024 12:00:00 +0000
+From: curator@example.net
+To: archive-owner@example.org
+Cc: Beth Rosenberg <beth@example.org>
+Subject: Rich UI message
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=outer
+
+--outer
+Content-Type: multipart/alternative; boundary=alternative
+
+--alternative
+Content-Type: text/plain; charset=utf-8
+
+Plain E2E body for the message viewer.
+--alternative
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>HTML E2E body for the message viewer.</p><img src="https://tracker.invalid/pixel.png"></body></html>
+--alternative--
+--outer
+Content-Type: image/png
+Content-Disposition: attachment; filename=tiny.png
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+--outer
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename=review.command
+
+Appendixquartz occurs only in this risky attachment.
+--outer--

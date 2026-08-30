@@ -33,6 +33,9 @@ drag-out from a result or the dedicated message-file well.
 
 Automated tests verify search parsing, MIME selection, HTML sanitization,
 remote-content blocking, exact message export, decoded attachment export, and
-risky attachment classification. Native dialogs, printing, external attachment
-opening, PDF rendering, and Finder drag-out still require manual macOS tests.
-Run `make gui-smoke` on macOS to verify the JavaScript-to-Python bridge.
+risky attachment classification. The complete lifecycle and interface test
+design is documented in [`../doc/END_TO_END_TESTING.md`](../doc/END_TO_END_TESTING.md).
+Native dialogs, external attachment opening, PDF rendering, Finder drag-out,
+multiple Cocoa windows, and the macOS menu bar require XCUITest or manual macOS
+acceptance. Run `make gui-smoke` on macOS to verify the real
+JavaScript-to-Python bridge.

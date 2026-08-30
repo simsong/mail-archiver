@@ -9,6 +9,7 @@ import warnings
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
+from email.utils import getaddresses
 
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from pydantic import BaseModel
@@ -25,6 +26,11 @@ class IndexedAttachment(BaseModel):
     part_id: int
     filename: str
     mime_type: str
+
+
+class SuggestedAddress(BaseModel):
+    address: str
+    display_name: str
 
 
 def decoded_part(part: Message) -> str:
@@ -113,8 +119,38 @@ def indexed_attachments(message: Message) -> list[IndexedAttachment]:
     return attachments
 
 
+def suggested_addresses(message: Message) -> list[SuggestedAddress]:
+    """Return one decoded display name for every address present in the message headers."""
+    identities: dict[str, str] = {}
+    values = [str(value) for name in ("From", "To", "Cc", "Bcc") for value in message.get_all(name, [])]
+    for supplied_name, supplied_address in getaddresses(values):
+        address = supplied_address.strip().lower()
+        if not address:
+            continue
+        name = decoded_header(supplied_name).strip()
+        if address not in identities or (name and not identities[address]):
+            identities[address] = name
+    return [SuggestedAddress(address=address, display_name=name) for address, name in sorted(identities.items())]
+
+
 def delete_indexed_message(search: sqlite3.Connection, digest: str) -> None:
     """Delete disposable message content through the indexed SHA-256 mapping."""
+    suggestion_pks = [
+        int(row[0]) for row in search.execute(
+            "SELECT suggestion_pk FROM message_address_suggestions WHERE sha256 = ?", (digest,)
+        )
+    ]
+    search.execute("DELETE FROM message_address_suggestions WHERE sha256 = ?", (digest,))
+    search.executemany(
+        "UPDATE address_suggestions SET message_count = message_count - 1, "
+        "last_seen = COALESCE((SELECT max(seen_at) FROM message_address_suggestions "
+        "WHERE suggestion_pk = ?), '') WHERE suggestion_pk = ?",
+        ((suggestion_pk, suggestion_pk) for suggestion_pk in suggestion_pks),
+    )
+    search.executemany(
+        "DELETE FROM address_suggestions WHERE suggestion_pk = ? AND message_count = 0",
+        ((suggestion_pk,) for suggestion_pk in suggestion_pks),
+    )
     row = search.execute(
         "SELECT message_fts_rowid, attachment_fts_rowid FROM message_metadata WHERE sha256 = ?", (digest,)
     ).fetchone()
@@ -127,7 +163,9 @@ def delete_indexed_message(search: sqlite3.Connection, digest: str) -> None:
     search.execute("DELETE FROM message_metadata WHERE sha256 = ?", (digest,))
 
 
-def index_message(search: sqlite3.Connection, raw: bytes, index_attachments: bool) -> None:
+def index_message(
+    search: sqlite3.Connection, raw: bytes, index_attachments: bool, *, date_utc: str = ""
+) -> None:
     digest = hashlib.sha256(raw).hexdigest()
     message = BytesParser(policy=policy.compat32).parsebytes(raw)
     attachments = indexed_attachments(message)
@@ -152,14 +190,29 @@ def index_message(search: sqlite3.Connection, raw: bytes, index_attachments: boo
         "INSERT INTO message_attachments(sha256, attachment_ordinal, part_id, filename, mime_type) VALUES (?, ?, ?, ?, ?)",
         ((digest, item.attachment_ordinal, item.part_id, item.filename, item.mime_type) for item in attachments),
     )
+    for identity in suggested_addresses(message):
+        suggestion = search.execute(
+            "INSERT INTO address_suggestions(address, display_name, message_count, last_seen) VALUES (?, ?, 1, ?) "
+            "ON CONFLICT(address) DO UPDATE SET message_count = message_count + 1, "
+            "last_seen = max(address_suggestions.last_seen, excluded.last_seen), display_name = CASE "
+            "WHEN address_suggestions.display_name = '' THEN excluded.display_name "
+            "ELSE address_suggestions.display_name END RETURNING suggestion_pk",
+            (identity.address, identity.display_name, date_utc),
+        ).fetchone()
+        assert suggestion is not None
+        search.execute(
+            "INSERT INTO message_address_suggestions(sha256, suggestion_pk, seen_at) VALUES (?, ?, ?)",
+            (digest, suggestion[0], date_utc),
+        )
 
 
 def index_message_safely(
-    catalog: sqlite3.Connection, search: sqlite3.Connection, message_pk: int, raw: bytes, index_attachments: bool
+    catalog: sqlite3.Connection, search: sqlite3.Connection, message_pk: int, raw: bytes,
+    index_attachments: bool, *, date_utc: str = ""
 ) -> None:
     """Index disposable content without allowing extraction failure to veto canonical mail."""
     try:
-        index_message(search, raw, index_attachments)
+        index_message(search, raw, index_attachments, date_utc=date_utc)
         search.commit()
     except Exception as error:
         search.rollback()

@@ -1,0 +1,7 @@
+api_version = 1
+plugin_type = "source"
+kind = "gmail"
+name = "Gmail (reserved)"
+implementation_version = "0"
+priority = 200
+entrypoint = "mailarchiver.source_stubs:GmailSourcePlugin"

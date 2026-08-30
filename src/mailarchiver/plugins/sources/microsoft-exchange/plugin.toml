@@ -1,0 +1,7 @@
+api_version = 1
+plugin_type = "source"
+kind = "microsoft-exchange"
+name = "Microsoft Exchange (reserved)"
+implementation_version = "0"
+priority = 230
+entrypoint = "mailarchiver.source_stubs:MicrosoftExchangeSourcePlugin"

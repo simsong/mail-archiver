@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 from email.message import Message
 from email import policy
 from email.parser import BytesParser
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -17,11 +18,13 @@ from pydantic import BaseModel, Field
 
 
 YEAR = re.compile(r"^(19|20)\d{2}$")
+DATE_RECEIVED_TOLERANCE = timedelta(days=2)
 GOOGLE_CHAT_SENDER = re.compile(
     r'^sender\s*\{.*?^\s*full_name:\s*"((?:[^"\\]|\\.)*)".*?^\}\s*$',
     re.MULTILINE | re.DOTALL,
 )
 EMBEDDED_MBOX_ENVELOPE = re.compile(br"(?m)^>From [^\r\n]*\r?\n")
+HEADER_SEPARATOR = re.compile(br"\r?\n\r?\n")
 
 
 class MetadataDefect(BaseModel):
@@ -29,11 +32,22 @@ class MetadataDefect(BaseModel):
     detail: str
 
 
+class RecipientRole(StrEnum):
+    TO = "to"
+    CC = "cc"
+    BCC = "bcc"
+
+
+class RecipientIdentity(BaseModel):
+    address: str
+    role: RecipientRole
+
+
 class ParsedMessage(BaseModel):
     message_id: str
     sha256: str
     sender: str
-    recipients: list[str]
+    recipients: list[RecipientIdentity]
     subject: str
     date_utc: str
     date_source: str
@@ -51,16 +65,21 @@ class SenderIdentity(BaseModel):
     source: Literal["from", "embedded-from", "sender", "google-chat", "missing"]
 
 
-def parse_date(value: str | None) -> datetime | None:
+def plausible_year(year: int, earliest_year: int = 1900) -> bool:
+    return earliest_year <= year <= datetime.now(timezone.utc).year + 1
+
+
+def parse_date(value: str | None, earliest_year: int = 1900) -> datetime | None:
     if value is None:
         return None
     try:
         parsed = parsedate_to_datetime(value)
     except Exception:
         return None
-    if parsed is None or not 1900 <= parsed.year <= datetime.now(timezone.utc).year + 1:
+    if parsed is None:
         return None
-    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    normalized = parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    return normalized if plausible_year(normalized.year, earliest_year) else None
 
 
 def path_year(path: Path) -> int | None:
@@ -70,9 +89,22 @@ def path_year(path: Path) -> int | None:
     return None
 
 
-def received_date(values: list[object]) -> datetime | None:
-    dates = [parsed for value in values if (parsed := parse_date(str(value).rsplit(";", 1)[-1].strip())) is not None]
-    return min(dates) if dates else None
+def received_date(values: list[object], earliest_year: int = 1900) -> datetime | None:
+    """Return the UTC median after dropping one earliest and latest hop when possible."""
+    dates = [
+        parsed
+        for value in values
+        if (parsed := parse_date(str(value).rsplit(";", 1)[-1].strip(), earliest_year)) is not None
+    ]
+    if not dates:
+        return None
+    dates.sort()
+    if len(dates) >= 3:
+        dates = dates[1:-1]
+    middle = len(dates) // 2
+    if len(dates) % 2:
+        return dates[middle]
+    return dates[middle - 1] + (dates[middle] - dates[middle - 1]) / 2
 
 
 def decode_header_value(value: str) -> DecodedHeaderValue:
@@ -119,9 +151,11 @@ def sender_identity(message: Message, defects: list[MetadataDefect], raw: bytes 
     if address:
         return SenderIdentity(value=address, source="from")
 
-    if raw is not None and (match := EMBEDDED_MBOX_ENVELOPE.search(raw)) is not None:
-        header_end = raw.find(b"\n\n")
-        if header_end < 0 or match.start() < header_end:
+    if raw is not None:
+        separator = HEADER_SEPARATOR.search(raw)
+        header_end = separator.start() if separator is not None else len(raw)
+        match = EMBEDDED_MBOX_ENVELOPE.search(raw, 0, header_end)
+        if match is not None:
             embedded = BytesParser(policy=policy.compat32).parsebytes(raw[match.end():])
             embedded_values = header_values(embedded, "From", defects)
             try:
@@ -155,34 +189,77 @@ def sender_identity(message: Message, defects: list[MetadataDefect], raw: bytes 
     return SenderIdentity(value="", source="missing")
 
 
-def parse_message(raw: bytes, path: Path, prior_date: datetime | None) -> ParsedMessage:
+def recipient_identities(message: Message, defects: list[MetadataDefect]) -> list[RecipientIdentity]:
+    """Return normalized recipients without losing their RFC header role."""
+    recipients: set[tuple[str, RecipientRole]] = set()
+    try:
+        for role in RecipientRole:
+            values = header_values(message, role.value, defects)
+            recipients.update((address.lower(), role) for _, address in getaddresses(values) if address)
+    except Exception as error:
+        defects.append(MetadataDefect(field="recipients", detail=f"{type(error).__name__}: {error}"))
+    return [RecipientIdentity(address=address, role=role) for address, role in sorted(recipients)]
+
+
+def parse_message(
+    raw: bytes,
+    path: Path | None,
+    prior_date: datetime | None,
+    source_date_utc: datetime | None = None,
+    earliest_year: int = 1900,
+) -> ParsedMessage:
     message = BytesParser(policy=policy.compat32).parsebytes(raw)
     digest = hashlib.sha256(raw).hexdigest()
     defects: list[MetadataDefect] = []
     message_id_values = header_values(message, "Message-ID", defects)
     message_id = (message_id_values[0] if message_id_values else "").strip().strip("<>").lower() or digest
     sender = sender_identity(message, defects, raw).value
-    recipient_headers = [value for name in ("To", "Cc", "Bcc") for value in header_values(message, name, defects)]
-    try:
-        recipients = sorted({address.lower() for _, address in getaddresses(recipient_headers) if address})
-    except Exception as error:
-        defects.append(MetadataDefect(field="recipients", detail=f"{type(error).__name__}: {error}"))
-        recipients = []
+    recipients = recipient_identities(message, defects)
     date_values = header_values(message, "Date", defects)
     date_value = date_values[0] if date_values else None
-    date = parse_date(date_value)
+    date = parse_date(date_value, earliest_year)
+    received = received_date(header_values(message, "Received", defects), earliest_year)
+    source_date = None
+    if source_date_utc is not None:
+        if source_date_utc.tzinfo is None or source_date_utc.utcoffset() is None:
+            raise ValueError("source fallback date must be timezone-aware")
+        candidate = source_date_utc.astimezone(timezone.utc)
+        source_date = candidate if plausible_year(candidate.year, earliest_year) else None
+    resolved_prior = None
+    if prior_date is not None:
+        candidate = (
+            prior_date.replace(tzinfo=timezone.utc)
+            if prior_date.tzinfo is None
+            else prior_date.astimezone(timezone.utc)
+        )
+        resolved_prior = candidate if plausible_year(candidate.year, earliest_year) else None
     if date_value is not None and date is None:
         defects.append(MetadataDefect(field="Date", detail="invalid or implausible date"))
-    if date is not None:
+    if date is not None and received is not None and abs(date - received) > DATE_RECEIVED_TOLERANCE:
+        difference = abs(date - received)
+        date = received
+        date_source = "received-median"
+        defects.append(
+            MetadataDefect(
+                field="Date",
+                detail=f"differs from trimmed Received median by {difference}; used Received median",
+            )
+        )
+    elif date is not None:
         date_source = "date"
-    elif (date := received_date(header_values(message, "Received", defects))) is not None:
+    elif received is not None:
+        date = received
         date_source = "received"
-    elif prior_date is not None:
-        date, date_source = prior_date, "previous-message"
+    elif source_date is not None:
+        date = source_date
+        date_source = "source-fallback"
+    elif resolved_prior is not None:
+        date, date_source = resolved_prior, "previous-message"
     else:
-        year = path_year(path)
-        if year is None:
-            raise ValueError(f"no date or year path fallback for {path}")
+        year = None if path is None else path_year(path)
+        if year is None or not plausible_year(year, earliest_year):
+            detail = "non-filesystem source" if path is None else str(path)
+            raise ValueError(f"no date or year path fallback for {detail}")
         date, date_source = datetime(year, 1, 1, tzinfo=timezone.utc), "path-year"
     subject_values = header_values(message, "Subject", defects)
     subject = decode_header_value(subject_values[0] if subject_values else "")

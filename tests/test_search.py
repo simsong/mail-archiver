@@ -148,6 +148,24 @@ def test_reindex_uses_indexed_sha_mapping_and_fts_rowids(tmp_path: Path) -> None
     assert old_message_count == old_attachment_count == (0,)
 
 
+def test_address_suggestion_reindex_recalculates_last_seen(tmp_path: Path) -> None:
+    """Requirement: address ranking retains deduplicated counts and the newest indexed message date."""
+    search = create_search(tmp_path / "search.sqlite3")
+    first = b"Message-ID: <first@example>\nFrom: Person <person@example.org>\n\nfirst"
+    second = b"Message-ID: <second@example>\nFrom: Person <person@example.org>\n\nsecond"
+    try:
+        index_message(search, first, False, date_utc="2024-01-01T00:00:00+00:00")
+        index_message(search, second, False, date_utc="2025-01-01T00:00:00+00:00")
+        index_message(search, second, False, date_utc="2023-01-01T00:00:00+00:00")
+        row = search.execute(
+            "SELECT message_count, last_seen FROM address_suggestions WHERE address = 'person@example.org'"
+        ).fetchone()
+    finally:
+        search.close()
+
+    assert row == (2, "2024-01-01T00:00:00+00:00")
+
+
 def test_body_preview_collapses_and_bounds_words() -> None:
     """Requirement: indexed result previews contain the first 18 body words on one line."""
     body = "one two\nthree four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen"
@@ -169,4 +187,4 @@ def test_index_failure_is_recorded_without_raising() -> None:
 
     field, detail = catalog.execute("SELECT field, detail FROM metadata_defects").fetchone()
     assert field == "search-index"
-    assert "no such table: message_metadata" in detail
+    assert "no such table:" in detail

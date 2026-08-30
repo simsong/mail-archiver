@@ -1,0 +1,7 @@
+api_version = 1
+plugin_type = "file"
+kind = "message"
+name = "RFC 5322 message file"
+implementation_version = "1"
+priority = 400
+entrypoint = "mailarchiver.sources:MessageFileParser"

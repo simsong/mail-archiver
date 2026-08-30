@@ -53,7 +53,14 @@ def test_packaged_v1_schema_creates_current_catalog(tmp_path: Path) -> None:
     try:
         assert catalog.execute("SELECT version FROM schema_info").fetchone() == (SCHEMA_VERSION,)
         tables = {row[0] for row in catalog.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert {"source_volumes", "source_files", "observations", "metadata_defects"} <= tables
+        assert {
+            "source_volumes",
+            "source_files",
+            "source_integrity_checks",
+            "source_integrity_evidence",
+            "observations",
+            "metadata_defects",
+        } <= tables
         indexes = {row[0] for row in catalog.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
         assert {
             "messages_sha256",
@@ -69,10 +76,15 @@ def test_packaged_v1_schema_creates_current_catalog(tmp_path: Path) -> None:
         assert {
             "messages_sender_address_pk",
             "recipients_address_pk",
+            "recipients_message_role_address",
             "source_files_volume_path",
+            "source_files_volume_hierarchy",
+            "source_files_hierarchy_volume",
             "observations_message_pk",
             "observations_raw_sha256",
             "observations_semantic_sha256",
+            "observations_source_file_cursor",
+            "source_integrity_latest",
             "locations_generation_pk",
         } <= indexes
     finally:
@@ -119,9 +131,23 @@ def test_packaged_search_schema_creates_current_disposable_index(tmp_path: Path)
     try:
         assert search.execute("SELECT version FROM schema_info").fetchone() == (SEARCH_SCHEMA_VERSION,)
         tables = {row[0] for row in search.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert {"message_fts", "attachment_fts", "message_metadata", "message_attachments"} <= tables
+        assert {
+            "message_fts",
+            "attachment_fts",
+            "message_metadata",
+            "message_attachments",
+            "address_suggestions",
+            "message_address_suggestions",
+            "address_suggestion_fts",
+        } <= tables
         columns = {row[1] for row in search.execute("PRAGMA table_info(message_metadata)")}
         assert {"message_fts_rowid", "attachment_fts_rowid"} <= columns
+        suggestion_columns = {row[1] for row in search.execute("PRAGMA table_info(address_suggestions)")}
+        mapping_columns = {row[1] for row in search.execute("PRAGMA table_info(message_address_suggestions)")}
+        indexes = {row[0] for row in search.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        assert "last_seen" in suggestion_columns
+        assert "seen_at" in mapping_columns
+        assert "message_address_suggestions_seen" in indexes
     finally:
         search.close()
 
@@ -185,16 +211,28 @@ def test_ingest_and_provenance_queries_use_targeted_indexes(tmp_path: Path) -> N
                 "sqlite_autoindex_source_volumes_1",
             ),
             (
-                "SELECT byte_length, sha256 FROM source_files "
+                "SELECT source_file_pk, byte_length FROM source_files "
                 "WHERE source_volume_pk = ? AND source_path = ?",
                 (1, "mail/inbox.mbox"),
                 "sqlite_autoindex_source_files_1",
+            ),
+            (
+                "SELECT integrity_check_pk FROM source_integrity_checks "
+                "WHERE source_file_pk = ? AND control_id = ? AND completed_at IS NOT NULL "
+                "ORDER BY integrity_check_pk DESC LIMIT 1",
+                (1, "local-file-sha256-v1"),
+                "source_integrity_latest",
             ),
             (
                 "SELECT messages.date_utc FROM observations JOIN messages USING (message_pk) "
                 "WHERE source_file_pk = ? AND source_offset < ? ORDER BY source_offset DESC LIMIT 1",
                 (1, 100),
                 "observations_source_file_offset",
+            ),
+            (
+                "SELECT observation_pk FROM observations WHERE source_file_pk = ? AND source_cursor = ?",
+                (1, "provider-cursor"),
+                "observations_source_file_cursor",
             ),
             (
                 "SELECT message_pk FROM messages WHERE message_id_normalized = ? AND sha256 = ?",
@@ -233,7 +271,8 @@ def test_ingest_and_provenance_queries_use_targeted_indexes(tmp_path: Path) -> N
             ),
         )
         for sql, parameters, expected_index in expectations:
-            assert any(expected_index in step for step in _plan(catalog, sql, parameters))
+            steps = _plan(catalog, sql, parameters)
+            assert any(expected_index in step for step in steps), (sql, steps)
     finally:
         catalog.close()
 
