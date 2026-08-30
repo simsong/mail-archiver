@@ -1,6 +1,6 @@
-# Mail Archiver icon choices
+# Mail Archiver icon
 
-These ten SVG icons are vector artwork with a 1024 by 1024 viewBox, so they
-remain sharp in the Dock, About panel, and high-density screenshots. Choose an
-icon from the native **Icon** menu or pass `--icon-choice 1` through `--icon-choice 10`.
-
+`rainbow-post.svg` is the single application icon. It is vector artwork with a
+1024 by 1024 viewBox, so it remains sharp in the Dock, About panel, and
+high-density screenshots. The matching PNG derivatives are provided at 48,
+64, 128, and 192 square pixels for platform and web integrations.
