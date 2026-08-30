@@ -374,8 +374,12 @@ HTML parts, and exact original MIME source respectively.
 Derived text decoding is centralized in `encoding.py`. It first strictly uses
 the MIME charset, so `ks_c_5601-1987` is handled by Python's EUC-KR codec. On a
 missing, unknown, or invalid declaration it tries a bounded sample with
-`charset-normalizer`, scores strict decodes for printable text and a modest
-CJK signal, and decodes the complete payload with the selected codec. The
+`charset-normalizer`. Detector ordering is retained ahead of universal
+single-byte fallbacks, and strict sample decodes are ranked using printable
+text, CJK signal, and a small CLD2 character-n-gram language score. CLD2 is
+called through the `pycld2` Python binding only after each candidate has been
+decoded to Unicode; it cannot inspect unknown raw bytes. The complete payload
+is then strictly decoded once with the highest-ranked viable candidate. The
 UTF-8 replacement decoder is only the last resort. `ftfy.fix_encoding` then
 repairs recognizable mojibake in the resulting Unicode text; it is not used
 as a byte-level charset detector and does not rewrite HTML entities. The

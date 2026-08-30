@@ -8,6 +8,7 @@ dependencies = [
     "charset-normalizer>=3.4.0",
     "ftfy>=6.3.0",
     "py7zr>=1.0.0",
+    "pycld2>=0.42",
     "pydantic>=2.13.4",
     "pywebview>=6.2",
     "pyyaml>=6.0.2",
