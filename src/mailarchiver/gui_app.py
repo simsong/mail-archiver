@@ -46,6 +46,10 @@ GUI_DIRECTORY = Path(__file__).parents[2] / "gui"
 E2E_DRIVER = Path(__file__).parents[2] / "e2e_tests" / "gui_driver.js"
 DEFAULT_PAGE_SIZE = 100
 APPLICATION_NAME = "Mail Archiver"
+ICON_CHOICES = (
+    "paper-archive", "blue-envelope", "amber-archive", "green-inbox", "violet-thread",
+    "red-seal", "teal-stack", "sunset-mail", "midnight-archive", "rainbow-post",
+)
 
 
 class ApplicationMetadata(BaseModel):
@@ -115,6 +119,7 @@ class GuiApi:
         preferences_file: Path | None = None,
     ) -> None:
         self.archive = archive
+        self.icon_choice = 1
         self.window: Any = None
         self._temporary = tempfile.TemporaryDirectory(prefix="mailarchive-gui-") if temporary_directory is None else None
         self.temporary_directory = Path(self._temporary.name) if self._temporary else temporary_directory
@@ -419,6 +424,13 @@ class GuiApi:
         if self._temporary:
             self._temporary.cleanup()
 
+    def set_icon_choice(self, choice: int) -> bool:
+        if not 1 <= choice <= len(ICON_CHOICES):
+            raise ValueError(f"icon choice must be between 1 and {len(ICON_CHOICES)}")
+        self.icon_choice = choice
+        configure_macos_application(choice)
+        return True
+
     def _archive(self) -> Path:
         if self.archive is None or not _is_archive(self.archive):
             raise ValueError("choose an archive containing archive.sqlite3 and search.sqlite3")
@@ -446,10 +458,17 @@ def application_metadata() -> ApplicationMetadata:
 
 def application_menu(api: GuiApi) -> list[webview.Menu]:
     """Build the native menu entry for the singleton ingest browser."""
-    return [webview.Menu("Windows", [MenuAction("Ingest", api.open_ingest_window)])]
+    icon_actions = [
+        MenuAction(f"{index}: {name.replace('-', ' ').title()}", lambda index=index: api.set_icon_choice(index))
+        for index, name in enumerate(ICON_CHOICES, 1)
+    ]
+    return [
+        webview.Menu("Windows", [MenuAction("Ingest", api.open_ingest_window)]),
+        webview.Menu("Icon", icon_actions),
+    ]
 
 
-def configure_macos_application() -> None:
+def configure_macos_application(choice: int = 1) -> None:
     """Replace the bare Python process identity before pywebview builds Cocoa menus."""
     if sys.platform != "darwin":
         return
@@ -465,7 +484,10 @@ def configure_macos_application() -> None:
     info["CFBundleVersion"] = metadata.version
     info["NSHumanReadableCopyright"] = metadata.copyright
     NSProcessInfo.processInfo().setProcessName_(metadata.name)
-    icon = NSImage.imageWithSystemSymbolName_accessibilityDescription_("archivebox", metadata.name)
+    icon_path = GUI_DIRECTORY / "icons" / f"{ICON_CHOICES[choice - 1]}.svg"
+    icon = NSImage.alloc().initWithContentsOfFile_(str(icon_path)) if icon_path.is_file() else None
+    if icon is None:
+        icon = NSImage.imageWithSystemSymbolName_accessibilityDescription_("archivebox", metadata.name)
     if icon is not None:
         NSApplication.sharedApplication().setApplicationIconImage_(icon)
 
@@ -475,6 +497,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--archive", type=Path, help="directory containing archive.sqlite3 and search.sqlite3")
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--e2e-test", type=Path, metavar="REPORT", help=argparse.SUPPRESS)
+    parser.add_argument("--icon-choice", type=int, choices=range(1, len(ICON_CHOICES) + 1), default=1,
+                        help="macOS application icon choice (1-10)")
     return parser
 
 
@@ -526,7 +550,7 @@ def run_e2e_driver(window: Any, result: list[GuiE2EClientResult]) -> None:
 
 def main() -> int:
     args = build_parser().parse_args()
-    configure_macos_application()
+    configure_macos_application(args.icon_choice)
     archive_value = os.environ.get("MAIL_ARCHIVE_DIR")
     archive = args.archive or (Path(archive_value) if archive_value else None)
     if archive is not None and not _is_archive(archive):

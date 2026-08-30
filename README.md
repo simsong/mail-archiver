@@ -360,9 +360,12 @@ one selects that message immediately. Command-F opens an in-window find bar in
 the message pane; Return or Command-F advances through highlighted matches,
 and Escape closes it. Command-Shift-U opens the raw RFC 5322 source in a new
 window. Command-A in the result list selects visible messages for ZIP drag-out;
-Command-A in the message heading selects only that heading.
-window title identifies the archive and its deduplicated searchable-message
-count. Start it with:
+Command-A in the message heading selects only that heading. The window title
+identifies the archive and its deduplicated searchable-message count. The
+native **Icon** menu offers ten resolution-independent icon choices; the
+current choice is also available at startup with `--icon-choice 1` through
+`--icon-choice 10`. About identifies the application as Mail Archiver version
+0.1.0. Start it with:
 
 ```console
 make gui ARGS="--archive /path/to/mail-archive"

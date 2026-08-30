@@ -214,6 +214,11 @@ If no archive was supplied, choose one with **Choose Archive…**.
 The window title shows the archive path and the total number of deduplicated,
 searchable messages.
 
+The About panel identifies the product as **Mail Archiver**, version **0.1.0**.
+On macOS, the **Icon** menu contains ten high-resolution vector choices for
+the Dock and application icon. The same selection can be made at launch with
+`--icon-choice 1` through `--icon-choice 10`.
+
 The status line at the bottom shows a running ingest, or summarizes the most
 recent run. Click it to open the independent Ingests window. You can also use
 **Windows → Ingest**. The window lists all retained runs and shows the selected
@@ -257,9 +262,11 @@ Useful search forms include:
 | `date:2024-03-15` | message date is this UTC calendar day |
 | `before:2024-01-01` | message is earlier than this date |
 | `after:2024-01-01` | message is later than this date |
+| `mid-535102` | select the exact catalogued message immediately |
 
 All supplied terms must match. Use the sort controls above the result list to
-sort by date, subject, or sender.
+sort by date, subject, or sender. **Load more** appears only when another
+result page exists.
 
 Every result displays a stable `mid-####` Mail ID. Entering an exact ID, such
 as `mid-535102`, selects that message immediately; this is the preferred way
@@ -272,6 +279,11 @@ source in a new window. Command-A while the message heading has focus selects
 only the heading text. Command-A in the result list selects all visible rows;
 when at least two are selected, drag the ZIP control below the list to export
 exact `mid-####.eml` files.
+
+Drag the message icon to Finder to create an exact `mid-####.eml` file on the
+fly. Double-clicking that icon opens the same temporary `.eml` file. Double-
+clicking an attachment continues to open the attachment or its confirmation
+flow; it does not change the message-icon behavior.
 
 The viewer's **Locations** section distinguishes the canonical archive MBOX
 from source discoveries. A suffix such as `:64858852` in older displays means

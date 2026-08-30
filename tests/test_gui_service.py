@@ -30,7 +30,14 @@ from mailarchiver.gui_service import (
     write_attachment,
     write_message,
 )
-from mailarchiver.gui_app import GuiApi, application_menu, application_metadata, configure_macos_application
+from mailarchiver.gui_app import (
+    ICON_CHOICES,
+    GUI_DIRECTORY,
+    GuiApi,
+    application_menu,
+    application_metadata,
+    configure_macos_application,
+)
 from mailarchiver.mailsearch import _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, MailboxTreeNode, mailbox_tree
@@ -160,7 +167,7 @@ def test_gui_application_metadata_names_the_product() -> None:
     metadata = application_metadata()
 
     assert metadata.name == "Mail Archiver"
-    assert metadata.version == "0.0.0"
+    assert metadata.version == "0.1.0"
     assert "Mail Archiver" in metadata.copyright
 
 
@@ -169,9 +176,26 @@ def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:
     api = GuiApi(None, e2e_directory=tmp_path)
     try:
         menus = application_menu(api)
-        assert [menu.title for menu in menus] == ["Windows"]
+        assert [menu.title for menu in menus] == ["Windows", "Icon"]
         assert [item.title for item in menus[0].items] == ["Ingest"]
+        assert len(menus[1].items) == 10
         assert menus[0].items[0].function()
+    finally:
+        api.close()
+
+
+def test_gui_icon_choices_are_selectable_and_have_assets(tmp_path: Path) -> None:
+    """Requirement: ten distinct icon choices are available to the native app."""
+    assert len(ICON_CHOICES) == 10
+    assert all((GUI_DIRECTORY / "icons" / f"{name}.svg").is_file() for name in ICON_CHOICES)
+
+    api = GuiApi(None, e2e_directory=tmp_path)
+    try:
+        menus = application_menu(api)
+        assert [item.title for item in menus[1].items] == [
+            f"{index}: {name.replace('-', ' ').title()}"
+            for index, name in enumerate(ICON_CHOICES, 1)
+        ]
     finally:
         api.close()
 
@@ -187,7 +211,7 @@ def test_gui_applies_application_metadata_to_cocoa() -> None:
 
     assert NSProcessInfo.processInfo().processName() == "Mail Archiver"
     assert info["CFBundleName"] == "Mail Archiver"
-    assert info["CFBundleShortVersionString"] == "0.0.0"
+    assert info["CFBundleShortVersionString"] == "0.1.0"
     assert NSApplication.sharedApplication().applicationIconImage() is not None
 
 

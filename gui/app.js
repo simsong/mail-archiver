@@ -468,6 +468,7 @@ function renderSuggestions(suggestions) {
     button.setAttribute("role", "option");
     button.setAttribute("aria-selected", "false");
     const iconNode = document.createElement("span"); iconNode.className = "suggestion-icon"; iconNode.textContent = icon;
+    iconNode.setAttribute("aria-hidden", "true");
     const labelNode = document.createElement("span"); labelNode.className = "suggestion-label"; labelNode.textContent = label;
     const countNode = document.createElement("span"); countNode.className = "suggestion-count";
     countNode.textContent = count === null ? "" : count.toLocaleString();
