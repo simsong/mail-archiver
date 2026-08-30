@@ -143,26 +143,24 @@ def add_message(box: mailbox.mbox, path: Path, raw: bytes) -> MboxLocation:
         raise DiskFullError(f"disk full while writing {path}") from error
 
 
-def _read_stored_payload(path: Path, location: MboxLocation) -> bytes:
+def _read_stored_record(path: Path, location: MboxLocation) -> tuple[bytes, bytes]:
     with path.open("rb") as source:
         source.seek(location.byte_offset)
         record = source.read(location.byte_length)
     envelope, separator, raw = record.partition(b"\n")
     if not separator or not envelope.startswith(b"From "):
         raise ValueError(f"invalid MBOX location in {path}")
-    return raw
+    return envelope + separator, raw
 
 
 def read_location_candidates(path: Path, location: MboxLocation) -> Iterator[bytes]:
     """Yield stored and alternate original-byte interpretations of one MBOX record.
 
-    For each possible mboxrd ``>From`` interpretation, yield the complete
-    stored payload first. If it ends in a line break, then yield alternatives
-    with one terminal LF or CRLF removed because Python's MBOX writer adds a
-    final line break when the source lacks one. Callers hash each candidate and
-    accept only the one matching the catalogued original-byte SHA-256.
+    Try both payload-only and envelope-plus-payload input, each possible mboxrd
+    ``>From`` interpretation, and one writer-added terminal LF or CRLF. Callers
+    hash each candidate and accept only the one matching the original SHA-256.
     """
-    stored = _read_stored_payload(path, location)
+    envelope, stored = _read_stored_record(path, location)
     lines = stored.splitlines(keepends=True)
     ambiguous = [index for index, line in enumerate(lines) if line.startswith(b">From ")]
     fully_unquoted = (1 << len(ambiguous)) - 1
@@ -170,21 +168,22 @@ def read_location_candidates(path: Path, location: MboxLocation) -> Iterator[byt
     if len(ambiguous) <= MAX_AMBIGUOUS_FROM_LINES:
         masks.extend(range(1, fully_unquoted))
     seen: set[bytes] = set()
-    for mask in masks:
-        candidate = list(lines)
-        for bit, index in enumerate(ambiguous):
-            if mask & (1 << bit):
-                candidate[index] = candidate[index][1:]
-        raw = b"".join(candidate)
-        variants = [raw]
-        if raw.endswith(b"\n"):
-            variants.append(raw[:-1])
-        if raw.endswith(b"\r\n"):
-            variants.append(raw[:-2])
-        for variant in variants:
-            if variant not in seen:
-                seen.add(variant)
-                yield variant
+    for prefix in (b"", envelope):
+        for mask in masks:
+            candidate = list(lines)
+            for bit, index in enumerate(ambiguous):
+                if mask & (1 << bit):
+                    candidate[index] = candidate[index][1:]
+            raw = prefix + b"".join(candidate)
+            variants = [raw]
+            if raw.endswith(b"\n"):
+                variants.append(raw[:-1])
+            if raw.endswith(b"\r\n"):
+                variants.append(raw[:-2])
+            for variant in variants:
+                if variant not in seen:
+                    seen.add(variant)
+                    yield variant
 
 
 def read_location(path: Path, location: MboxLocation) -> bytes:

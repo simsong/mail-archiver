@@ -1,0 +1,168 @@
+From pdf-scan@localhost Mon May 13 13:17:00 1985
+X-Mailarchiver-Derived: printed-email-pdf-v1
+X-Mailarchiver-Transcription-Status: human-reviewed
+X-Mailarchiver-Source-PDF: sipbadmin.pdf
+X-Mailarchiver-Source-PDF-SHA256: 724b9090dd531356c9a565b4579f148f454a0ece1b40075eeb5fcd065ef7e04a
+X-Mailarchiver-Source-Page-Start: 2
+X-Mailarchiver-Source-Page-End: 2
+X-Mailarchiver-Handwritten-Annotations: yes
+X-Mailarchiver-Observed-Message-ID: <8505131717.AA19069@mit-charon>
+Return-Path: <simsong>
+Received: by mit-charon (4.12/4.7)
+	id AA19069; Mon, 13 May 85 13:17:44 edt
+From: simsong (Simson L. Garfinkel)
+Message-ID: <8505131717.AA19069@mit-charon>
+Date: 13 May 1985 1317-EDT (Monday)
+To: nancy, rip, mtc
+Cc: et, cec, simsong
+Subject: Read/Write CDs as possible student storage for Athena?
+
+      Hello. You have recieved this message at the request of cec that I
+let you know what I'm doing this summer, becuase you might be
+potentially interested in the results, if I am successful.
+
+      This summer I will be spending a good deal of time UROPing at the
+new Art and Media Technology center, with the Architecture Machine
+Group. I will be designing a unix-compatiable file-server/file-system
+for use with Write-Once Compact Disks.
+
+      Some of the unique features of the CDs are that they store an
+incredible amount of information (on the order of 1GB) and that once a
+sector on the CD is written, it cannot be altered back to its original
+state. The file system that I am writing exploits these capiabli1ites to
+allow the user to access all previous revisions of his document, access
+files that have already been deleted, and simple perform simple backup
+procedures. In the final system, users will get files from their personal
+CD, modify them, and then the files back to the CD. The directory of the
+CD will be kept on the CD, in addition to the data. Each user will have
+his own CD, which will cost less than $50.
+
+      Using a system such as this, it should be possible for a user to
+save his 100 page thesis to his CD well over a thousand times. If the CD
+ever fills up, it will be trivial to save the most current version of
+the document to a virgin CD and start over again. My estimate is that a
+single CD will last the average MIT student well over his four year stay
+at the Institute.
+
+      I submit that if there was a small write-once CD player next to
+every Project Athena workstation, this would make the ultimate system
+for user file storage. It features unlimited user storage, total
+security, and frees the Athena opperations from doing backups on user
+files. In each cluster there would be two workstations with two CD
+units, to allow users to do their own backups.
+
+      I hope to also write a package which would allow IBM/XTs with
+ethernet boards to act as CD servers.
+
+      I would enjoy discussing the preliminary planning with anybody who
+is interested. I am very eager to hear feedback.
+
+                              Simson L. Garfinkel
+
+From pdf-scan@localhost Fri Mar  8 09:03:00 1985
+Message-ID: <pdf-724b9090dd531356-p3@mailarchiver.invalid>
+X-Mailarchiver-Derived: printed-email-pdf-v1
+X-Mailarchiver-Transcription-Status: human-reviewed
+X-Mailarchiver-Source-PDF: sipbadmin.pdf
+X-Mailarchiver-Source-PDF-SHA256: 724b9090dd531356c9a565b4579f148f454a0ece1b40075eeb5fcd065ef7e04a
+X-Mailarchiver-Source-Page-Start: 3
+X-Mailarchiver-Source-Page-End: 3
+X-Mailarchiver-Handwritten-Annotations: no
+X-Mailarchiver-Observed-Headers-Incomplete: yes
+Date: 8 Mar 1985 O903-EST (Friday)
+To: Bender@multics
+bcc: urop
+Subject: Jupiter 7 Plus and phone calls to California
+
+          Hi.
+
+          I spoke with the Jupiter people. Apparently, there are 6 handshake
+lines in the Jupiter parallel interface -- it really is designed for
+DMA, not for "standard" centronix-type parallel I/O. However, Jupiter
+makes a board which plugs into the Jupiter and gives it a standard
+centronix parallel port. Then we could just plug the cabel form the IBM
+into the Jupiter, and the data transfer rate would be much higher. The
+catch is that the board costs $1500.
+
+          I explained the the engineer the kind of problems I've been having
+and we decided that what might be happening is this: There might be a
+byte being lost someplace, and the Jupiter is then interperting the
+following command arguments as actual commands, (the problem with inband
+control...) It's given me some ideas where to look, but for now, atleast
+the setup works from nick.
+
+          Fonts will hopefully be working by Tuesday night.
+
+................................................................simson
+
+From pdf-scan@localhost Fri Mar 22 14:32:51 1985
+X-Mailarchiver-Derived: printed-email-pdf-v1
+X-Mailarchiver-Transcription-Status: human-reviewed
+X-Mailarchiver-Source-PDF: sipbadmin.pdf
+X-Mailarchiver-Source-PDF-SHA256: 724b9090dd531356c9a565b4579f148f454a0ece1b40075eeb5fcd065ef7e04a
+X-Mailarchiver-Source-Page-Start: 4
+X-Mailarchiver-Source-Page-End: 4
+X-Mailarchiver-Handwritten-Annotations: no
+X-Mailarchiver-Observed-Message-ID: <8503221932.AA28038@mit-louiswu>
+Return-Path: <simsong@mit-louiswu>
+Received: from mit-louiswu (mit-louiswu.ARPA) by mit-charon (4.12/4.7)
+	id AA21716; Fri, 22 Mar 85 14:33:37 est
+Received: by mit-louiswu (4.12/4.7)
+	id AA28038; Fri, 22 Mar 85 14:32:51 est
+Date: Fri, 22 Mar 85 14:32:51 est
+From: simsong@mit-louiswu (Simson L Garfinkel)
+To: Bender@multics
+Subject: Current Status of my UROP
+Cc: simsong@mit-louiswu
+
+I should have an extensible Lisp-like interperter to translate from
+Amy's code into Magic 6 commands working on the Tuesday after vacation.
+
+If there are problems with this, I can take an IBM disk home with me
+and work at it there, as we have 2 PC's at home, and the interperter does
+not depend on the Jupiter or Magic 6 connections.
+
+Eventually, Amy will be able to type simple commands like this:
+
+                    (clear)
+                    (zap)
+                    (rect3 100 200 300 400 5 2)
+
+          And they will appear on Magic 6 like this
+
+                    call plzt$zap
+                    call plzt$zap
+                    call plzt$rect3 -fb 100 -fb 200 -fb 300 -fb 400 -fb 5 -fb 2
+
+I'm leaving town on Saturday but will check my mail sometime during the
+week.
+
+................................................................simson
+
+From pdf-scan@localhost Thu Apr  4 07:43:48 1985
+Message-ID: <pdf-724b9090dd531356-p5@mailarchiver.invalid>
+X-Mailarchiver-Derived: printed-email-pdf-v1
+X-Mailarchiver-Transcription-Status: human-reviewed
+X-Mailarchiver-Source-PDF: sipbadmin.pdf
+X-Mailarchiver-Source-PDF-SHA256: 724b9090dd531356c9a565b4579f148f454a0ece1b40075eeb5fcd065ef7e04a
+X-Mailarchiver-Source-Page-Start: 5
+X-Mailarchiver-Source-Page-End: 5
+X-Mailarchiver-Handwritten-Annotations: no
+X-Mailarchiver-Observed-Message-ID: <8504041243.AA23468@mit-charon>
+Return-Path: <simsong>
+Received: by mit-charon (4.12/4.7)
+	id AA23468; Thu, 4 Apr 85 07:43:48 est
+Date: Thu, 4 Apr 85 07:43:48 est
+From: simsong (Simson L. Garfinkel)
+To: Bender@multics
+Subject: Is 2:00 today ok?
+Cc: simsong
+
+I have a class at 2:00, but the teacher is teaching how to program
+"General Register Machines." I can skip this class. I'll stop by arcmac
+at 2:00 or so. If there's a problem with this time, I'll leave and come
+back later, around 5:50. Sorry, but I'm not really free other times today.
+
+If we can't get together today, how about Friday afternoon?
+
+---Simson

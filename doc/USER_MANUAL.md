@@ -148,6 +148,34 @@ currently reserved names rather than working adapters. See `doc/PLUGINS.md`.
 
 Do not edit files under `data/mbox/` while ingest is running.
 
+## Extract printed email from a standalone PDF
+
+This workflow is for a PDF that is itself the surviving source document after
+email was printed and scanned. It is not for a PDF attachment inside an email.
+
+The first implementation produces a standard, derived MBOX for human review:
+
+```console
+make extract-pdf-mail ARGS='tests/data/sipbadmin.pdf --output /tmp/sipbadmin.mbox --handwritten-page 2'
+```
+
+The command requires Poppler `pdftotext`. It reads and hashes the PDF without
+changing it, classifies every page, extracts at most one printed message from
+each qualifying page, refuses to overwrite the output, and reports non-message
+pages. Repeat `--handwritten-page PAGE` for pages whose useful handwritten
+annotations should be recorded. Their text is not extracted or indexed.
+
+Each output record is labeled `machine-unreviewed` and records the source PDF
+SHA-256, page range, extraction and segmentation policy, and handwriting flag.
+After comparing the generated MBOX to the PDF, a human reviewer may correct the
+derived text and change the status to `human-reviewed`. The reviewed MBOX is
+still a derived interpretation; it is not original RFC 5322 source bytes.
+
+This focused command does not yet copy PDFs into `data/pdf/`, route generated
+records into `data/pdf-mbox/`, add them to search, suppress exact duplicates,
+or connect the viewer to the source page. Those are the next archive-integration
+steps.
+
 ## Verify the archive
 
 Verify the archive after ingest and after copying it to new storage:
