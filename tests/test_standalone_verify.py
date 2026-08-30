@@ -33,8 +33,8 @@ def run_verifier(script: Path, archive: Path) -> subprocess.CompletedProcess[str
     )
 
 
-def make_integrity_archive(tmp_path: Path) -> tuple[Path, Path, bytes]:
-    raw = (
+def make_integrity_archive(tmp_path: Path, raw: bytes | None = None) -> tuple[Path, Path, bytes]:
+    raw = raw if raw is not None else (
         b"Message-ID: <verify@example>\nFrom: sender@example\nTo: recipient@example\n"
         b"Delivered-To: mailbox@example\nSubject: integrity\nDate: Thu, 1 Feb 2024 12:00:00 +0000\n"
         b"Status: RO\n\nPreserve these bytes.\n"
@@ -68,6 +68,34 @@ def make_integrity_archive(tmp_path: Path) -> tuple[Path, Path, bytes]:
     catalog.commit()
     catalog.close()
     return path, integrity_path(tmp_path, path.name), raw
+
+
+def test_message_without_terminal_newline_retains_original_identity(tmp_path: Path) -> None:
+    """Requirement: an MBOX separator newline is not part of the original message."""
+    raw = b"Message-ID: <no-newline@example>\nFrom: sender@example\nSubject: exact\n\nbody"
+    _path, _integrity, preserved = make_integrity_archive(tmp_path, raw)
+    script = install_archive_verifier(tmp_path)
+
+    verified = run_verifier(script, tmp_path)
+
+    assert preserved == raw
+    assert verified.returncode == 0, verified.stderr
+
+
+def test_folded_message_id_does_not_put_bare_lf_in_mailbag_csv(tmp_path: Path) -> None:
+    """Requirement: Mailbag CSV uses CRLF records and single-line metadata fields."""
+    raw = (
+        b"Message-ID: <folded@example>\n"
+        b" (added by relay.example)\nFrom: sender@example\nSubject: folded id\n\nbody\n"
+    )
+    make_integrity_archive(tmp_path, raw)
+    csv_bytes = (tmp_path / "mailbag.csv").read_bytes()
+    script = install_archive_verifier(tmp_path)
+
+    assert b"\n (added by" not in csv_bytes
+    assert b"<folded@example> (added by relay.example)" in csv_bytes
+    assert b"\n" not in csv_bytes.replace(b"\r\n", b"")
+    assert run_verifier(script, tmp_path).returncode == 0
 
 
 def test_standalone_verifier_checks_current_file_and_message_hashes(tmp_path: Path) -> None:

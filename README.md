@@ -66,6 +66,12 @@ commercial compliance products. [Project direction](doc/project_direction.md)
 turns those findings into product principles, reuse decisions, non-goals,
 acceptance criteria, and a phased roadmap.
 
+Public-corpus validation can run either locally or on one ephemeral EC2 worker
+per dataset. See [doc/REGRESSION.md](doc/REGRESSION.md) for the longitudinal
+comparison and baseline policy, and [validation/README.md](validation/README.md)
+for configured datasets, Make targets, SAM deployment parameters, and result
+locations.
+
 ## Install
 
 Install [uv](https://docs.astral.sh/uv/) and ClamAV, configure the ClamAV

@@ -1,0 +1,50 @@
+schema_version = 1
+id = "spamassassin"
+title = "SpamAssassin Public Corpus"
+homepage = "https://spamassassin.apache.org/old/publiccorpus/"
+expected_messages = 6046
+max_unpacked_bytes = 5368709120
+
+[preprocess]
+kind = "messages"
+include = ["*", "**/*"]
+exclude = ["**/cmds", "**/README*"]
+
+[aws]
+instance_type = "m7i.large"
+volume_size_gib = 30
+
+[[sources]]
+kind = "http"
+url = "https://spamassassin.apache.org/old/publiccorpus/20030228_easy_ham.tar.bz2"
+filename = "20030228_easy_ham.tar.bz2"
+archive = "tar"
+sha256 = "2b7b65904bcfcc31d2b5f51946f2d261370b257402cbbd62930b46ab83367438"
+
+[[sources]]
+kind = "http"
+url = "https://spamassassin.apache.org/old/publiccorpus/20030228_easy_ham_2.tar.bz2"
+filename = "20030228_easy_ham_2.tar.bz2"
+archive = "tar"
+sha256 = "b4bd3dc5ae5b40f38e99a0e41ad7d16b428b56e818e3a6ffa07330d62004dd38"
+
+[[sources]]
+kind = "http"
+url = "https://spamassassin.apache.org/old/publiccorpus/20030228_hard_ham.tar.bz2"
+filename = "20030228_hard_ham.tar.bz2"
+archive = "tar"
+sha256 = "ce2ce67880643dbde65ea7f85bffbfe4417349c4bd80b6b0de56262ae6b0a9c9"
+
+[[sources]]
+kind = "http"
+url = "https://spamassassin.apache.org/old/publiccorpus/20030228_spam.tar.bz2"
+filename = "20030228_spam.tar.bz2"
+archive = "tar"
+sha256 = "c08debc32413804949a866be45ef78195cec2cbafd1da744ed76cdb860589743"
+
+[[sources]]
+kind = "http"
+url = "https://spamassassin.apache.org/old/publiccorpus/20050311_spam_2.tar.bz2"
+filename = "20050311_spam_2.tar.bz2"
+archive = "tar"
+sha256 = "44280a0e28bf7645b2279e8e42659271ad82c6f40bf8d364dbda7f1df344a765"

@@ -5,6 +5,7 @@ description = "Personal MBOX archive normalizer"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",
+    "py7zr>=1.0.0",
     "pydantic>=2.13.4",
     "pywebview>=6.2",
     "pyyaml>=6.0.2",
@@ -17,6 +18,7 @@ mailsearch = "mailarchiver.mailsearch:main"
 mailsearch-gui = "mailarchiver.gui_app:main"
 summarize = "mailarchiver.aisummarize:main"
 verify-mail-archive = "mailarchiver.standalone_verify:main"
+mailarchiver-validation = "mailarchiver.validation:main"
 
 [build-system]
 requires = ["setuptools>=69"]

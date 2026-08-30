@@ -1,0 +1,19 @@
+version = 0.1
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name = "mailarchiver-validation"
+resolve_s3 = true
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+parameter_overrides = [
+  "OutputBucketName=REPLACE_WITH_EXISTING_BUCKET",
+  "OutputPrefix=mailarchiver-validation",
+  "VpcId=REPLACE_WITH_VPC_ID",
+  "SubnetId=REPLACE_WITH_SUBNET_ID",
+  "RepositoryUrl=https://github.com/simsong/mail-archiver.git",
+  "RepositoryRef=REPLACE_WITH_PUBLISHED_BRANCH_OR_COMMIT",
+]

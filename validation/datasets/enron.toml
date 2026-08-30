@@ -1,0 +1,21 @@
+schema_version = 1
+id = "enron"
+title = "Enron Email Dataset"
+homepage = "https://www.cs.cmu.edu/~enron/"
+expected_messages = 517401
+max_unpacked_bytes = 21474836480
+
+[preprocess]
+kind = "messages"
+include = ["*", "**/*"]
+exclude = ["**/.DS_Store", "**/README*"]
+
+[aws]
+instance_type = "m7i.2xlarge"
+volume_size_gib = 150
+
+[[sources]]
+kind = "http"
+url = "https://www.cs.cmu.edu/~enron/enron_mail_20150507.tar.gz"
+filename = "enron_mail_20150507.tar.gz"
+archive = "tar"

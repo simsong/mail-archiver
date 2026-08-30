@@ -531,6 +531,37 @@ the command fails before reading or writing an archive.
   observation records that fact and the responsible tool/version; reconstructed
   output is never represented as byte-identical to a source RFC 5322 record.
 
+## Public validation datasets
+
+* Validation definitions are strict, versioned TOML files, one per anonymously
+  downloadable public corpus. Each records its source URL, preprocessing mode,
+  extraction bound, and EC2 sizing. Account-gated, institution-only, and
+  unavailable bulk exports are excluded. Fixed cross-era samples are identified
+  as samples rather than represented as complete list archives.
+* All validation work is derived under the repository-local ignored `data/`
+  directory. Downloads are immutable inputs: acquisition records their byte
+  length and SHA-256 in a source manifest, reuses only a hash-checked cached
+  file when an expected digest is configured, and never changes an upstream
+  mailbox or downloaded artifact.
+* Tar, ZIP, gzip, and 7z preprocessing rejects path traversal, links and special
+  archive members, and expansion beyond the dataset's configured bound. Normal
+  RFC 5322 and MBOX inputs are hard-linked or copied byte-for-byte. A Unix MBOX
+  envelope on an individual-message corpus is removed with the MBOX parser;
+  SF-LOVERS Babyl records are likewise an explicitly derived conversion. The
+  original downloaded files and their source manifest remain unchanged.
+* A local validation run acquires and preprocesses a dataset, invokes the normal
+  ingest CLI with on-demand ClamAV, runs the installed standard-library verifier,
+  and creates a ZIP of the verified Mailbag plus a typed run report. A run over
+  all datasets is sequential so local resource use stays bounded.
+* The AWS mode deploys a SAM control plane without creating the result bucket.
+  The existing long-lived S3 bucket is a deployment parameter. Starting all
+  datasets launches exactly one independent EC2 worker per dataset. Workers have
+  encrypted delete-on-termination storage, required IMDSv2, no inbound security
+  group rules, and write-only access beneath the configured bucket prefix.
+  Each worker downloads its own corpus, runs the same Makefile workflow, uploads
+  status and logs plus any report and Mailbag ZIP, and terminates on shutdown,
+  including after failure.
+
 ## Redaction and research derivatives
 
 * Redaction never edits canonical MBOX files. A redacted export identifies its
@@ -569,6 +600,12 @@ the command fails before reading or writing an archive.
   and tag manifests, required Mailbag structure, and every declared
   complete-MBOX, raw-message, and semantic-message digest without consulting
   SQLite. It exits nonzero after reporting any mismatch.
+* The MBOX container's required separator newline is not part of a source
+  message that lacked a terminal newline. Catalog retrieval and standalone
+  verification select the candidate matching the recorded source SHA-256.
+* Mailbag CSV uses CRLF record endings. Folded source headers used as CSV
+  metadata are unfolded to single-line values; canonical message bytes are
+  unchanged.
 * A future integrated `verify` command is strictly read-only: it reparses every canonical MBOX,
   checks integrity files, offsets, and database rows, and reports duplicate-policy
   violations.

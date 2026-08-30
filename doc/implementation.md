@@ -162,6 +162,12 @@ prints the partial-run archive report before returning 130.  An `ENOSPC` append 
 possible and reports a controlled nonzero stop.  Acceptance coverage includes
 the checked-in MBOX/Babyl/EMLX corpus, source checkpoints, append resumption,
 malformed metadata, publication recovery, and disposable-index failure.
+Hash-verified MBOX retrieval considers both the stored payload and alternatives
+without one writer-added terminal newline, preserving a non-empty source
+message that lacked a terminal newline. Candidate interpretations are
+deduplicated before hashing. Mailbag CSV metadata unfolds folded `Message-ID`
+values before RFC 4180 writing so a source header cannot introduce bare LF into
+an otherwise CRLF tag file.
 After metadata discovery, `MailContainer` objects stream from the temporary
 snapshot into an ingest pool bounded by `--workers`; discovery does not pre-hash
 or retain file contents. Snapshot ordering interleaves concurrency keys, and
@@ -745,6 +751,45 @@ UIDVALIDITY plus UID so server reset/reuse is detectable.
 The `--days N` option uses `newer_than:Nd` on `messages.list`; `--after`
 accepts an epoch for timezone-precise collection.  Google Takeout is an MBOX directory input.  The program does not automate
 personal Takeout creation or download.
+
+## Public corpus validation pipeline
+
+`mailarchiver-validation` loads strict Pydantic models from
+`validation/datasets/*.toml`. The nine definitions cover Enron, SF-LOVERS,
+SpamAssassin, bounded GNU emacs-devel, IETF-822, Apache httpd-dev, and GCC list
+samples, a pinned lore.kernel.org public-inbox repository, and the historical
+`comp.mail.mime` Usenet group. TREC07 and W3C mailbox exports are not configured
+because their current official bulk routes are unavailable or authenticated;
+the pipeline does not silently substitute account-gated mirrors.
+
+Acquisition streams HTTP responses to temporary files and atomically installs
+them after optional expected-digest validation. The source manifest records the
+observed SHA-256 for every HTTP artifact and the resolved commit for Git. Safe
+extractors reject traversal, links, special nodes, and oversized output. Normal
+message/MBOX preparation uses hard links when possible and copies otherwise;
+public-inbox Git blobs are streamed through one `git cat-file --batch` process.
+Individual-message files with Unix MBOX envelope lines are parsed into derived
+RFC 5322 files instead of being mistaken for multi-message mailboxes.
+Babyl-to-RFC conversion is a derived SF-LOVERS preprocessing step, with every
+downloaded source retained separately.
+
+`make validation-run` invokes the ordinary ingest CLI and its private on-demand
+ClamAV process, executes the verifier installed inside the resulting Mailbag,
+then writes `data/results/<dataset>.mailbag.zip` and a hash-bearing JSON run
+report. `make validation-run-all` performs this workflow sequentially. Downloads,
+extractions, prepared inputs, Mailbags, reports, and ZIP files all remain beneath
+the ignored repository-local `data/` tree.
+
+`validation/template.yaml` is a SAM control plane, not an EC2 emulation. It
+creates a Lambda launcher, egress-only worker security group, instance profile,
+and least-privilege result-upload policy; the result bucket is an external stack
+parameter. `make validation-aws-start-all` invokes the launcher once per enabled
+configuration. Each invocation starts one Ubuntu EC2 instance with encrypted
+delete-on-termination EBS, required IMDSv2, an on-demand ClamAV configuration,
+and `InstanceInitiatedShutdownBehavior=terminate`. User data checks out the
+configured public repository ref, runs the same Make target, uploads status and
+logs plus any report and ZIP under a run-specific S3 prefix, and shuts down from
+an EXIT trap. There is no SSH ingress or persistent worker fleet.
 
 ## Planned source adapters and derivatives
 
