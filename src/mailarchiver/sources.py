@@ -11,9 +11,13 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator
 from email import policy
 from email.parser import BytesParser
+from fnmatch import fnmatchcase
+from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+from yaml import safe_load
 
 from .plugin_api import (
     FileProbe,
@@ -41,10 +45,49 @@ MBCP_ENVELOPE_SENDER = b"mbcp@s.eecs.harvard.edu"
 MBCP_HEADERS = {"status", "x-mbcp-flags", "x-uid"}
 XXX_ENVELOPE_SENDER = b"XXX"
 XXX_WRAPPER_HEADERS = {"status", "x-keywords", "x-status"}
-SILENT_METADATA_FILENAMES = frozenset({"Info.plist", "table_of_contents"})
-SILENT_METADATA_SUFFIXES = frozenset({".toc"})
+MMDF_DELIMITER = b"\x01\x01\x01\x01"
+MBOX_ENVELOPE = re.compile(
+    br"From \S+ (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) "
+    br"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    br"[ 0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] (?:19|20)[0-9][0-9]"
+)
+RFC_HEADER = re.compile(br"^[!-9;-~]+:[ \t]*")
 HEADER_SEPARATOR = re.compile(br"\r?\n\r?\n")
 MBOXRD_QUOTED_FROM = re.compile(br"(?m)^>(?=>*From )")
+
+
+class FileProbeRules(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    bytes: int = Field(gt=0)
+
+
+class MboxRules(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    preamble_scan_lines: int = Field(gt=0)
+
+
+class IgnoreRules(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    case_sensitive: bool
+    globs: tuple[str, ...] = Field(min_length=1)
+
+
+class LocalSourceRules(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[1]
+    ignore: IgnoreRules
+    file_probe: FileProbeRules
+    mbox: MboxRules
+
+
+@lru_cache(maxsize=1)
+def local_source_rules() -> LocalSourceRules:
+    with Path(__file__).with_name("local_source_rules.yaml").open(encoding="utf-8") as source:
+        return LocalSourceRules.model_validate(safe_load(source))
 
 
 class SourceMessage(BaseModel):
@@ -164,8 +207,31 @@ def emlx_bytes(path: Path) -> bytes:
 
 
 def is_mbox(path: Path) -> bool:
+    rules = local_source_rules()
     with path.open("rb") as source:
-        return source.read(5) == b"From "
+        prefix = source.read(rules.file_probe.bytes)
+    if prefix.startswith(b"From "):
+        return True
+    lines = prefix.splitlines(keepends=True)
+    for index, line in enumerate(lines[: rules.mbox.preamble_scan_lines]):
+        if not MBOX_ENVELOPE.fullmatch(line.rstrip(b"\r\n")):
+            continue
+        if _has_rfc_header_block(lines[index + 1 :]):
+            return True
+    return False
+
+
+def _has_rfc_header_block(lines: list[bytes]) -> bool:
+    headers = 0
+    for line in lines:
+        header = line.rstrip(b"\r\n")
+        if not header:
+            return headers > 0
+        if RFC_HEADER.match(header):
+            headers += 1
+        elif not header.startswith((b" ", b"\t")) or not headers:
+            return False
+    return headers > 0
 
 
 def is_babyl(path: Path) -> bool:
@@ -228,6 +294,8 @@ class MboxFileParser(FileParser):
         return is_mbox(path)
 
     def messages(self, source: SourceFile, start_offset: int = 0) -> Iterator[SourceMessage]:
+        with source.path.open("rb") as mailbox_file:
+            mmdf_framed = mailbox_file.readline().rstrip(b"\r\n") == MMDF_DELIMITER
         box = mailbox.mbox(source.path, factory=None, create=False)
         try:
             for key in box.iterkeys():
@@ -238,6 +306,8 @@ class MboxFileParser(FileParser):
                 envelope, _, _ = envelope_record.partition(b"\n")
                 envelope_sender = _mbox_envelope_sender(envelope.rstrip(b"\r"))
                 raw = box.get_bytes(key, from_=False)
+                if mmdf_framed:
+                    raw = _without_mmdf_delimiter(raw)
                 exclusion = _mbcp_exclusion(envelope_sender, raw)
                 if envelope_sender == XXX_ENVELOPE_SENDER:
                     raw = _unwrap_xxx_record(raw)
@@ -319,10 +389,7 @@ class LocalSourcePlugin(SourcePlugin):
                     detail="not a regular file",
                 )
                 continue
-            if (
-                path.name in SILENT_METADATA_FILENAMES
-                or path.suffix.lower() in SILENT_METADATA_SUFFIXES
-            ):
+            if stat.st_size == 0 or _is_silent_metadata(path):
                 continue
             parser = self._recognize_file(path, stat.st_size)
             if parser is None:
@@ -396,7 +463,11 @@ class LocalSourcePlugin(SourcePlugin):
 
     def _recognize_file(self, path: Path, byte_length: int):
         with path.open("rb") as source:
-            probe = FileProbe(path=path, byte_length=byte_length, prefix=source.read(4096))
+            probe = FileProbe(
+                path=path,
+                byte_length=byte_length,
+                prefix=source.read(local_source_rules().file_probe.bytes),
+            )
         matches = []
         for plugin in self.file_plugins:
             implementation = plugin.implementation
@@ -415,6 +486,30 @@ class LocalSourcePlugin(SourcePlugin):
             kinds = ", ".join(plugin.manifest.kind for plugin in matches)
             raise ValueError(f"ambiguous file parser plug-ins for {path}: {kinds}")
         return None if not matches else matches[0]
+
+
+def _is_silent_metadata(path: Path) -> bool:
+    rules = local_source_rules().ignore
+    candidate = path.as_posix()
+    patterns = rules.globs
+    if not rules.case_sensitive:
+        candidate = candidate.casefold()
+        patterns = tuple(pattern.casefold() for pattern in patterns)
+    return any(fnmatchcase(candidate, pattern) for pattern in patterns)
+
+
+def _without_mmdf_delimiter(raw: bytes) -> bytes:
+    found = False
+    while True:
+        for suffix in (MMDF_DELIMITER + b"\r\n", MMDF_DELIMITER + b"\n", MMDF_DELIMITER):
+            if raw.endswith(suffix):
+                raw = raw[: -len(suffix)]
+                found = True
+                break
+        else:
+            if found:
+                return raw
+            raise ValueError("MMDF-framed MBOX record has no closing delimiter")
 
 
 def _local_reference(source: SourceFile) -> SourceReference:

@@ -7,6 +7,7 @@ dependencies = [
     "beautifulsoup4>=4.15.0",
     "pydantic>=2.13.4",
     "pywebview>=6.2",
+    "pyyaml>=6.0.2",
     "tabulate>=0.9.0",
 ]
 
@@ -26,6 +27,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 mailarchiver = [
+    "*.yaml",
     "*.swift",
     "sql/*.sql",
     "plugins/sources/*/plugin.toml",

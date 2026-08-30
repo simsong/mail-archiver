@@ -162,7 +162,12 @@ existing evidence and must not modify source mail or the canonical archive.
   available byte estimates without hashing or retaining message contents. It
   stores typed container metadata in a temporary SQLite work snapshot, prints
   every unrecognized regular file once with its path and reason, and finishes
-  before any message is published. Duplicate scoped container identities are
+  before any message is published. Zero-length files and paths matching the
+  commented, case-insensitive globs in packaged `local_source_rules.yaml` are
+  silently omitted from discovery and the unrecognized-file count. The same
+  versioned YAML stores local file-probe and MBOX preamble limits and is
+  strictly validated before discovery.
+  Duplicate scoped container identities are
   scheduled once; conflicting definitions fail. Sources declaring stable
   inventory are verified by a second preflight discovery; live sources are
   discovered once. Worker execution is bounded by the configured count: each
@@ -468,6 +473,12 @@ the command fails before reading or writing an archive.
 
 * Recursive local-directory ingest recognizes MBOX streams, Apple Mail MBOX
   packages, Maildir, individual RFC 5322 files, and Apple `.emlx` files.
+  MBOX may have a terminal-capture or MMDF control preamble when its first
+  classic envelope appears within the first 16 physical lines, has a valid
+  ctime-style timestamp, and is followed by an RFC header block. MMDF control
+  delimiters frame source records and are excluded from the RFC 5322 bytes.
+  The probe byte and line limits come from `local_source_rules.yaml`, rather
+  than Python constants.
   A Maildir is recognized structurally: a message must be directly below
   `cur` or `new`, and their parent must contain `cur`, `new`, and `tmp`
   directories. The Maildir root is the logical mailbox; `cur`, `new`, and the
