@@ -371,6 +371,19 @@ parser while locally suppressing only Beautiful Soup's XML-as-HTML warning.
 `--headers`, `--html`, and `--mime` select full headers, decoded
 HTML parts, and exact original MIME source respectively.
 
+Derived text decoding is centralized in `encoding.py`. It first strictly uses
+the MIME charset, so `ks_c_5601-1987` is handled by Python's EUC-KR codec. On a
+missing, unknown, or invalid declaration it tries a bounded sample with
+`charset-normalizer`, scores strict decodes for printable text and a modest
+CJK signal, and decodes the complete payload with the selected codec. The
+UTF-8 replacement decoder is only the last resort. `ftfy.fix_encoding` then
+repairs recognizable mojibake in the resulting Unicode text; it is not used
+as a byte-level charset detector and does not rewrite HTML entities. The
+decoder returns encoding and recovery provenance for callers, while current
+search/display callers use its value. There is intentionally no user checkbox:
+these are loss-avoiding derived-text defaults, and the exact MIME view remains
+available when the user needs the source representation.
+
 The `gui/` prototype uses pywebview's Cocoa/WKWebView backend on macOS.  Its
 Python API delegates query parsing, SQLite reads, and direct MBOX retrieval to
 the same typed functions used by `mailsearch`.  Search pages request 101 rows

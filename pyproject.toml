@@ -5,6 +5,8 @@ description = "Personal MBOX archive normalizer"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",
+    "charset-normalizer>=3.4.0",
+    "ftfy>=6.3.0",
     "py7zr>=1.0.0",
     "pydantic>=2.13.4",
     "pywebview>=6.2",

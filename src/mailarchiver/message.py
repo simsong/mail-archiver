@@ -14,6 +14,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
+from ftfy import fix_encoding
 from pydantic import BaseModel, Field
 
 
@@ -125,7 +126,12 @@ def decode_header_value(value: str) -> DecodedHeaderValue:
         except (LookupError, UnicodeError) as error:
             decoded.append(part.decode("utf-8", "replace"))
             defect = f"{type(error).__name__}: {error}"
-    return DecodedHeaderValue(value="".join(decoded), defect=defect)
+    value = "".join(decoded)
+    try:
+        value = fix_encoding(value)
+    except (UnicodeError, ValueError):
+        pass
+    return DecodedHeaderValue(value=value, defect=defect)
 
 
 def decoded_header(value: str) -> str:

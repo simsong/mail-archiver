@@ -14,6 +14,7 @@ from email.utils import getaddresses
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from pydantic import BaseModel
 
+from .encoding import decode_text
 from .message import decoded_header
 
 SEARCH_CATEGORIES = ("Archive", "Sent")
@@ -35,10 +36,7 @@ class SuggestedAddress(BaseModel):
 
 def decoded_part(part: Message) -> str:
     payload = part.get_payload(decode=True) or b""
-    try:
-        return payload.decode(part.get_content_charset() or "utf-8", "replace")
-    except LookupError:
-        return payload.decode("utf-8", "replace")
+    return decode_text(payload, part.get_content_charset()).value
 
 
 def is_attachment(part: Message) -> bool:
