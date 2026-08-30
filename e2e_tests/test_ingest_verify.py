@@ -201,7 +201,7 @@ def test_search_ui_end_to_end_without_a_window(
     exports = {path.name for path in export_directory.iterdir()}
     assert {"saved-tiny.png", "saved-review.command", "filter-sets.json"} <= exports
     assert any(name.startswith("saved-Rich UI message-") and name.endswith(".eml") for name in exports)
-    assert any(name.startswith("Rich UI message-") and name.endswith(".eml") for name in exports)
+    assert any(name.startswith("mid-") and name.endswith(".eml") for name in exports)
 
 
 def test_ingest_history_ui_end_to_end(built_archive: BuiltArchive, page: Page) -> None:
@@ -256,4 +256,4 @@ def test_native_search_ui_end_to_end(built_archive: BuiltArchive, tmp_path: Path
     assert "filter-sets.json" in result.exports
     assert not (built_archive.archive / "filter-sets.json").exists()
     assert any(name.startswith("saved-Rich UI message-") and name.endswith(".eml") for name in result.exports)
-    assert any(name.startswith("Rich UI message-") and name.endswith(".eml") for name in result.exports)
+    assert any(name.startswith("mid-") and name.endswith(".eml") for name in result.exports)
