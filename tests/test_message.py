@@ -233,6 +233,46 @@ def test_configured_earliest_year_is_applied_after_utc_normalization() -> None:
     assert (rejected.date_source, rejected.date_utc) == ("path-year", "1983-01-01T00:00:00+00:00")
 
 
+def test_epoch_like_date_uses_latest_embedded_quoted_email_date() -> None:
+    """Requirement: absent Received evidence permits a documented quoted-date fallback."""
+    raw = b"\n".join(
+        [
+            b"Message-ID: <quoted-date@example>",
+            b"From: sender@example.net",
+            b"Date: Thu, 1 Jan 1970 15:05:09 -0500",
+            b"",
+            b"Reply text.",
+            b"",
+            b"> On Wednesday, January 1, 2003, at 07:21 AM, Debby Russell wrote:",
+            b"> Date: Wed, 1 Jan 2003 07:21:00 -0500",
+        ]
+    )
+
+    parsed = parse_message(raw, Path("/input/2003/message.eml"), None)
+
+    assert parsed.date_source == "body-embedded"
+    assert parsed.date_utc == "2003-01-01T12:21:00+00:00"
+    assert any(defect.field == "Date" and "message body" in defect.detail for defect in parsed.defects)
+    assert parsed.sha256 == hashlib.sha256(raw).hexdigest()
+
+
+def test_embedded_body_date_does_not_override_credible_header_date() -> None:
+    """Requirement: body dates are a fallback, never a replacement for a credible Date header."""
+    raw = b"\n".join(
+        [
+            b"Message-ID: <credible-date@example>",
+            b"From: sender@example.net",
+            b"Date: Thu, 1 Feb 2024 12:00:00 +0000",
+            b"",
+            b"> On Wednesday, January 1, 2003, at 07:21 AM, Debby Russell wrote:",
+        ]
+    )
+
+    parsed = parse_message(raw, Path("/input/2024/message.eml"), None)
+
+    assert (parsed.date_source, parsed.date_utc) == ("date", "2024-02-01T12:00:00+00:00")
+
+
 def test_sender_header_falls_back_when_from_is_missing() -> None:
     """Requirement: a real Sender header supplies a missing From identity."""
     raw = b"Sender: fallback@example.net\nDate: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"
