@@ -7,6 +7,8 @@ Mailbag 1.0 package, hashes every file and message for long-term integrity,
 records where each message came from, and builds a local search index that can
 always be discarded and rebuilt.
 
+_NOTE --- THIS PROGRAM IS UNDER ACTIVE DEVELOPMENT. DO NOT USE OPERATIONALLY UNTIL VERSION 1.0 SHIPS_
+
 ## Goals
 
 `mailarchiver` is preservation infrastructure for personal and research email
