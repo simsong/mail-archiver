@@ -398,6 +398,23 @@ preservation object.
 It excludes `INFECTED` and `MALFORMED` quarantine categories even when
 attachment indexing is requested. `refresh-index` applies the same exclusion
 when rebuilding from canonical MBOX files.
+Text extraction must decode MIME payload bytes before introducing replacement
+characters. A valid declared charset, including legacy labels such as
+`ks_c_5601-1987`, takes precedence. If that declaration is absent, unknown, or
+cannot decode the bytes, extraction may choose a bounded, quality-scored
+candidate from common legacy encodings using `charset-normalizer`, with its
+ordering retained ahead of universal single-byte fallbacks. Candidate quality
+is scored only on a bounded sample; the complete part is strictly decoded once
+after ranking. Language evidence uses Google's CLD2 model through
+the `pycld2` Python binding: its character n-gram result is a small tie-breaker
+after a candidate has produced Unicode, not a substitute for byte-level
+encoding detection. Only a final unrecoverable fallback may use UTF-8
+replacement. `ftfy` encoding repair is applied to already-decoded derived text
+to correct clear mojibake. These repairs affect only the disposable index and
+display; the original RFC 5322 bytes, MIME headers, and raw-message hash remain
+unchanged. Recovery is per-part and automatic; a count threshold for `U+FFFD`
+is not a safe trigger because replacement has already discarded the evidence
+needed for recovery.
 For every indexed message, the disposable database records an attachment count
 and one ordered metadata row per MIME attachment containing its MIME-walk part
 ID, decoded filename, and normalized MIME type. This metadata is derived during

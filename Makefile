@@ -1,4 +1,8 @@
-.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality test-e2e test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance test-tika validation-aws-start validation-aws-start-all validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
+.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke 
+.PHONY: install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality 
+.PHONY: test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance test-tika validation-aws-start validation-aws-start-all  
+.PHONY: validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
+
 
 TIKA_VERSION ?= 4.0.0
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
@@ -73,6 +77,9 @@ test:
 
 test-e2e:
 	uv run pytest -q --browser chromium --tracing=retain-on-failure e2e_tests
+
+test-encoding:
+	uv run pytest -q tests/test_encoding.py
 
 test-native-gui:
 	MAILARCHIVER_NATIVE_GUI_E2E=1 uv run pytest -q e2e_tests/test_ingest_verify.py::test_native_search_ui_end_to_end

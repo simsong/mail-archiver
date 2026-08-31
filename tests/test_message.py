@@ -96,6 +96,25 @@ def test_subject_is_decoded_and_unfolded() -> None:
     assert parse_message(raw, Path("/input/2024/message.eml"), None).subject == "Re: NYTimes: You Won’t Want to Share This Roasted Cauliflower"
 
 
+def test_mojibake_subject_is_repaired_without_changing_source_bytes() -> None:
+    """Requirement: header repair changes only derived metadata, never source bytes."""
+    raw = b"\n".join(
+        [
+            b"Message-ID: <mojibake-subject@example>",
+            b"From: sender@example.net",
+            b"Subject: =?utf-8?b?Y2Fmw4PCqQ==?=",
+            b"Date: Thu, 1 Feb 2024 12:00:00 +0000",
+            b"",
+            b"body",
+        ]
+    )
+
+    parsed = parse_message(raw, Path("/input/2024/message.eml"), None)
+
+    assert parsed.subject == "café"
+    assert parsed.sha256 == hashlib.sha256(raw).hexdigest()
+
+
 def test_raw_8bit_received_header_resolves_date_without_altering_identity() -> None:
     """Requirement: malformed header encoding falls back without affecting preservation."""
     raw = b"\n".join(
