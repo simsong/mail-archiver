@@ -15,16 +15,36 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from yaml import safe_load
 
 
 YEAR = re.compile(r"^(19|20)\d{2}$")
 DATE_RECEIVED_TOLERANCE = timedelta(days=2)
+BODY_DATE_FALLBACK_MAX_YEAR = 1980
 GOOGLE_CHAT_SENDER = re.compile(
     r'^sender\s*\{.*?^\s*full_name:\s*"((?:[^"\\]|\\.)*)".*?^\}\s*$',
     re.MULTILINE | re.DOTALL,
 )
 EMBEDDED_MBOX_ENVELOPE = re.compile(br"(?m)^>From [^\r\n]*\r?\n")
 HEADER_SEPARATOR = re.compile(br"\r?\n\r?\n")
+BODY_DATE_HEADER = re.compile(r"(?im)^[ \t>]*Date:[ \t]*(.+)$")
+
+
+class MessagePatternConfig(BaseModel):
+    """Localized patterns used while recovering dates from quoted message text."""
+
+    quoted_body_date: list[str] = Field(min_length=1)
+
+
+def _load_message_patterns() -> MessagePatternConfig:
+    with Path(__file__).with_name("message_patterns.yaml").open(encoding="utf-8") as source:
+        return MessagePatternConfig.model_validate(safe_load(source))
+
+
+MESSAGE_PATTERNS = _load_message_patterns()
+QUOTED_BODY_DATE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE | re.MULTILINE) for pattern in MESSAGE_PATTERNS.quoted_body_date
+)
 
 
 class MetadataDefect(BaseModel):
@@ -105,6 +125,47 @@ def received_date(values: list[object], earliest_year: int = 1900) -> datetime |
     if len(dates) % 2:
         return dates[middle]
     return dates[middle - 1] + (dates[middle] - dates[middle - 1]) / 2
+
+
+def _body_text(message: Message) -> str:
+    parts = message.walk() if message.is_multipart() else [message]
+    text: list[str] = []
+    for part in parts:
+        if part.is_multipart() or part.get_content_disposition() == "attachment":
+            continue
+        if part.get_content_maintype() != "text":
+            continue
+        payload = part.get_payload(decode=True)
+        if isinstance(payload, bytes):
+            charset = part.get_content_charset() or "utf-8"
+            try:
+                text.append(payload.decode(charset, "replace"))
+            except LookupError:
+                text.append(payload.decode("utf-8", "replace"))
+        elif payload is not None:
+            text.append(str(payload))
+    return "\n".join(text)
+
+
+def embedded_body_date(message: Message, earliest_year: int = 1900) -> datetime | None:
+    """Return the latest plausible date from quoted email text."""
+    body = _body_text(message)
+    candidates = [
+        parsed
+        for value in BODY_DATE_HEADER.findall(body)
+        if (parsed := parse_date(value.lstrip("> "), earliest_year)) is not None
+    ]
+    for pattern in QUOTED_BODY_DATE_PATTERNS:
+        for value in pattern.findall(body):
+            for format_string in ("%B %d, %Y, at %I:%M %p", "%b %d, %Y, at %I:%M %p"):
+                try:
+                    candidate = datetime.strptime(value, format_string).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if plausible_year(candidate.year, earliest_year):
+                    candidates.append(candidate)
+                break
+    return max(candidates) if candidates else None
 
 
 def decode_header_value(value: str) -> DecodedHeaderValue:
@@ -219,6 +280,7 @@ def parse_message(
     date_value = date_values[0] if date_values else None
     date = parse_date(date_value, earliest_year)
     received = received_date(header_values(message, "Received", defects), earliest_year)
+    body_date = embedded_body_date(message, earliest_year) if received is None else None
     source_date = None
     if source_date_utc is not None:
         if source_date_utc.tzinfo is None or source_date_utc.utcoffset() is None:
@@ -235,7 +297,16 @@ def parse_message(
         resolved_prior = candidate if plausible_year(candidate.year, earliest_year) else None
     if date_value is not None and date is None:
         defects.append(MetadataDefect(field="Date", detail="invalid or implausible date"))
-    if date is not None and received is not None and abs(date - received) > DATE_RECEIVED_TOLERANCE:
+    if body_date is not None and (date is None or (date.year <= BODY_DATE_FALLBACK_MAX_YEAR and body_date > date)):
+        date = body_date
+        date_source = "body-embedded"
+        defects.append(
+            MetadataDefect(
+                field="Date",
+                detail="used the most recent plausible Date or quoted On-date from the message body",
+            )
+        )
+    elif date is not None and received is not None and abs(date - received) > DATE_RECEIVED_TOLERANCE:
         difference = abs(date - received)
         date = received
         date_source = "received-median"

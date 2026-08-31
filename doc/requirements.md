@@ -52,7 +52,13 @@ directory, and a `data/mbox/` payload directory.
   input mailbox stream. For a filesystem message with no prior resolved date,
   derive the year from a four-digit year in the source path and record that
   fallback. Never route ordinary input to a `0000` mailbox merely because its
-  date is absent.
+  date is absent. If no `Received:` timestamp is usable and the `Date:` header
+  is missing or has an epoch-like year through 1980, scan decoded text bodies
+  for embedded `Date:` headers and configured localized quoted-date patterns.
+  Use the most recent plausible candidate and record `body-embedded` as
+  `date_source`, while retaining the original bytes. These patterns are
+  packaged configuration, not source-code literals, so supported language
+  forms can be added without changing the parser.
 * `X-Apple-Auto-Saved` messages are excluded entirely.  Their source and
   exclusion reason are retained in the primary database, but no MBOX copy is
   created.

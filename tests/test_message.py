@@ -233,6 +233,27 @@ def test_configured_earliest_year_is_applied_after_utc_normalization() -> None:
     assert (rejected.date_source, rejected.date_utc) == ("path-year", "1983-01-01T00:00:00+00:00")
 
 
+def test_epoch_like_date_uses_latest_embedded_quoted_email_date() -> None:
+    """Requirement: absent Received evidence permits a documented quoted-date fallback."""
+    raw = (Path(__file__).parent / "data" / "quoted_date_message.eml").read_bytes()
+
+    parsed = parse_message(raw, Path("/input/2003/message.eml"), None)
+
+    assert parsed.date_source == "body-embedded"
+    assert parsed.date_utc == "2003-01-01T12:21:00+00:00"
+    assert any(defect.field == "Date" and "message body" in defect.detail for defect in parsed.defects)
+    assert parsed.sha256 == hashlib.sha256(raw).hexdigest()
+
+
+def test_embedded_body_date_does_not_override_credible_header_date() -> None:
+    """Requirement: body dates are a fallback, never a replacement for a credible Date header."""
+    raw = (Path(__file__).parent / "data" / "credible_date_with_quoted_body.eml").read_bytes()
+
+    parsed = parse_message(raw, Path("/input/2024/message.eml"), None)
+
+    assert (parsed.date_source, parsed.date_utc) == ("date", "2024-02-01T12:00:00+00:00")
+
+
 def test_sender_header_falls_back_when_from_is_missing() -> None:
     """Requirement: a real Sender header supplies a missing From identity."""
     raw = b"Sender: fallback@example.net\nDate: Thu, 1 Feb 2024 12:00:00 +0000\n\nbody\n"

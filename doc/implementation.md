@@ -650,11 +650,16 @@ An ingest run executes these steps:
    header line ending.
 4. Hash the raw RFC 5322 bytes and parse only headers needed for identity,
    classification, and exclusion. Resolve dates by comparing `Date:` with the
-   trimmed UTC median of valid `Received:` timestamps. When neither header
-   supplies a date, use the message-specific `source_date_utc`, then the prior
-   resolved message date in the same input stream. A filesystem message still
-   lacking a date derives its year from a four-digit year in the source path;
-   record every fallback source in the catalog.
+   trimmed UTC median of valid `Received:` timestamps. When no usable
+   `Received:` timestamp exists and the `Date:` header is missing or has an
+   epoch-like year through 1980, scan decoded text bodies for embedded `Date:`
+   headers and the localized patterns in the packaged
+   `message_patterns.yaml`, choosing the most recent plausible candidate and
+   recording `body-embedded`. When no header or body date supplies a result,
+   use the message-specific `source_date_utc`, then the
+   prior resolved message date in the same input stream. A filesystem message
+   still lacking a date derives its year from a four-digit year in the source
+   path; record every fallback source in the catalog.
    An unexpected parser exception records the source display name, opaque
    cursor and numeric byte offset when available, raw
    hash, and exception before stopping; earlier messages published by any file
