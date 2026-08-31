@@ -494,7 +494,10 @@ def configure_macos_application() -> None:
     info["CFBundleVersion"] = metadata.version
     info["NSHumanReadableCopyright"] = metadata.copyright
     NSProcessInfo.processInfo().setProcessName_(metadata.name)
-    icon = NSImage.imageWithSystemSymbolName_accessibilityDescription_("archivebox", metadata.name)
+    icon_path = GUI_DIRECTORY / "icons" / "rainbow-post.svg"
+    icon = NSImage.alloc().initWithContentsOfFile_(str(icon_path)) if icon_path.is_file() else None
+    if icon is None:
+        icon = NSImage.imageWithSystemSymbolName_accessibilityDescription_("archivebox", metadata.name)
     if icon is not None:
         NSApplication.sharedApplication().setApplicationIconImage_(icon)
 

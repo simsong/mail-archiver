@@ -463,6 +463,7 @@ async function loadSuggestions(query, request) {
 function renderSuggestions(suggestions) {
   state.suggestionItems = [];
   state.suggestionIndex = -1;
+  elements.search.removeAttribute("aria-activedescendant");
   const contents = [];
   const heading = label => {
     const item = document.createElement("div"); item.className = "suggestion-heading"; item.textContent = label; return item;
@@ -470,10 +471,12 @@ function renderSuggestions(suggestions) {
   const option = (icon, label, count, accept) => {
     const button = document.createElement("button");
     button.type = "button";
+    button.id = `suggestion-option-${state.suggestionItems.length}`;
     button.className = "suggestion-option";
     button.setAttribute("role", "option");
     button.setAttribute("aria-selected", "false");
     const iconNode = document.createElement("span"); iconNode.className = "suggestion-icon"; iconNode.textContent = icon;
+    iconNode.setAttribute("aria-hidden", "true");
     const labelNode = document.createElement("span"); labelNode.className = "suggestion-label"; labelNode.textContent = label;
     const countNode = document.createElement("span"); countNode.className = "suggestion-count";
     countNode.textContent = count === null ? "" : count.toLocaleString();
@@ -511,6 +514,7 @@ function selectSuggestion(index) {
     item.element.setAttribute("aria-selected", String(active));
     if (active) item.element.scrollIntoView({block: "nearest"});
   });
+  elements.search.setAttribute("aria-activedescendant", state.suggestionItems[state.suggestionIndex].element.id);
 }
 
 function navigateSuggestions(event) {
@@ -543,6 +547,7 @@ function closeSuggestions() {
     elements["search-suggestions"].replaceChildren();
   }
   elements.search?.setAttribute("aria-expanded", "false");
+  elements.search?.removeAttribute("aria-activedescendant");
 }
 
 function addAddressFilter(suggestion) {

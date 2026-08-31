@@ -83,14 +83,15 @@ button { min-height: 28px; }
 .bulk-drag:active { cursor: grabbing; }
 .bulk-drag:hover { color: CanvasText; background: var(--selection); }
 
-.message { overflow: auto; min-width: 0; }
+.message { display: flex; min-width: 0; min-height: 0; overflow: auto; }
+#message-content { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .message-actions { position: sticky; top: 0; z-index: 3; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, Canvas 92%, transparent); backdrop-filter: blur(16px); }
 .message-find { position: sticky; top: 48px; z-index: 3; display: flex; align-items: center; gap: 6px; width: min(420px, calc(100% - 28px)); margin: 8px 14px -2px auto; padding: 5px 7px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); box-shadow: 0 3px 12px #0003; }
 .message-find input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; }
 .message-find span { min-width: 52px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 .message-find button { min-height: 22px; width: 22px; padding: 0; border: 0; color: var(--muted); background: transparent; font-size: 18px; }
 #part-select { min-width: 180px; margin-right: auto; }
-#message-well { padding: 22px 30px 40px; min-height: 100%; }
+#message-well { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 22px 30px 40px; }
 #message-well.computed-date { background: color-mix(in srgb, #d44 5%, Canvas); }
 .computed-date-banner { margin: -22px -30px 20px; padding: 9px 30px; border-bottom: 1px solid color-mix(in srgb, #b22 35%, transparent); color: color-mix(in srgb, #900 82%, CanvasText); background: color-mix(in srgb, #d44 13%, Canvas); font-weight: 650; }
 .message-summary { display: flex; align-items: flex-start; gap: 24px; }
@@ -110,8 +111,9 @@ button { min-height: 28px; }
 .plain, .raw { white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.48 -apple-system, BlinkMacSystemFont, sans-serif; }
 .raw { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .html-frame { width: 100%; min-height: 460px; border: 0; background: white; color-scheme: light; }
+#body-view { flex: 1 0 auto; min-height: 0; }
 
-.provenance { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 15px; }
+.provenance { margin-top: auto; border-top: 1px solid var(--border); padding-top: 15px; }
 .provenance h2 { font-size: 13px; margin: 0 0 10px; }
 #message-locations { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 #message-locations dt { color: var(--muted); text-align: right; }

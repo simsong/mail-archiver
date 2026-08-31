@@ -36,7 +36,7 @@ MAILBAG_HEADERS = (
     "Attachments",
 )
 MAILBAG_ROW_LIMIT = 100_000
-MAILARCHIVER_VERSION = "0.0.0"
+MAILARCHIVER_VERSION = "0.1.0"
 
 
 class MailbagRow(BaseModel):

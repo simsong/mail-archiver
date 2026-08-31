@@ -30,7 +30,13 @@ from mailarchiver.gui_service import (
     write_attachment,
     write_message,
 )
-from mailarchiver.gui_app import GuiApi, application_menu, application_metadata, configure_macos_application
+from mailarchiver.gui_app import (
+    GUI_DIRECTORY,
+    GuiApi,
+    application_menu,
+    application_metadata,
+    configure_macos_application,
+)
 from mailarchiver.mailsearch import _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, MailboxTreeNode, mailbox_tree
@@ -160,7 +166,7 @@ def test_gui_application_metadata_names_the_product() -> None:
     metadata = application_metadata()
 
     assert metadata.name == "Mail Archiver"
-    assert metadata.version == "0.0.0"
+    assert metadata.version == "0.1.0"
     assert "Mail Archiver" in metadata.copyright
 
 
@@ -176,6 +182,11 @@ def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:
         api.close()
 
 
+def test_gui_uses_the_canonical_rainbow_icon() -> None:
+    """Requirement: the native application has one canonical high-resolution icon."""
+    assert sorted(path.name for path in (GUI_DIRECTORY / "icons").glob("*.svg")) == ["rainbow-post.svg"]
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="Cocoa metadata is macOS-specific")
 def test_gui_applies_application_metadata_to_cocoa() -> None:
     """Requirement: the live Cocoa process and bundle receive the product metadata."""
@@ -187,7 +198,7 @@ def test_gui_applies_application_metadata_to_cocoa() -> None:
 
     assert NSProcessInfo.processInfo().processName() == "Mail Archiver"
     assert info["CFBundleName"] == "Mail Archiver"
-    assert info["CFBundleShortVersionString"] == "0.0.0"
+    assert info["CFBundleShortVersionString"] == "0.1.0"
     assert NSApplication.sharedApplication().applicationIconImage() is not None
 
 

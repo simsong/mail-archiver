@@ -510,6 +510,9 @@ to a separate message-file icon well and is initially a macOS Finder
 integration. Printing
 prints the displayed headers and selected MIME part through the system print
 panel. Temporary message and attachment exports are removed when the GUI exits.
+On macOS, the native application identity uses the sole canonical
+`gui/icons/rainbow-post.svg` icon; there is no runtime icon-selection menu or
+icon-choice command-line option.
 
 `summarize` is an optional macOS command that reads nonempty UTF-8 text from
 standard input and prints only a one-sentence Apple Intelligence summary of at
