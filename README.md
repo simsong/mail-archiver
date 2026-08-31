@@ -362,10 +362,8 @@ and Escape closes it. Command-Shift-U opens the raw RFC 5322 source in a new
 window. Command-A in the result list selects visible messages for ZIP drag-out;
 Command-A in the message heading selects only that heading. The window title
 identifies the archive and its deduplicated searchable-message count. The
-native **Icon** menu offers ten resolution-independent icon choices; the
-current choice is also available at startup with `--icon-choice 1` through
-`--icon-choice 10`. About identifies the application as Mail Archiver version
-0.1.0. Start it with:
+The native application uses the resolution-independent `rainbow-post.svg` icon.
+About identifies the application as Mail Archiver version 0.1.0. Start it with:
 
 ```console
 make gui ARGS="--archive /path/to/mail-archive"

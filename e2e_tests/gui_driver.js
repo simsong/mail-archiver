@@ -56,7 +56,11 @@
       .find(item => item.textContent.includes("beth@example.org"));
     assert(bethAddress && bethAddress.textContent.includes("2"), "address completion shows deduplicated message count");
     assert([...document.querySelectorAll(".suggestion-option")].some(item => item.textContent.includes("ELISABETH")), "subject completion uses substring matching");
+    searchInput.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowDown", bubbles: true}));
+    const activeSuggestionId = searchInput.getAttribute("aria-activedescendant");
+    assert(activeSuggestionId && document.getElementById(activeSuggestionId)?.getAttribute("aria-selected") === "true", "keyboard suggestion selection is announced to assistive technology");
     bethAddress.dispatchEvent(new MouseEvent("mousedown", {bubbles: true, cancelable: true}));
+    assert(searchInput.getAttribute("aria-expanded") === "false" && !searchInput.hasAttribute("aria-activedescendant"), "closing suggestions clears the active option announcement");
     await waitFor(() => document.querySelectorAll(".search-chip").length === 1 && rows().length === 2, "address completion creates an Any filter chip");
     const role = document.querySelector(".search-chip select");
     assert([...role.options].map(option => option.textContent).join(",") === "Any,From,To,Cc,Bcc", "address chip offers all recipient-role menus");
@@ -120,6 +124,7 @@
     const rich = rows()[0];
     rich.click();
     await waitFor(() => document.getElementById("message-subject").textContent === "Rich UI message", "message viewer opens");
+    assert(getComputedStyle(document.getElementById("message-well")).minHeight === "0px", "message well can shrink below the action-bar height");
     assert(!document.getElementById("computed-date-banner").hidden, "computed-date warning banner displayed");
     assert(document.getElementById("message-well").classList.contains("computed-date"), "computed-date message tint applied");
     assert(document.getElementById("message-headers").textContent.includes("curator@example.net"), "message headers displayed");

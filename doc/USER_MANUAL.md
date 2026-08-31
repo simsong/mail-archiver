@@ -215,9 +215,8 @@ The window title shows the archive path and the total number of deduplicated,
 searchable messages.
 
 The About panel identifies the product as **Mail Archiver**, version **0.1.0**.
-On macOS, the **Icon** menu contains ten high-resolution vector choices for
-the Dock and application icon. The same selection can be made at launch with
-`--icon-choice 1` through `--icon-choice 10`.
+On macOS, the Dock and application use the high-resolution vector icon
+`rainbow-post.svg`.
 
 The status line at the bottom shows a running ingest, or summarizes the most
 recent run. Click it to open the independent Ingests window. You can also use

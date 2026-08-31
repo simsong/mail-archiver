@@ -31,7 +31,6 @@ from mailarchiver.gui_service import (
     write_message,
 )
 from mailarchiver.gui_app import (
-    ICON_CHOICES,
     GUI_DIRECTORY,
     GuiApi,
     application_menu,
@@ -176,28 +175,16 @@ def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:
     api = GuiApi(None, e2e_directory=tmp_path)
     try:
         menus = application_menu(api)
-        assert [menu.title for menu in menus] == ["Windows", "Icon"]
+        assert [menu.title for menu in menus] == ["Windows"]
         assert [item.title for item in menus[0].items] == ["Ingest"]
-        assert len(menus[1].items) == 10
         assert menus[0].items[0].function()
     finally:
         api.close()
 
 
-def test_gui_icon_choices_are_selectable_and_have_assets(tmp_path: Path) -> None:
-    """Requirement: ten distinct icon choices are available to the native app."""
-    assert len(ICON_CHOICES) == 10
-    assert all((GUI_DIRECTORY / "icons" / f"{name}.svg").is_file() for name in ICON_CHOICES)
-
-    api = GuiApi(None, e2e_directory=tmp_path)
-    try:
-        menus = application_menu(api)
-        assert [item.title for item in menus[1].items] == [
-            f"{index}: {name.replace('-', ' ').title()}"
-            for index, name in enumerate(ICON_CHOICES, 1)
-        ]
-    finally:
-        api.close()
+def test_gui_uses_the_canonical_rainbow_icon() -> None:
+    """Requirement: the native application has one canonical high-resolution icon."""
+    assert sorted(path.name for path in (GUI_DIRECTORY / "icons").glob("*.svg")) == ["rainbow-post.svg"]
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Cocoa metadata is macOS-specific")

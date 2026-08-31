@@ -377,6 +377,10 @@ the same typed functions used by `mailsearch`.  Search pages request 101 rows
 to return 100 plus a `has_more` indicator.  The UI is conventional: a search
 toolbar above a result list and message pane. Independent message windows load
 the same static application with a message-number parameter.
+Before pywebview creates Cocoa menus, the process and bundle identity are set
+to Mail Archiver version 0.1.0 and the sole canonical icon
+`gui/icons/rainbow-post.svg` is installed. There is no runtime icon-selection
+menu or icon-choice command-line option.
 The main window polls the latest shared `IngestStatus` once per second and
 renders it in a bottom status line. The separate `ingests.html` application
 polls all typed status files and presents run history beside aggregate and
