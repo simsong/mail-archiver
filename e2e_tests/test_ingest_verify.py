@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -32,8 +33,8 @@ NORMAL_MESSAGE_COUNT = 107
 PROCESSED_MESSAGE_COUNT = 110
 GUI_API_METHODS = (
     "attachment", "choose_archive", "delete_filter_set", "mailbox_tree", "message",
-    "ingest_overview", "open_attachment", "open_ingest_window", "open_message_window", "part", "prepare_drag", "rename_filter_set",
-    "request_previews", "save_attachment", "save_filter_set", "save_message",
+    "ingest_overview", "open_attachment", "open_ingest_window", "open_message_window", "part", "prepare_drag", "prepare_drag_zip", "rename_filter_set",
+    "request_previews", "save_attachment", "save_filter_set", "save_message", "save_selected_zip",
     "saved_filter_sets", "search", "status", "suggestions", "take_previews",
 )
 
@@ -200,8 +201,12 @@ def test_search_ui_end_to_end_without_a_window(
     assert len(result.checks) >= 30
     exports = {path.name for path in export_directory.iterdir()}
     assert {"saved-tiny.png", "saved-review.command", "filter-sets.json"} <= exports
+    assert "saved-selected-messages.zip" in exports
+    with zipfile.ZipFile(export_directory / "saved-selected-messages.zip") as selected:
+        assert len(selected.namelist()) == NORMAL_MESSAGE_COUNT
+        assert all(name.startswith("mid-") and name.endswith(".eml") for name in selected.namelist())
     assert any(name.startswith("saved-Rich UI message-") and name.endswith(".eml") for name in exports)
-    assert any(name.startswith("Rich UI message-") and name.endswith(".eml") for name in exports)
+    assert any(name.startswith("mid-") and name.endswith(".eml") for name in exports)
 
 
 def test_ingest_history_ui_end_to_end(built_archive: BuiltArchive, page: Page) -> None:
@@ -254,6 +259,10 @@ def test_native_search_ui_end_to_end(built_archive: BuiltArchive, tmp_path: Path
     assert "saved-tiny.png" in result.exports
     assert "saved-review.command" in result.exports
     assert "filter-sets.json" in result.exports
+    assert "saved-selected-messages.zip" in result.exports
+    with zipfile.ZipFile(report.parent / "gui-e2e-exports" / "saved-selected-messages.zip") as selected:
+        assert len(selected.namelist()) == NORMAL_MESSAGE_COUNT
+        assert all(name.startswith("mid-") and name.endswith(".eml") for name in selected.namelist())
     assert not (built_archive.archive / "filter-sets.json").exists()
     assert any(name.startswith("saved-Rich UI message-") and name.endswith(".eml") for name in result.exports)
-    assert any(name.startswith("Rich UI message-") and name.endswith(".eml") for name in result.exports)
+    assert any(name.startswith("mid-") and name.endswith(".eml") for name in result.exports)

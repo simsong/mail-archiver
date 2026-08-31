@@ -50,6 +50,11 @@
           </div>
           <div id="result-list" role="listbox" aria-label="Search results" tabindex="0"></div>
           <button id="load-more" class="load-more" type="button" hidden>Load more</button>
+          <button id="bulk-drag" class="bulk-drag" type="button" draggable="true" hidden
+                  title="Save selected messages as a ZIP or drag them to Finder"
+                  aria-label="Save selected messages as a ZIP">
+            <span aria-hidden="true">▣</span> Save selected ZIP
+          </button>
         </aside>
 
         <article class="message" id="message-pane">
@@ -60,12 +65,17 @@
               <button id="save-message" type="button">Save Message…</button>
               <button id="print-message" type="button">Print…</button>
             </div>
+            <div id="message-find" class="message-find no-print" role="search" hidden>
+              <input id="message-find-input" type="search" placeholder="Find in message" autocomplete="off" spellcheck="false" aria-label="Find in message">
+              <span id="message-find-count" aria-live="polite"></span>
+              <button id="message-find-close" type="button" aria-label="Close find">×</button>
+            </div>
             <div id="message-well">
               <div id="computed-date-banner" class="computed-date-banner" role="status" hidden>
                 Date adjusted: the Date header is more than two days from the Received-header median. Archive routing uses the computed UTC date.
               </div>
               <div class="message-summary">
-                <div class="message-heading">
+                <div id="message-heading" class="message-heading" tabindex="0">
                   <h1 id="message-subject"></h1>
                   <dl id="message-headers"></dl>
                 </div>

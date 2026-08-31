@@ -20,7 +20,9 @@ from mailarchiver.mailsearch import (
     SortField,
     _search_statement,
     format_header,
+    parse_query,
     render_message,
+    search_headers,
 )
 from mailarchiver.mbox import add_message
 from mailarchiver.search import index_message
@@ -51,10 +53,10 @@ def add_catalogued_message(archive: Path, message_pk: int, raw: bytes) -> None:
         catalog.close()
 
 
-def make_archive(tmp_path: Path) -> tuple[Path, bytes]:
+def make_archive(tmp_path: Path, raw: bytes | None = None, index_attachments: bool = False) -> tuple[Path, bytes]:
     archive = tmp_path / "archive"
     initialize_bag(archive)
-    raw = (
+    raw = raw or (
         b"Message-ID: <one@example>\nFrom: sender@example.net\nTo: recipient@example.net\nCc: copy@example.net\nX-Trace: one\n"
         b"Subject: planning meeting\nDate: Wed, 03 Jan 2024 10:00:00 +0000\n\nMeeting agenda.\n"
     )
@@ -82,7 +84,7 @@ def make_archive(tmp_path: Path) -> tuple[Path, bytes]:
             (message_pk, blind),
         )
         catalog.commit()
-        index_message(search, raw, False)
+        index_message(search, raw, index_attachments)
         search.commit()
     finally:
         catalog.close()
@@ -103,6 +105,12 @@ def test_mailsearch_finds_structured_and_full_text_matches(tmp_path: Path) -> No
     )
     assert result.returncode == 0, result.stderr
     assert "from:sender@example.net subject:planning meeting" in result.stdout
+
+
+def test_mid_lookup_finds_one_catalogued_message(tmp_path: Path) -> None:
+    archive, _ = make_archive(tmp_path)
+    result = search_headers(archive, parse_query("mid-1"), 2)
+    assert [(item.message_pk, item.mail_id) for item in result] == [(1, "mid-1")]
 
 
 def test_address_selectors_preserve_from_to_cc_bcc_and_any_roles(tmp_path: Path) -> None:
@@ -178,6 +186,22 @@ def test_full_text_candidates_use_fts_and_catalog_sha_indexes(tmp_path: Path) ->
 
     assert any("messages_sha256" in step for step in plan)
     assert any("message_fts VIRTUAL TABLE INDEX" in step for step in plan)
+    assert any("message_fts_rowid" in step for step in plan)
+
+
+def test_attachment_full_text_terms_are_anded_across_both_fts_tables(tmp_path: Path) -> None:
+    """Requirement: attachment-enabled ordinary terms remain an AND expression over the FTS union."""
+    raw = (
+        b"Message-ID: <attachment@example>\nFrom: sender@example.net\nTo: recipient@example.net\n"
+        b"Subject: attachment search\nContent-Type: multipart/mixed; boundary=outer\n\n"
+        b"--outer\nContent-Type: text/plain\n\nbodyneedle\n"
+        b"--outer\nContent-Type: text/plain\nContent-Disposition: attachment; filename=notes.txt\n\nattachmentneedle\n"
+        b"--outer--\n"
+    )
+    archive, _ = make_archive(tmp_path, raw, index_attachments=True)
+
+    assert search_headers(archive, parse_query("bodyneedle attachmentneedle"), 10, search_attachments=True)
+    assert not search_headers(archive, parse_query("attachmentneedle"), 10)
 
 
 def test_mailsearch_limit_zero_and_number_print_original_message(tmp_path: Path) -> None:

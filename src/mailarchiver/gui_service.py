@@ -119,6 +119,7 @@ class SourceLocation(BaseModel):
 
 class MessageView(BaseModel):
     message_pk: int
+    mail_id: str
     subject: str
     date_source: str
     headers: list[HeaderField]
@@ -286,6 +287,7 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
     date_source = message_date_source(archive, message_pk)
     return MessageView(
         message_pk=message_pk,
+        mail_id=f"mid-{message_pk}",
         subject=decoded_header(str(message.get("Subject", "(no subject)"))),
         date_source=date_source,
         headers=headers,

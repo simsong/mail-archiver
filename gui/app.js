@@ -8,6 +8,7 @@ const state = {
   sortDirection: "descending",
   searchAttachments: false,
   selected: null,
+  bulkSelected: new Set(),
   selectionRequest: null,
   searchRequest: 0,
   partRequest: 0,
@@ -26,6 +27,11 @@ const state = {
   suggestionTimer: null,
   suggestionItems: [],
   suggestionIndex: -1,
+  bulkDragExport: null,
+  bulkDragPending: false,
+  bulkDragRequest: 0,
+  findIndex: -1,
+  findHits: [],
 };
 
 const elements = {};
@@ -45,10 +51,10 @@ window.setTimeout(() => {
 async function initialize() {
   if (initialized) return;
   initialized = true;
-  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "load-more",
+  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "load-more", "bulk-drag",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
-    "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
+    "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "message-heading", "part-select", "remote-content", "message-find", "message-find-input", "message-find-count", "message-find-close",
     "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "ingest-status-line", "error"]) {
     elements[id] = byId(id);
   }
@@ -76,10 +82,17 @@ async function initialize() {
   elements["cancel-save-filter"].addEventListener("click", () => elements["save-filter-dialog"].close());
   elements["close-filter-manager"].addEventListener("click", () => elements["manage-filter-dialog"].close());
   elements["result-list"].addEventListener("keydown", navigateResults);
+  elements["bulk-drag"].addEventListener("dragstart", startBulkDrag);
+  elements["bulk-drag"].addEventListener("pointerenter", prepareBulkDrag);
+  elements["bulk-drag"].addEventListener("click", saveBulkSelection);
   elements["part-select"].addEventListener("change", () => showPart(Number(elements["part-select"].value), false));
   elements["remote-content"].addEventListener("click", () => showPart(Number(elements["part-select"].value), true));
   elements["save-message"].addEventListener("click", () => call(() => window.pywebview.api.save_message(state.selected)));
   elements["print-message"].addEventListener("click", () => window.print());
+  elements["message-file-well"].addEventListener("dblclick", () => call(() => window.pywebview.api.open_message_file(state.selected)));
+  elements["message-find-input"].addEventListener("input", () => updateFind(false));
+  elements["message-find-input"].addEventListener("keydown", handleFindKeydown);
+  elements["message-find-close"].addEventListener("click", closeFind);
   elements["ingest-status-line"].addEventListener("click", openIngestWindow);
   installDrag(elements["message-file-well"], () => state.selected);
   document.addEventListener("keydown", handleCommandShortcut);
@@ -93,7 +106,14 @@ async function initialize() {
   await refreshIngestOverview();
   window.setInterval(refreshIngestOverview, INGEST_REFRESH_MS);
   const message = Number(parameters.get("message"));
-  if (message) await selectMessage(message);
+  if (message) {
+    await selectMessage(message);
+    const partParameter = parameters.get("part");
+    if (partParameter !== null) {
+      const part = Number(partParameter);
+      if (Number.isInteger(part)) await showPart(part, false);
+    }
+  }
   else if (status.ready) await runSearch(false);
 }
 
@@ -117,6 +137,7 @@ function resetArchiveView() {
   state.searchRequest += 1;
   state.partRequest += 1;
   state.selected = null;
+  state.bulkSelected.clear();
   state.selectionRequest = null;
   state.view = null;
   state.mailboxTree = [];
@@ -127,6 +148,8 @@ function resetArchiveView() {
   clearAttachmentPreview();
   elements["result-list"].replaceChildren();
   elements["message-content"].hidden = true;
+  closeFind();
+  updateBulkSelection();
 }
 
 function applyStatus(status) {
@@ -581,6 +604,11 @@ async function runSearch(append) {
   const offset = append && sameSearch ? state.offset : 0;
   const request = ++state.searchRequest;
   elements["result-status"].textContent = "Searching…";
+  if (!append) {
+    state.bulkSelected.clear();
+    updateBulkSelection();
+    elements["load-more"].hidden = true;
+  }
   const mailboxSelections = state.showTree ? [...state.mailboxSelections] : [];
   const page = await call(() => window.pywebview.api.search(
     query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections,
@@ -596,9 +624,14 @@ async function runSearch(append) {
     const row = resultRow(result);
     elements["result-list"].append(row);
   }
+  updateBulkSelection();
   requestPreviews(page.results.map(result => result.message_pk));
   elements["result-status"].textContent = `${state.offset.toLocaleString()} message${state.offset === 1 ? "" : "s"}${page.has_more ? " shown" : ""}`;
   elements["load-more"].hidden = !page.has_more;
+  const direct = elements.search.value.trim().match(/^mid-(\d+)$/i);
+  if (!append && direct && page.results.some(result => result.message_pk === Number(direct[1]))) {
+    await selectMessage(Number(direct[1]));
+  }
 }
 
 function toggleSortDirection() {
@@ -620,6 +653,10 @@ function resultRow(result) {
   row.draggable = true;
   const subjectLine = document.createElement("div");
   subjectLine.className = "result-subject-line";
+  const id = document.createElement("span");
+  id.className = "result-id";
+  id.textContent = result.mail_id || `mid-${result.message_pk}`;
+  id.title = "Stable Mail ID";
   const subject = document.createElement("div");
   subject.className = "result-subject";
   subject.textContent = result.subject || "(no subject)";
@@ -629,7 +666,7 @@ function resultRow(result) {
   paperclip.title = `${result.attachment_count} attachment${result.attachment_count === 1 ? "" : "s"}`;
   paperclip.setAttribute("aria-label", paperclip.title);
   paperclip.hidden = result.attachment_count === 0;
-  subjectLine.append(subject, paperclip);
+  subjectLine.append(id, subject, paperclip);
   const line = document.createElement("div");
   line.className = "result-line";
   const sender = document.createElement("span");
@@ -644,13 +681,68 @@ function resultRow(result) {
   preview.setAttribute("aria-label", "Message preview");
   row.append(subjectLine, line, preview);
   row.addEventListener("mousedown", () => elements["result-list"].focus({preventScroll: true}));
-  row.addEventListener("click", () => selectMessage(result.message_pk));
+  row.addEventListener("click", event => {
+    if (event.metaKey || event.ctrlKey) {
+      if (state.bulkSelected.has(result.message_pk)) state.bulkSelected.delete(result.message_pk);
+      else state.bulkSelected.add(result.message_pk);
+      updateBulkSelection();
+      return;
+    }
+    state.bulkSelected.clear();
+    updateBulkSelection();
+    selectMessage(result.message_pk);
+  });
   row.addEventListener("dblclick", async () => {
     await call(() => window.pywebview.api.open_message_window(result.message_pk));
     row.dataset.openedWindow = "true";
   });
   installDrag(row, () => result.message_pk);
   return row;
+}
+
+function updateBulkSelection() {
+  const rows = [...elements["result-list"].querySelectorAll(".result")];
+  const visible = new Set(rows.map(row => Number(row.dataset.messagePk)));
+  for (const messagePk of [...state.bulkSelected]) if (!visible.has(messagePk)) state.bulkSelected.delete(messagePk);
+  rows.forEach(row => row.classList.toggle("bulk-selected", state.bulkSelected.has(Number(row.dataset.messagePk))));
+  elements["bulk-drag"].hidden = state.bulkSelected.size < 2;
+  elements["bulk-drag"].textContent = `▣ Save selected ZIP (${state.bulkSelected.size} messages)`;
+  elements["bulk-drag"].setAttribute("aria-label", `Save ${state.bulkSelected.size} selected messages as a ZIP`);
+  state.bulkDragExport = null;
+  delete elements["bulk-drag"].dataset.ready;
+  delete elements["bulk-drag"].dataset.saved;
+  state.bulkDragRequest += 1;
+  if (state.bulkSelected.size >= 2) prepareBulkDrag();
+}
+
+async function prepareBulkDrag() {
+  if (state.bulkSelected.size < 2 || state.bulkDragExport || state.bulkDragPending) return;
+  const selected = [...state.bulkSelected];
+  const request = state.bulkDragRequest;
+  state.bulkDragPending = true;
+  const info = await call(() => window.pywebview.api.prepare_drag_zip(selected));
+  state.bulkDragPending = false;
+  if (request === state.bulkDragRequest && info && selected.every(messagePk => state.bulkSelected.has(messagePk)) && state.bulkSelected.size === selected.length) {
+    state.bulkDragExport = info;
+    elements["bulk-drag"].dataset.ready = "true";
+  } else if (request !== state.bulkDragRequest && state.bulkSelected.size >= 2) {
+    prepareBulkDrag();
+  }
+}
+
+async function saveBulkSelection() {
+  if (state.bulkSelected.size < 2) return;
+  const saved = await call(() => window.pywebview.api.save_selected_zip([...state.bulkSelected]));
+  if (saved) elements["bulk-drag"].dataset.saved = "true";
+}
+
+async function startBulkDrag(event) {
+  const info = state.bulkDragExport;
+  if (!info) { event.preventDefault(); showError("ZIP export is still being prepared; drag again."); return; }
+  event.dataTransfer.effectAllowed = "copy";
+  event.dataTransfer.setData("text/uri-list", info.url);
+  event.dataTransfer.setData("DownloadURL", `application/zip:${info.filename}:${info.url}`);
+  event.dataTransfer.setData("text/plain", info.url);
 }
 
 async function requestPreviews(messagePks) {
@@ -677,6 +769,7 @@ async function selectMessage(messagePk) {
   if (!view || state.selectionRequest !== messagePk) return;
   state.selected = messagePk;
   state.view = view;
+  closeFind();
   document.querySelectorAll(".result.selected").forEach(row => {
     row.classList.remove("selected");
     row.setAttribute("aria-selected", "false");
@@ -690,8 +783,8 @@ async function selectMessage(messagePk) {
   elements["computed-date-banner"].hidden = !computedDate;
   elements["message-well"].classList.toggle("computed-date", computedDate);
   elements["message-subject"].textContent = view.subject;
-  elements["message-file-name"].textContent = state.dragExports.get(messagePk)?.filename || "Message.eml";
-  elements["message-headers"].replaceChildren(...headerNodes(view.headers));
+  elements["message-file-name"].textContent = state.dragExports.get(messagePk)?.filename || `${view.mail_id}.eml`;
+  elements["message-headers"].replaceChildren(...headerNodes(view.headers, view.mail_id));
   elements["part-select"].replaceChildren(...view.body_parts.map(partOption));
   elements["part-select"].value = String(view.preferred_part_id);
   renderAttachments(view.attachments);
@@ -702,11 +795,18 @@ async function selectMessage(messagePk) {
 
 function renderLocations(view) {
   const locations = [];
-  if (view.archive_path) locations.push(["Archive mailbox", view.archive_path]);
+  if (view.archive_path) {
+    const separator = view.archive_path.lastIndexOf(":");
+    const archiveOffset = separator >= 0 ? view.archive_path.slice(separator + 1) : null;
+    const archiveName = separator >= 0 ? view.archive_path.slice(0, separator) : view.archive_path;
+    locations.push(["Archive mailbox", archiveName]);
+    if (archiveOffset !== null && /^\d+$/.test(archiveOffset)) locations.push(["Archive offset (bytes)", archiveOffset]);
+  }
   for (const source of view.source_locations) {
     const origin = source.preferred ? `Preferred source (${source.origin})` : source.origin;
     locations.push([origin, source.volume]);
-    locations.push(["Source path", source.offset === null ? source.path : `${source.path}:${source.offset}`]);
+    locations.push(["Source path", source.path]);
+    if (source.offset !== null) locations.push(["Source offset (bytes)", String(source.offset)]);
   }
   elements["provenance-section"].hidden = locations.length === 0;
   elements["message-locations"].replaceChildren(...locations.flatMap(([label, value]) => {
@@ -730,7 +830,37 @@ function navigateResults(event) {
 }
 
 function handleCommandShortcut(event) {
-  if (!event.metaKey || event.altKey || !state.view) return;
+  if (!event.metaKey || event.altKey) return;
+  if (event.key.toLowerCase() === "a") {
+    const active = document.activeElement;
+    if (active === elements["result-list"] || elements["result-list"].contains(active)) {
+      event.preventDefault();
+      state.bulkSelected = new Set([...elements["result-list"].querySelectorAll(".result")].map(row => Number(row.dataset.messagePk)));
+      updateBulkSelection();
+      return;
+    }
+    if (active === elements["message-heading"] || elements["message-heading"].contains(active)) {
+      event.preventDefault();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(elements["message-heading"]);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
+    }
+  }
+  if (event.key.toLowerCase() === "f" && state.view) {
+    event.preventDefault();
+    if (elements["message-find"].hidden) openFind();
+    else nextFindMatch();
+    return;
+  }
+  if (!state.view) return;
+  if (event.key.toLowerCase() === "u" && event.shiftKey) {
+    event.preventDefault();
+    call(() => window.pywebview.api.open_message_window(state.selected, -1));
+    return;
+  }
   let partId = null;
   if (event.key === "0" || (event.shiftKey && event.key.toLowerCase() === "u")) partId = -1;
   else if (!event.shiftKey && /^[1-9]$/.test(event.key)) partId = Number(event.key);
@@ -742,13 +872,110 @@ function handleCommandShortcut(event) {
   showPart(partId, false);
 }
 
-function headerNodes(headers) {
+function openFind() {
+  elements["message-find"].hidden = false;
+  elements["message-find-input"].focus();
+  elements["message-find-input"].select();
+  if (elements["message-find-input"].value) updateFind(false);
+}
+
+function clearFindHighlights() {
+  document.querySelectorAll("mark.message-find-hit").forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || "")));
+  document.querySelectorAll("iframe").forEach(frame => {
+    frame.contentDocument?.querySelectorAll("mark.message-find-hit").forEach(mark => mark.replaceWith(frame.contentDocument.createTextNode(mark.textContent || "")));
+  });
+}
+
+function highlightFindRoot(root, query) {
+  const hits = [];
+  if (!root) return hits;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent || ["SCRIPT", "STYLE", "INPUT", "BUTTON", "SELECT", "MARK", "IFRAME"].includes(parent.tagName)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return node.nodeValue?.toLowerCase().includes(query.toLowerCase()) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(escaped, "gi");
+  nodes.forEach(node => {
+    const fragment = document.createDocumentFragment();
+    let last = 0;
+    for (const match of node.nodeValue.matchAll(pattern)) {
+      fragment.append(document.createTextNode(node.nodeValue.slice(last, match.index)));
+      const mark = document.createElement("mark");
+      mark.className = "message-find-hit";
+      mark.textContent = match[0];
+      fragment.append(mark);
+      hits.push(mark);
+      last = match.index + match[0].length;
+    }
+    fragment.append(document.createTextNode(node.nodeValue.slice(last)));
+    node.replaceWith(fragment);
+  });
+  return hits;
+}
+
+function updateFind(resetIndex) {
+  clearFindHighlights();
+  const query = elements["message-find-input"].value.trim();
+  state.findHits = query ? highlightFindRoot(elements["message-well"], query) : [];
+  const frame = elements["body-view"].querySelector("iframe");
+  if (query && frame?.contentDocument?.body) state.findHits.push(...highlightFindRoot(frame.contentDocument.body, query));
+  if (resetIndex || state.findIndex < 0 || state.findIndex >= state.findHits.length) state.findIndex = 0;
+  elements["message-find-count"].textContent = state.findHits.length ? `${state.findIndex + 1} of ${state.findHits.length}` : "No matches";
+  if (state.findHits.length) focusFindMatch();
+}
+
+function focusFindMatch() {
+  state.findHits.forEach((mark, index) => mark.classList.toggle("active", index === state.findIndex));
+  state.findHits[state.findIndex]?.scrollIntoView({block: "center", inline: "nearest"});
+}
+
+function nextFindMatch() {
+  if (!state.findHits.length) { updateFind(true); return; }
+  state.findIndex = (state.findIndex + 1) % state.findHits.length;
+  focusFindMatch();
+  elements["message-find-count"].textContent = `${state.findIndex + 1} of ${state.findHits.length}`;
+}
+
+function handleFindKeydown(event) {
+  if (event.key === "Enter" || (event.metaKey && event.key.toLowerCase() === "f")) {
+    event.preventDefault();
+    event.stopPropagation();
+    nextFindMatch();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closeFind();
+  }
+}
+
+function closeFind() {
+  if (!elements["message-find"]) return;
+  elements["message-find"].hidden = true;
+  clearFindHighlights();
+  state.findHits = [];
+  state.findIndex = -1;
+  elements["message-find-input"].value = "";
+  if (elements["message-find-count"]) elements["message-find-count"].textContent = "";
+}
+
+function headerNodes(headers, mailId) {
   const important = new Set(["from", "to", "cc", "subject", "date"]);
-  return headers.filter(header => important.has(header.name.toLowerCase())).flatMap(header => {
+  const mailIdNodes = [];
+  const mailIdTerm = document.createElement("dt"); mailIdTerm.textContent = "Mail ID:";
+  const mailIdValue = document.createElement("dd"); mailIdValue.textContent = mailId || "";
+  mailIdNodes.push(mailIdTerm, mailIdValue);
+  return mailIdNodes.concat(headers.filter(header => important.has(header.name.toLowerCase())).flatMap(header => {
     const term = document.createElement("dt"); term.textContent = `${header.name}:`;
     const value = document.createElement("dd"); value.textContent = header.value;
     return [term, value];
-  });
+  }));
 }
 
 function partOption(part) {
@@ -771,7 +998,7 @@ async function showPart(partId, allowRemote) {
     frame.className = "html-frame";
     frame.setAttribute("sandbox", "allow-popups");
     frame.srcdoc = part.content;
-    frame.addEventListener("load", () => resizeFrame(frame));
+    frame.addEventListener("load", () => { resizeFrame(frame); if (!elements["message-find"].hidden) updateFind(false); });
     elements["body-view"].append(frame);
   } else {
     const body = document.createElement("div");

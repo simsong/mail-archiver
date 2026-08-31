@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import shlex
 import shutil
 import sqlite3
@@ -42,6 +43,7 @@ class SearchTerms(BaseModel):
     date: list[CalendarDate] = Field(default_factory=list)
     before: list[CalendarDate] = Field(default_factory=list)
     after: list[CalendarDate] = Field(default_factory=list)
+    message_id: list[int] = Field(default_factory=list)
     text: list[str] = Field(default_factory=list)
 
 
@@ -52,6 +54,7 @@ class MessageHeader(BaseModel):
     subject: str
     date_utc: str
     attachment_count: int = 0
+    mail_id: str = ""
 
 
 class SearchStatement(BaseModel):
@@ -73,6 +76,9 @@ class SortDirection(StrEnum):
 def parse_terms(tokens: list[str]) -> SearchTerms:
     terms = SearchTerms()
     for token in tokens:
+        if (match := re.fullmatch(r"mid-(\d+)", token, flags=re.IGNORECASE)) is not None:
+            terms.message_id.append(int(match.group(1)))
+            continue
         key, separator, value = token.partition(":")
         key = key.lower()
         if separator and key in {"any", "to", "from", "cc", "bcc", "subject", "date", "before", "after"}:
@@ -151,17 +157,26 @@ def _search_statement(
     for selected_date in terms.after:
         clauses.append("m.date_utc >= ?")
         parameters.append((selected_date + timedelta(days=1)).isoformat() + "T00:00:00+00:00")
+    for message_id in terms.message_id:
+        clauses.append("m.message_pk = ?")
+        parameters.append(message_id)
     if terms.text:
         if search_attachments:
             for term in terms.text:
                 clauses.append(
-                    "m.sha256 IN (SELECT sha256 FROM search.message_fts WHERE message_fts MATCH ? "
+                    "m.sha256 IN (SELECT metadata.sha256 FROM search.message_fts "
+                    "JOIN search.message_metadata metadata ON metadata.message_fts_rowid = message_fts.rowid "
+                    "WHERE message_fts MATCH ? "
                     "UNION SELECT sha256 FROM search.attachment_fts WHERE attachment_fts MATCH ?)"
                 )
                 match = fts_query([term])
                 parameters.extend((match, match))
         else:
-            clauses.append("m.sha256 IN (SELECT sha256 FROM search.message_fts WHERE message_fts MATCH ?)")
+            clauses.append(
+                "m.sha256 IN (SELECT metadata.sha256 FROM search.message_fts "
+                "JOIN search.message_metadata metadata ON metadata.message_fts_rowid = message_fts.rowid "
+                "WHERE message_fts MATCH ?)"
+            )
             parameters.append(fts_query(terms.text))
     if mailbox_selections:
         alternatives = []
@@ -254,7 +269,12 @@ def search_headers(
             terms, limit, offset, sort_by, direction, search_attachments, mailbox_selections
         )
         fields = ("message_pk", "recipients", "sender", "subject", "date_utc", "attachment_count")
-        return [MessageHeader.model_validate(dict(zip(fields, row))) for row in database.execute(statement.sql, statement.parameters)]
+        results = []
+        for row in database.execute(statement.sql, statement.parameters):
+            values = dict(zip(fields, row))
+            values["mail_id"] = f"mid-{values['message_pk']}"
+            results.append(MessageHeader.model_validate(values))
+        return results
     finally:
         database.close()
 
