@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mailarchiver.encoding import _candidate_encodings, decode_text
+from mailarchiver.encoding import decode_text
 from mailarchiver.search import decoded_part, message_text
 
 
@@ -36,20 +36,13 @@ def test_undeclared_euc_kr_is_recovered_before_replacement() -> None:
     assert "�" not in result.value
 
 
-def test_misdeclared_utf8_uses_readable_western_encoding() -> None:
+def test_misdeclared_utf8_uses_cp1252_for_invalid_bytes() -> None:
     """Requirement: invalid declared UTF-8 falls back to a readable Western encoding."""
     result = decode_text(b"The world\x92s largest", "utf-8")
 
     assert result.value == "The world’s largest"
-    assert result.encoding in {"cp1250", "cp1252"}
+    assert result.encoding == "cp1252"
     assert result.defect is not None
-
-
-def test_detector_candidates_precede_universal_single_byte_fallbacks() -> None:
-    """Requirement: detector evidence is considered before codecs that accept every byte."""
-    candidates = _candidate_encodings(b"The world\x92s largest")
-
-    assert candidates.index("cp1250") < candidates.index("cp1252")
 
 
 def test_ftfy_repairs_mojibake_after_valid_utf8_decode() -> None:

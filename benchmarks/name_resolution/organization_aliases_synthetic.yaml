@@ -1,0 +1,37 @@
+- case_id: organization-short-initials
+  address: am@aerostat.example.test
+  pattern: short-initials
+  observed_names:
+    - ""
+    - ""
+  expected_name: Avery Morgan
+  expected_group: synthetic-person-001
+- case_id: public-mail-concatenated
+  address: averymorgan@post.example.test
+  pattern: concatenated-full-name
+  observed_names:
+    - Avery Morgan
+  expected_name: Avery Morgan
+  expected_group: synthetic-person-001
+- case_id: academic-initials-number
+  address: am51@cambridge.example.test
+  pattern: initials-with-numeric-suffix
+  observed_names:
+    - Morgan, Avery
+  expected_name: Avery Morgan
+  expected_group: synthetic-person-001
+- case_id: university-concatenated
+  address: averymorgan@redwood.example.test
+  pattern: concatenated-full-name
+  observed_names:
+    - ""
+  expected_name: Avery Morgan
+  expected_group: synthetic-person-001
+- case_id: museum-dotted-full-name
+  address: avery.morgan@river-museum.example.test
+  pattern: dotted-full-name
+  observed_names:
+    - A. Morgan
+    - ""
+  expected_name: Avery Morgan
+  expected_group: synthetic-person-001
