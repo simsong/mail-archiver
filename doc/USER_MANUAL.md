@@ -276,8 +276,8 @@ the visible headers and body. Press Return or Command-F to move to the next
 match; Escape closes the bar. Command-Shift-U opens the message's raw RFC 5322
 source in a new window. Command-A while the message heading has focus selects
 only the heading text. Command-A in the result list selects all visible rows;
-when at least two are selected, drag the ZIP control below the list to export
-exact `mid-####.eml` files.
+when at least two are selected, activate **Save selected ZIP** below the list
+to save the exact `mid-####.eml` files or drag the same control to Finder.
 
 Drag the message icon to Finder to create an exact `mid-####.eml` file on the
 fly. Double-clicking that icon opens the same temporary `.eml` file. Double-

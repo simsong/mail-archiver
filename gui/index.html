@@ -50,9 +50,11 @@
           </div>
           <div id="result-list" role="listbox" aria-label="Search results" tabindex="0"></div>
           <button id="load-more" class="load-more" type="button" hidden>Load more</button>
-          <div id="bulk-drag" class="bulk-drag" draggable="true" hidden title="Drag selected messages as a ZIP">
-            <span aria-hidden="true">▣</span> Drag selected messages
-          </div>
+          <button id="bulk-drag" class="bulk-drag" type="button" draggable="true" hidden
+                  title="Save selected messages as a ZIP or drag them to Finder"
+                  aria-label="Save selected messages as a ZIP">
+            <span aria-hidden="true">▣</span> Save selected ZIP
+          </button>
         </aside>
 
         <article class="message" id="message-pane">
