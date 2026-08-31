@@ -52,7 +52,13 @@ directory, and a `data/mbox/` payload directory.
   input mailbox stream. For a filesystem message with no prior resolved date,
   derive the year from a four-digit year in the source path and record that
   fallback. Never route ordinary input to a `0000` mailbox merely because its
-  date is absent.
+  date is absent. If no `Received:` timestamp is usable and the `Date:` header
+  is missing or has an epoch-like year through 1980, scan decoded text bodies
+  for embedded `Date:` headers and configured localized quoted-date patterns.
+  Use the most recent plausible candidate and record `body-embedded` as
+  `date_source`, while retaining the original bytes. These patterns are
+  packaged configuration, not source-code literals, so supported language
+  forms can be added without changing the parser.
 * `X-Apple-Auto-Saved` messages are excluded entirely.  Their source and
   exclusion reason are retained in the primary database, but no MBOX copy is
   created.
@@ -381,7 +387,11 @@ text occupy separate FTS5 tables so callers can exclude attachments from the
 default search. It does not index attachment bytes by default.
 `--index-attachments` populates the separate table with decoded text
 attachments. Binary attachment extraction through Apache Tika is not yet
-implemented; the optional Tika installer only downloads and verifies the JAR.
+implemented; the optional installer downloads, SHA-512 verifies, and unpacks
+the complete Tika 4 `tika-app` distribution (JAR plus `lib/` directory).
+It rejects checksum metadata unless its first token is exactly 128 hexadecimal
+characters, and removes the private temporary extraction directory after any
+failed extraction, layout validation, or rename.
 The search database must be fully rebuildable from the
 canonical MBOX files and `archive.sqlite3`, and is not backed up as a required
 preservation object.

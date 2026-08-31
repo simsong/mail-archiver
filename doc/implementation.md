@@ -617,10 +617,13 @@ subject matches scan the canonical subject column rather than creating
 a second subject store. Ordinary `message_metadata.sha256` is the indexed lookup key for the
 corresponding FTS row IDs; updates and recovery delete FTS rows by row ID rather
 than filtering the virtual tables on their unindexed SHA-256 columns. The
-Makefile's `install-mac` and `install-linux` targets
-download Apache Tika's checksum-verified application JAR to the ignored
-project-local `.tools/tika/<version>/` directory; Tika remains an optional
-future extractor for PDF and Office attachments, not a service.  Rebuild the
+Makefile's `install-mac` and `install-linux` targets download, SHA-512 verify,
+and unpack Tika 4's application ZIP distribution under the ignored
+project-local `.tools/tika/<version>/` directory. The runnable JAR and its
+adjacent `lib/` directory remain together. The checksum token must be exactly
+128 hexadecimal characters. Failed extraction, layout validation, or rename
+removes the private temporary directory. Tika is an optional future extractor
+for PDF and Office attachments, not a service. Rebuild the
 index in a temporary database,
 validate row identities against `archive.sqlite3`, then atomically replace the
 old search database. Live indexing and `refresh-index` both exclude
@@ -664,11 +667,16 @@ An ingest run executes these steps:
    header line ending.
 4. Hash the raw RFC 5322 bytes and parse only headers needed for identity,
    classification, and exclusion. Resolve dates by comparing `Date:` with the
-   trimmed UTC median of valid `Received:` timestamps. When neither header
-   supplies a date, use the message-specific `source_date_utc`, then the prior
-   resolved message date in the same input stream. A filesystem message still
-   lacking a date derives its year from a four-digit year in the source path;
-   record every fallback source in the catalog.
+   trimmed UTC median of valid `Received:` timestamps. When no usable
+   `Received:` timestamp exists and the `Date:` header is missing or has an
+   epoch-like year through 1980, scan decoded text bodies for embedded `Date:`
+   headers and the localized patterns in the packaged
+   `message_patterns.yaml`, choosing the most recent plausible candidate and
+   recording `body-embedded`. When no header or body date supplies a result,
+   use the message-specific `source_date_utc`, then the
+   prior resolved message date in the same input stream. A filesystem message
+   still lacking a date derives its year from a four-digit year in the source
+   path; record every fallback source in the catalog.
    An unexpected parser exception records the source display name, opaque
    cursor and numeric byte offset when available, raw
    hash, and exception before stopping; earlier messages published by any file

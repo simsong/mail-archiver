@@ -1,10 +1,16 @@
-.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance validation-aws-start validation-aws-start-all validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
+.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke 
+.PHONY: install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality 
+.PHONY: test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance test-tika validation-aws-start validation-aws-start-all  
+.PHONY: validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
 
-TIKA_VERSION ?= 3.3.2
+
+TIKA_VERSION ?= 4.0.0
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
 TIKA_JAR := $(TIKA_DIR)/tika-app-$(TIKA_VERSION).jar
-TIKA_SHA512 := $(TIKA_JAR).sha512
-TIKA_URL := https://downloads.apache.org/tika/$(TIKA_VERSION)/tika-app-$(TIKA_VERSION).jar
+TIKA_DOWNLOAD_DIR ?= $(CURDIR)/.tools/tika/downloads
+TIKA_ARCHIVE := $(TIKA_DOWNLOAD_DIR)/tika-app-$(TIKA_VERSION).zip
+TIKA_SHA512 := $(TIKA_ARCHIVE).sha512
+TIKA_URL := https://downloads.apache.org/tika/$(TIKA_VERSION)/tika-app-$(TIKA_VERSION).zip
 PLAYWRIGHT_INSTALL_ARGS ?= chromium
 AUDIT_OUTPUT ?= $(CURDIR)/.tmp/data-quality-audit
 VALIDATION_DATA_DIR ?= $(CURDIR)/data
@@ -103,6 +109,9 @@ test-headers:
 test-progress:
 	uv run pytest -q tests/test_progress.py tests/test_sources.py
 
+test-tika:
+	uv run pytest -q tests/test_tika.py
+
 test-plugins:
 	uv run pytest -q tests/test_plugin_loader.py tests/test_source_integrity.py tests/test_archive_integrity.py
 
@@ -169,10 +178,11 @@ install-test-browser:
 
 install-tika:
 	@command -v java >/dev/null || { echo "Apache Tika needs a Java runtime (Java 17 or newer)."; exit 1; }
-	@mkdir -p "$(TIKA_DIR)"
-	curl --fail --location --output "$(TIKA_JAR)" "$(TIKA_URL)"
+	@test ! -e "$(TIKA_DIR)" || { echo "Tika is already installed at $(TIKA_DIR)"; exit 1; }
+	@mkdir -p "$(TIKA_DOWNLOAD_DIR)"
+	curl --fail --location --output "$(TIKA_ARCHIVE)" "$(TIKA_URL)"
 	curl --fail --location --output "$(TIKA_SHA512)" "$(TIKA_URL).sha512"
-	@expected=$$(awk '{print $$1}' "$(TIKA_SHA512)"); actual=$$(shasum -a 512 "$(TIKA_JAR)" | awk '{print $$1}'); test "$$expected" = "$$actual" || { echo "Tika SHA-512 verification failed"; rm -f "$(TIKA_JAR)" "$(TIKA_SHA512)"; exit 1; }
+	uv run python -m mailarchiver.tika --archive "$(TIKA_ARCHIVE)" --checksum "$(TIKA_SHA512)" --destination "$(TIKA_DIR)" --version "$(TIKA_VERSION)"
 	@echo "Installed and verified $(TIKA_JAR)"
 
 ocr-inventory:
