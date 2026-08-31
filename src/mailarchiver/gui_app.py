@@ -217,10 +217,11 @@ class GuiApi:
         direction: str = "descending",
         search_attachments: bool = False,
         mailbox_selections: list[str] | None = None,
+        find_older: bool = False,
     ) -> dict[str, object]:
         return search_page(
             self._archive(), query, offset, DEFAULT_PAGE_SIZE, sort_by, direction,
-            search_attachments, mailbox_selections,
+            search_attachments, mailbox_selections, find_older,
         ).model_dump(mode="json")
 
     def suggestions(self, query: str, limit: int = 20) -> dict[str, object]:

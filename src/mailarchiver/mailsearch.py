@@ -26,7 +26,7 @@ from .mbox import MboxLocation, read_verified_location
 from .search import SEARCH_CATEGORIES, decoded_part, html_text, is_attachment
 
 DEFAULT_LIMIT = 10
-RECENT_FTS_SCAN_LIMIT = 1000
+RECENT_FTS_SCAN_LIMIT = 10_000
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
@@ -58,6 +58,11 @@ class MessageHeader(BaseModel):
 class SearchStatement(BaseModel):
     sql: str
     parameters: list[str | int]
+
+
+class SearchHeaderPage(BaseModel):
+    results: list[MessageHeader]
+    older_results_unchecked: bool = False
 
 
 class SortField(StrEnum):
@@ -118,6 +123,7 @@ def _search_statement(
     direction: SortDirection = SortDirection.DESCENDING,
     search_attachments: bool = False,
     mailbox_selections: list[MailboxSelection] | None = None,
+    newest_page: bool = False,
 ) -> SearchStatement:
     clauses = ["m.category IN (?, ?)"]
     parameters: list[str | int] = list(SEARCH_CATEGORIES)
@@ -183,17 +189,20 @@ def _search_statement(
             "JOIN source_files USING (source_file_pk) JOIN source_volumes USING (source_volume_pk) "
             "WHERE observations.message_pk = m.message_pk AND (" + " OR ".join(alternatives) + "))"
         )
+    candidate_sort = SortField.DATE if newest_page else sort_by
+    candidate_direction = SortDirection.DESCENDING if newest_page else direction
     candidate_order = {
         SortField.DATE: "m.date_utc",
         SortField.SUBJECT: "lower(m.subject)",
         SortField.SENDER: "lower(sender.address)",
-    }[sort_by]
+    }[candidate_sort]
     result_order = {
         SortField.DATE: "c.date_utc",
         SortField.SUBJECT: "lower(c.subject)",
         SortField.SENDER: "lower(c.sender)",
     }[sort_by]
-    order_direction = "ASC" if direction == SortDirection.ASCENDING else "DESC"
+    candidate_order_direction = "ASC" if candidate_direction == SortDirection.ASCENDING else "DESC"
+    result_order_direction = "ASC" if direction == SortDirection.ASCENDING else "DESC"
     limit_clause = "" if limit == 0 else "LIMIT ? OFFSET ? "
     if limit:
         parameters.extend((limit, offset))
@@ -223,20 +232,33 @@ def _search_statement(
         "SELECT m.message_pk, m.sha256, sender.address AS sender, m.subject, m.date_utc "
         f"FROM {candidate_source}"
         f"WHERE {' AND '.join(clauses)} "
-        f"ORDER BY {candidate_order} {order_direction}, m.message_pk {order_direction} {limit_clause}"
+        f"ORDER BY {candidate_order} {candidate_order_direction}, "
+        f"m.message_pk {candidate_order_direction} {limit_clause}"
         ") SELECT c.message_pk, COALESCE(group_concat(DISTINCT recipient.address), ''), c.sender, c.subject, c.date_utc, "
         "COALESCE(metadata.attachment_count, 0) FROM candidates c "
         "LEFT JOIN search.message_metadata metadata ON metadata.sha256 = c.sha256 "
         "LEFT JOIN recipients r ON r.message_pk = c.message_pk "
         "LEFT JOIN email_addresses recipient ON recipient.address_pk = r.address_pk "
         "GROUP BY c.message_pk "
-        f"ORDER BY {result_order} {order_direction}, c.message_pk {order_direction}"
+        f"ORDER BY {result_order} {result_order_direction}, c.message_pk {result_order_direction}"
     )
     return SearchStatement(sql=sql, parameters=parameters)
 
 
-def _recent_text_statement(terms: SearchTerms, limit: int, offset: int) -> SearchStatement:
+def _recent_text_statement(
+    terms: SearchTerms,
+    limit: int,
+    offset: int,
+    sort_by: SortField = SortField.DATE,
+    direction: SortDirection = SortDirection.DESCENDING,
+) -> SearchStatement:
     """Search a bounded newest-first catalog window by indexed FTS row ID."""
+    result_order = {
+        SortField.DATE: "c.date_utc",
+        SortField.SUBJECT: "lower(c.subject)",
+        SortField.SENDER: "lower(c.sender)",
+    }[sort_by]
+    result_direction = "ASC" if direction is SortDirection.ASCENDING else "DESC"
     sql = (
         "WITH recent AS NOT MATERIALIZED ("
         "SELECT m.message_pk, m.sha256, sender.address AS sender, m.subject, m.date_utc "
@@ -257,7 +279,7 @@ def _recent_text_statement(terms: SearchTerms, limit: int, offset: int) -> Searc
         "LEFT JOIN recipients r ON r.message_pk = c.message_pk "
         "LEFT JOIN email_addresses recipient ON recipient.address_pk = r.address_pk "
         "GROUP BY c.message_pk "
-        "ORDER BY c.date_utc DESC, c.message_pk DESC"
+        f"ORDER BY {result_order} {result_direction}, c.message_pk {result_direction}"
     )
     return SearchStatement(
         sql=sql,
@@ -287,12 +309,53 @@ def _is_plain_recent_text_search(
     return bool(
         terms.text
         and limit
-        and sort_by is SortField.DATE
-        and direction is SortDirection.DESCENDING
+        and (sort_by is not SortField.DATE or direction is SortDirection.DESCENDING)
         and not search_attachments
         and not mailbox_selections
         and not any(structured)
     )
+
+
+def search_header_page(
+    archive: Path,
+    terms: SearchTerms,
+    limit: int,
+    offset: int = 0,
+    sort_by: SortField = SortField.DATE,
+    direction: SortDirection = SortDirection.DESCENDING,
+    search_attachments: bool = False,
+    mailbox_selections: list[MailboxSelection] | None = None,
+    find_older: bool = False,
+) -> SearchHeaderPage:
+    catalog_path, search_path = archive / "archive.sqlite3", archive / "search.sqlite3"
+    if not catalog_path.is_file() or not search_path.is_file():
+        raise ValueError(f"{archive} must contain archive.sqlite3 and search.sqlite3")
+    database = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
+    try:
+        database.execute("ATTACH DATABASE ? AS search", (f"file:{search_path}?mode=ro",))
+        fields = ("message_pk", "recipients", "sender", "subject", "date_utc", "attachment_count")
+        recent_eligible = _is_plain_recent_text_search(
+            terms, limit, sort_by, direction, search_attachments, mailbox_selections
+        )
+        if recent_eligible and not find_older:
+            recent = _recent_text_statement(terms, limit, offset, sort_by, direction)
+            rows = database.execute(recent.sql, recent.parameters).fetchall()
+            return SearchHeaderPage(
+                results=[MessageHeader.model_validate(dict(zip(fields, row))) for row in rows],
+                older_results_unchecked=True,
+            )
+        statement = _search_statement(
+            terms, limit, offset, sort_by, direction, search_attachments, mailbox_selections,
+            newest_page=find_older and recent_eligible,
+        )
+        return SearchHeaderPage(
+            results=[
+                MessageHeader.model_validate(dict(zip(fields, row)))
+                for row in database.execute(statement.sql, statement.parameters)
+            ]
+        )
+    finally:
+        database.close()
 
 
 def search_headers(
@@ -305,26 +368,16 @@ def search_headers(
     search_attachments: bool = False,
     mailbox_selections: list[MailboxSelection] | None = None,
 ) -> list[MessageHeader]:
-    catalog_path, search_path = archive / "archive.sqlite3", archive / "search.sqlite3"
-    if not catalog_path.is_file() or not search_path.is_file():
-        raise ValueError(f"{archive} must contain archive.sqlite3 and search.sqlite3")
-    database = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
-    try:
-        database.execute("ATTACH DATABASE ? AS search", (f"file:{search_path}?mode=ro",))
-        fields = ("message_pk", "recipients", "sender", "subject", "date_utc", "attachment_count")
-        if _is_plain_recent_text_search(
-            terms, limit, sort_by, direction, search_attachments, mailbox_selections
-        ):
-            recent = _recent_text_statement(terms, limit, offset)
-            rows = database.execute(recent.sql, recent.parameters).fetchall()
-            if len(rows) == limit:
-                return [MessageHeader.model_validate(dict(zip(fields, row))) for row in rows]
-        statement = _search_statement(
-            terms, limit, offset, sort_by, direction, search_attachments, mailbox_selections
-        )
-        return [MessageHeader.model_validate(dict(zip(fields, row))) for row in database.execute(statement.sql, statement.parameters)]
-    finally:
-        database.close()
+    """Return an exact CLI page, using recent results only when they fill it."""
+    page = search_header_page(
+        archive, terms, limit, offset, sort_by, direction, search_attachments, mailbox_selections
+    )
+    if not page.older_results_unchecked or len(page.results) == limit:
+        return page.results
+    return search_header_page(
+        archive, terms, limit, offset, sort_by, direction, search_attachments, mailbox_selections,
+        find_older=True,
+    ).results
 
 
 def rendered_headers(message: Message, full: bool) -> str:

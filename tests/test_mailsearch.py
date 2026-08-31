@@ -23,6 +23,7 @@ from mailarchiver.mailsearch import (
     _recent_text_statement,
     format_header,
     render_message,
+    search_header_page,
     search_headers,
 )
 from mailarchiver.mbox import add_message
@@ -208,11 +209,15 @@ def test_common_text_fast_path_returns_newest_requested_page(tmp_path: Path) -> 
     try:
         sender = address_pk(catalog, "sender@example.net")
         for number in range(12):
-            raw = f"Message-ID: <{number}@example>\nFrom: sender@example.net\n\ncommon-search-needle\n".encode()
+            subject = f"subject-{number * 7 % 12:02d}"
+            raw = (
+                f"Message-ID: <{number}@example>\nFrom: sender@example.net\n"
+                f"Subject: {subject}\n\ncommon-search-needle\n"
+            ).encode()
             catalog.execute(
                 "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
-                "VALUES (?, ?, ?, '', '2024-01-01T00:00:00+00:00', 'date', 'Archive')",
-                (f"{number}@example", hashlib.sha256(raw).hexdigest(), sender),
+                "VALUES (?, ?, ?, ?, '2024-01-01T00:00:00+00:00', 'date', 'Archive')",
+                (f"{number}@example", hashlib.sha256(raw).hexdigest(), sender, subject),
             )
             index_message(search, raw, False)
         catalog.commit()
@@ -224,6 +229,29 @@ def test_common_text_fast_path_returns_newest_requested_page(tmp_path: Path) -> 
     found = search_headers(archive, SearchTerms(text=["common-search-needle"]), 10)
 
     assert [header.message_pk for header in found] == list(range(12, 2, -1))
+
+    subject_page = search_header_page(
+        archive,
+        SearchTerms(text=["common-search-needle"]),
+        10,
+        sort_by=SortField.SUBJECT,
+        direction=SortDirection.ASCENDING,
+    )
+    expected = sorted(range(3, 13), key=lambda message_pk: ((message_pk - 1) * 7 % 12, message_pk))
+    assert subject_page.older_results_unchecked
+    assert [header.message_pk for header in subject_page.results] == expected
+
+    older_page = search_header_page(
+        archive,
+        SearchTerms(text=["common-search-needle"]),
+        10,
+        offset=10,
+        sort_by=SortField.SUBJECT,
+        direction=SortDirection.ASCENDING,
+        find_older=True,
+    )
+    assert not older_page.older_results_unchecked
+    assert [header.message_pk for header in older_page.results] == [1, 2]
 
 
 def test_sparse_text_match_beyond_recent_window_uses_exact_fallback(tmp_path: Path) -> None:

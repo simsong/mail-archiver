@@ -146,6 +146,21 @@ def test_gui_search_field_preserves_selector_and_quote_semantics(tmp_path: Path)
     assert [result.subject for result in search_page(archive, 'subject:"annual plan" report').results] == ["annual plan"]
 
 
+def test_gui_partial_recent_search_defers_complete_older_search(tmp_path: Path) -> None:
+    """Requirement: partial recent FTS results display before an explicit older-message search."""
+    archive = make_gui_archive(tmp_path)
+
+    recent = search_page(archive, "report")
+    assert [result.message_pk for result in recent.results] == [1]
+    assert recent.older_results_unchecked
+    assert recent.has_more
+
+    older = search_page(archive, "report", offset=1, find_older=True)
+    assert older.results == []
+    assert not older.older_results_unchecked
+    assert not older.has_more
+
+
 def test_gui_application_metadata_names_the_product() -> None:
     """Requirement: native menus and the About panel identify Mail Archiver, not Python."""
     metadata = application_metadata()

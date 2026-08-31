@@ -43,6 +43,10 @@
     document.getElementById("ingest-status-line").click();
     await waitFor(() => document.getElementById("ingest-status-line").dataset.openedWindow === "true", "ingest status line invokes the independent ingest window");
     assert(!document.getElementById("load-more").hidden, "pagination control displayed");
+    assert(
+      document.getElementById("load-more").textContent.startsWith("Find older ones — shown:"),
+      "pagination control names older results and the displayed date range",
+    );
     await waitFor(() => document.querySelector(".result-preview")?.textContent.length > 0, "background preview displayed");
 
     const searchInput = document.getElementById("search");
@@ -84,8 +88,8 @@
     await waitFor(() => !document.querySelector(".search-chip") && rows().length === 100, "subject filter chip can be removed");
 
     document.getElementById("load-more").click();
-    await waitFor(() => rows().length === 107, "Load More appends the second page");
-    assert(document.getElementById("load-more").hidden, "Load More hides on the final page");
+    await waitFor(() => rows().length === 107, "Find older ones appends the second page");
+    assert(document.getElementById("load-more").hidden, "Find older ones hides on the final page");
     const chooseArchive = document.getElementById("choose-archive");
     const completedChoices = chooseArchive.dataset.completed || "0";
     chooseArchive.click();
@@ -102,6 +106,12 @@
     assert(document.getElementById("sort-direction").textContent === "↑", "sort direction control updates");
 
     await search("Appendixquartz", 0, false);
+    assert(
+      !document.getElementById("load-more").hidden && document.getElementById("load-more").textContent === "Find older ones",
+      "partial recent search offers an explicit complete older-message search",
+    );
+    document.getElementById("load-more").click();
+    await waitFor(() => document.getElementById("load-more").hidden, "complete older-message search confirms no body match");
     await search("Appendixquartz", 1, true);
     assert(subjects()[0] === "Rich UI message", "attachment-only match identifies its message");
 

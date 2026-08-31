@@ -7,6 +7,8 @@ const state = {
   sortBy: "date",
   sortDirection: "descending",
   searchAttachments: false,
+  completeSearch: false,
+  olderResultsUnchecked: false,
   selected: null,
   selectionRequest: null,
   searchRequest: 0,
@@ -121,6 +123,8 @@ function resetArchiveView() {
   state.view = null;
   state.mailboxTree = [];
   state.searchFilters = [];
+  state.completeSearch = false;
+  state.olderResultsUnchecked = false;
   state.dragExports.clear();
   renderSearchFilters();
   closeSuggestions();
@@ -578,18 +582,22 @@ async function runSearch(append) {
   const sortDirection = state.sortDirection;
   const searchAttachments = elements["search-attachments"].checked;
   const sameSearch = query === state.query && sortBy === state.sortBy && sortDirection === state.sortDirection && searchAttachments === state.searchAttachments;
-  const offset = append && sameSearch ? state.offset : 0;
+  const continuing = append && sameSearch;
+  const offset = continuing ? state.offset : 0;
+  const findOlder = continuing && (state.completeSearch || state.olderResultsUnchecked);
   const request = ++state.searchRequest;
   elements["result-status"].textContent = "Searching…";
   const mailboxSelections = state.showTree ? [...state.mailboxSelections] : [];
   const page = await call(() => window.pywebview.api.search(
-    query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections,
+    query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections, findOlder,
   ));
   if (!page || request !== state.searchRequest) return;
   state.query = query;
   state.sortBy = sortBy;
   state.sortDirection = sortDirection;
   state.searchAttachments = searchAttachments;
+  state.completeSearch = findOlder;
+  state.olderResultsUnchecked = page.older_results_unchecked;
   state.offset = offset + page.results.length;
   if (!append) elements["result-list"].replaceChildren();
   for (const result of page.results) {
@@ -598,7 +606,26 @@ async function runSearch(append) {
   }
   requestPreviews(page.results.map(result => result.message_pk));
   elements["result-status"].textContent = `${state.offset.toLocaleString()} message${state.offset === 1 ? "" : "s"}${page.has_more ? " shown" : ""}`;
-  elements["load-more"].hidden = !page.has_more;
+  updateFindOlder(page.has_more);
+}
+
+function updateFindOlder(hasMore) {
+  const button = elements["load-more"];
+  button.hidden = !hasMore;
+  if (!hasMore) {
+    button.textContent = "Find older ones";
+    return;
+  }
+  const dates = [...document.querySelectorAll("#result-list .result")]
+    .map(row => new Date(row.dataset.dateUtc))
+    .filter(date => !Number.isNaN(date.valueOf()))
+    .sort((left, right) => left - right);
+  const range = dates.length
+    ? dates[0].valueOf() === dates[dates.length - 1].valueOf()
+      ? formatDate(dates[0].toISOString())
+      : `${formatDate(dates[0].toISOString())}–${formatDate(dates[dates.length - 1].toISOString())}`
+    : "";
+  button.textContent = range ? `Find older ones — shown: ${range}` : "Find older ones";
 }
 
 function toggleSortDirection() {
@@ -617,6 +644,7 @@ function resultRow(result) {
   row.setAttribute("role", "option");
   row.setAttribute("aria-selected", "false");
   row.dataset.messagePk = result.message_pk;
+  row.dataset.dateUtc = result.date_utc;
   row.draggable = true;
   const subjectLine = document.createElement("div");
   subjectLine.className = "result-subject-line";

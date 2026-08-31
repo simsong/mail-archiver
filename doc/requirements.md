@@ -432,11 +432,20 @@ lookups. Bounded date-ordered listings must use the date/message index to
 select the requested page before recipient aggregation. Year-scoped reports
 must express their bounds as indexed `date_utc` ranges rather than applying a
 function to every stored date.
-An ordinary body-text search in newest-first order may first test a bounded
-window from that date/message index against the message's indexed FTS row ID.
-It may return that page only when the window contains every requested row;
-otherwise it must fall back to the complete FTS-to-catalog query. Limiting the
-unordered FTS hit list is forbidden because it can omit newer matches.
+An ordinary body-text GUI search may first test the 10,000 newest catalog
+messages from that date/message index against each message's indexed FTS row
+ID. A partial page is returned immediately with an explicit indication that
+older results have not been checked; it must not be represented as a complete
+result set. **Find older ones** then runs the complete FTS-to-catalog query
+from the number of results already displayed, without skipping or duplicating
+messages. The command-line search remains exact and performs that fallback
+automatically when the recent search does not fill its requested page.
+Selecting Subject or Sender (author) rather than Date must still select the
+most recent matching messages; the alternate sort applies within each page,
+not globally across older unchecked mail. The **Find older ones** control must
+include the displayed messages' oldest-to-newest date range when results are
+visible. Limiting the unordered FTS hit list is forbidden because it can omit
+newer matches.
 Index extraction and insertion happen after canonical MBOX/catalog publication.
 An indexing failure is recorded as a metadata defect and does not reject mail;
 `refresh-index` repairs missing disposable content.

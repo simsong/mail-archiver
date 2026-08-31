@@ -390,10 +390,12 @@ available when the user needs the source representation.
 
 The `gui/` prototype uses pywebview's Cocoa/WKWebView backend on macOS.  Its
 Python API delegates query parsing, SQLite reads, and direct MBOX retrieval to
-the same typed functions used by `mailsearch`.  Search pages request 101 rows
-to return 100 plus a `has_more` indicator.  The UI is conventional: a search
-toolbar above a result list and message pane. Independent message windows load
-the same static application with a message-number parameter.
+the same typed functions used by `mailsearch`. Search pages request 101 rows
+to return 100 plus `has_more`; `older_results_unchecked` separately says that
+the page came from the recent-message search and that older mail has not yet
+been searched. The UI is conventional: a search toolbar above a result list
+and message pane. Independent message windows load the same static application
+with a message-number parameter.
 The main window polls the latest shared `IngestStatus` once per second and
 renders it in a bottom status line. The separate `ingests.html` application
 polls all typed status files and presents run history beside aggregate and
@@ -406,13 +408,21 @@ five seconds is displayed as stale without rewriting its retained JSON.
 Result ordering is a server-side SQL whitelist over date, case-folded subject,
 or case-folded sender with a stable message-number tie break. The listbox owns
 keyboard focus after a pointer selection and implements Up/Down selection.
-Pure body-text searches in the default newest-first order first scan at most
-1,000 messages through `messages_date_message` and test each candidate through
-the indexed `message_metadata.sha256` to FTS-row-ID mapping. A full requested
-page proves that no older match can displace it. A short page transparently
-reruns the complete SHA-256/FTS query, preserving sparse searches, deep pages,
-and empty results. Structured, attachment, alternate-sort, and unlimited
-searches continue to use the complete query directly.
+Pure body-text GUI searches first scan at most 10,000 messages through
+`messages_date_message` and test each candidate through the indexed
+`message_metadata.sha256` to FTS-row-ID mapping. The GUI displays all matches
+found for the requested page, including a short page, instead of discarding
+them and immediately starting the complete query. Its **Find older ones**
+button includes the oldest and newest dates among the displayed rows. When
+activated, the GUI requests the complete SHA-256/FTS query starting at the
+number of rows already displayed; the typed response then clears
+`older_results_unchecked` and reports whether another complete-query page
+exists. Subject and Sender (author) modes select page membership newest-first
+by date and then order that page by the requested field and direction, so they
+do not replace recent results with a global alphabetical page. `mailsearch`
+retains exact one-call behavior by performing the complete query itself after
+a short recent page. Structured, attachment, date-ascending, mailbox-filtered,
+and unlimited searches continue to use the complete query directly.
 Result paperclips use attachment counts joined from the disposable search
 metadata without rereading MBOX content. Each row reserves a third line; after
 the header rows are painted, JavaScript queues one page of preview IDs through
