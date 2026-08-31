@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime, timezone
 import subprocess
 import sys
 from pathlib import Path
 from shutil import copytree
 
-from mailarchiver.bagit import refresh_tag_manifest
+from mailarchiver.bagit import _write_bag_info, refresh_tag_manifest
 from mailarchiver.standalone_verify import verify_archive
 import mailarchiver.standalone_verify as standalone_verify
 
 
 FIXTURE = Path(__file__).parent / "data" / "three-message-mailbag"
+
+
+def test_bag_info_reports_the_package_release_version(tmp_path: Path) -> None:
+    """Requirement: generated Mailbag metadata carries the package release identity."""
+    _write_bag_info(tmp_path, 0, 0, datetime(2026, 8, 30, tzinfo=timezone.utc))
+
+    assert "Mailbag-Agent-Version: 0.1.0" in (tmp_path / "bag-info.txt").read_text(encoding="utf-8")
 
 
 def test_checked_in_three_message_mailbag_validates_without_sqlite() -> None:

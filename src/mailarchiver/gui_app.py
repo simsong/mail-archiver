@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
@@ -352,15 +353,43 @@ class GuiApi:
 
     def prepare_drag_zip(self, message_pks: list[int]) -> dict[str, str]:
         unique = list(dict.fromkeys(message_pks))
-        if not unique or len(unique) > DEFAULT_PAGE_SIZE:
-            raise ValueError(f"request between 1 and {DEFAULT_PAGE_SIZE} messages")
         destination = self.temporary_directory / "selected-messages.zip"
-        temporary = destination.with_suffix(".zip.tmp")
-        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
-            for message_pk in unique:
-                archive.writestr(f"mid-{message_pk}.eml", read_message_bytes(self._archive(), message_pk))
-        temporary.replace(destination)
+        self._write_message_zip(unique, destination)
         return DragExport(filename=destination.name, url=destination.as_uri()).model_dump()
+
+    def save_selected_zip(self, message_pks: list[int]) -> str | None:
+        unique = list(dict.fromkeys(message_pks))
+        if not unique:
+            raise ValueError("request at least one message")
+        if self.e2e_directory is not None:
+            destination = self.e2e_directory / "saved-selected-messages.zip"
+        else:
+            selected = self.window.create_file_dialog(
+                webview.FileDialog.SAVE,
+                directory=str(Path.home() / "Desktop"),
+                save_filename="selected-messages.zip",
+                file_types=("ZIP archive (*.zip)",),
+            )
+            if not selected:
+                return None
+            destination = Path(selected[0])
+            if destination.suffix.casefold() != ".zip":
+                destination = destination.with_suffix(".zip")
+        self._write_message_zip(unique, destination)
+        return str(destination)
+
+    def _write_message_zip(self, message_pks: list[int], destination: Path) -> None:
+        if not message_pks:
+            raise ValueError("request at least one message")
+        temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+                for message_pk in message_pks:
+                    archive.writestr(f"mid-{message_pk}.eml", read_message_bytes(self._archive(), message_pk))
+            temporary.replace(destination)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
 
     def open_attachment(self, message_pk: int, part_id: int, confirmed: bool = False) -> dict[str, object]:
         descriptor = attachment_descriptor(self._archive(), message_pk, part_id)

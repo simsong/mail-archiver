@@ -215,8 +215,8 @@ The window title shows the archive path and the total number of deduplicated,
 searchable messages.
 
 The About panel identifies the product as **Mail Archiver**, version **0.1.0**.
-On macOS, the Dock and application icon is the high-resolution
-`rainbow-post.svg` artwork.
+On macOS, the Dock and application use the high-resolution vector icon
+`rainbow-post.svg`.
 
 The status line at the bottom shows a running ingest, or summarizes the most
 recent run. Click it to open the independent Ingests window. You can also use
@@ -276,8 +276,8 @@ the visible headers and body. Press Return or Command-F to move to the next
 match; Escape closes the bar. Command-Shift-U opens the message's raw RFC 5322
 source in a new window. Command-A while the message heading has focus selects
 only the heading text. Command-A in the result list selects all visible rows;
-when at least two are selected, drag the ZIP control below the list to export
-exact `mid-####.eml` files.
+when at least two are selected, activate **Save selected ZIP** below the list
+to save the exact `mid-####.eml` files or drag the same control to Finder.
 
 Drag the message icon to Finder to create an exact `mid-####.eml` file on the
 fly. Double-clicking that icon opens the same temporary `.eml` file. Double-

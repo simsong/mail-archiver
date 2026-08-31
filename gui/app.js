@@ -28,6 +28,8 @@ const state = {
   suggestionItems: [],
   suggestionIndex: -1,
   bulkDragExport: null,
+  bulkDragPending: false,
+  bulkDragRequest: 0,
   findIndex: -1,
   findHits: [],
 };
@@ -82,6 +84,7 @@ async function initialize() {
   elements["result-list"].addEventListener("keydown", navigateResults);
   elements["bulk-drag"].addEventListener("dragstart", startBulkDrag);
   elements["bulk-drag"].addEventListener("pointerenter", prepareBulkDrag);
+  elements["bulk-drag"].addEventListener("click", saveBulkSelection);
   elements["part-select"].addEventListener("change", () => showPart(Number(elements["part-select"].value), false));
   elements["remote-content"].addEventListener("click", () => showPart(Number(elements["part-select"].value), true));
   elements["save-message"].addEventListener("click", () => call(() => window.pywebview.api.save_message(state.selected)));
@@ -105,8 +108,11 @@ async function initialize() {
   const message = Number(parameters.get("message"));
   if (message) {
     await selectMessage(message);
-    const part = Number(parameters.get("part"));
-    if (Number.isInteger(part)) await showPart(part, false);
+    const partParameter = parameters.get("part");
+    if (partParameter !== null) {
+      const part = Number(partParameter);
+      if (Number.isInteger(part)) await showPart(part, false);
+    }
   }
   else if (status.ready) await runSearch(false);
 }
@@ -457,6 +463,7 @@ async function loadSuggestions(query, request) {
 function renderSuggestions(suggestions) {
   state.suggestionItems = [];
   state.suggestionIndex = -1;
+  elements.search.removeAttribute("aria-activedescendant");
   const contents = [];
   const heading = label => {
     const item = document.createElement("div"); item.className = "suggestion-heading"; item.textContent = label; return item;
@@ -464,6 +471,7 @@ function renderSuggestions(suggestions) {
   const option = (icon, label, count, accept) => {
     const button = document.createElement("button");
     button.type = "button";
+    button.id = `suggestion-option-${state.suggestionItems.length}`;
     button.className = "suggestion-option";
     button.setAttribute("role", "option");
     button.setAttribute("aria-selected", "false");
@@ -506,6 +514,7 @@ function selectSuggestion(index) {
     item.element.setAttribute("aria-selected", String(active));
     if (active) item.element.scrollIntoView({block: "nearest"});
   });
+  elements.search.setAttribute("aria-activedescendant", state.suggestionItems[state.suggestionIndex].element.id);
 }
 
 function navigateSuggestions(event) {
@@ -538,6 +547,7 @@ function closeSuggestions() {
     elements["search-suggestions"].replaceChildren();
   }
   elements.search?.setAttribute("aria-expanded", "false");
+  elements.search?.removeAttribute("aria-activedescendant");
 }
 
 function addAddressFilter(suggestion) {
@@ -701,18 +711,34 @@ function updateBulkSelection() {
   for (const messagePk of [...state.bulkSelected]) if (!visible.has(messagePk)) state.bulkSelected.delete(messagePk);
   rows.forEach(row => row.classList.toggle("bulk-selected", state.bulkSelected.has(Number(row.dataset.messagePk))));
   elements["bulk-drag"].hidden = state.bulkSelected.size < 2;
-  elements["bulk-drag"].textContent = `▣ Drag ${state.bulkSelected.size} selected messages as a ZIP`;
+  elements["bulk-drag"].textContent = `▣ Save selected ZIP (${state.bulkSelected.size} messages)`;
+  elements["bulk-drag"].setAttribute("aria-label", `Save ${state.bulkSelected.size} selected messages as a ZIP`);
   state.bulkDragExport = null;
+  delete elements["bulk-drag"].dataset.ready;
+  delete elements["bulk-drag"].dataset.saved;
+  state.bulkDragRequest += 1;
   if (state.bulkSelected.size >= 2) prepareBulkDrag();
 }
 
 async function prepareBulkDrag() {
-  if (state.bulkSelected.size < 2 || state.bulkDragExport) return;
+  if (state.bulkSelected.size < 2 || state.bulkDragExport || state.bulkDragPending) return;
   const selected = [...state.bulkSelected];
+  const request = state.bulkDragRequest;
+  state.bulkDragPending = true;
   const info = await call(() => window.pywebview.api.prepare_drag_zip(selected));
-  if (info && selected.every(messagePk => state.bulkSelected.has(messagePk)) && state.bulkSelected.size === selected.length) {
+  state.bulkDragPending = false;
+  if (request === state.bulkDragRequest && info && selected.every(messagePk => state.bulkSelected.has(messagePk)) && state.bulkSelected.size === selected.length) {
     state.bulkDragExport = info;
+    elements["bulk-drag"].dataset.ready = "true";
+  } else if (request !== state.bulkDragRequest && state.bulkSelected.size >= 2) {
+    prepareBulkDrag();
   }
+}
+
+async function saveBulkSelection() {
+  if (state.bulkSelected.size < 2) return;
+  const saved = await call(() => window.pywebview.api.save_selected_zip([...state.bulkSelected]));
+  if (saved) elements["bulk-drag"].dataset.saved = "true";
 }
 
 async function startBulkDrag(event) {
@@ -904,8 +930,8 @@ function updateFind(resetIndex) {
   const query = elements["message-find-input"].value.trim();
   state.findHits = query ? highlightFindRoot(elements["message-well"], query) : [];
   const frame = elements["body-view"].querySelector("iframe");
-  if (frame?.contentDocument?.body) state.findHits.push(...highlightFindRoot(frame.contentDocument.body, query));
-  if (resetIndex || state.findIndex >= state.findHits.length) state.findIndex = 0;
+  if (query && frame?.contentDocument?.body) state.findHits.push(...highlightFindRoot(frame.contentDocument.body, query));
+  if (resetIndex || state.findIndex < 0 || state.findIndex >= state.findHits.length) state.findIndex = 0;
   elements["message-find-count"].textContent = state.findHits.length ? `${state.findIndex + 1} of ${state.findHits.length}` : "No matches";
   if (state.findHits.length) focusFindMatch();
 }
@@ -925,9 +951,11 @@ function nextFindMatch() {
 function handleFindKeydown(event) {
   if (event.key === "Enter" || (event.metaKey && event.key.toLowerCase() === "f")) {
     event.preventDefault();
+    event.stopPropagation();
     nextFindMatch();
   } else if (event.key === "Escape") {
     event.preventDefault();
+    event.stopPropagation();
     closeFind();
   }
 }

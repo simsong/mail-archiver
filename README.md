@@ -350,20 +350,33 @@ SHA-256; it does not alter canonical message bytes.
 ### Graphical search on macOS
 
 The initial graphical search tool runs on macOS using pywebview and the system
-WKWebView. It has one search field with the same selectors and quoting rules as
+WKWebView. 
+* It has one search field with the same selectors and quoting rules as
 `mailsearch`, sortable results, message and MIME-part viewing, `.eml` export
-and drag-out, printing, and attachment viewing. Typing three characters offers
+and drag-out, printing, and attachment viewing. 
+* Typing three characters offers
 ranked address and subject completions. Selected addresses become removable
 filters with **Any**, **From**, **To**, **Cc**, and **Bcc** role menus. The
 result list and message header show stable IDs such as `mid-535102`; entering
-one selects that message immediately. Command-F opens an in-window find bar in
+one selects that message immediately. 
+* Command-F opens an in-window find bar in
 the message pane; Return or Command-F advances through highlighted matches,
-and Escape closes it. Command-Shift-U opens the raw RFC 5322 source in a new
-window. Command-A in the result list selects visible messages for ZIP drag-out;
-Command-A in the message heading selects only that heading. The window title
+and Escape closes it. 
+* Command-Shift-U opens the raw RFC 5322 source in a new
+window. 
+* Command-A in the result list selects visible messages for ZIP drag-out;
+* Command-A in the message heading selects only that heading. The window title
 identifies the archive and its deduplicated searchable-message count. The
 application uses `rainbow-post.svg` in the Dock and About panel. About
 identifies the application as Mail Archiver version 0.1.0. Start it with:
+The native application uses the resolution-independent `rainbow-post.svg` icon.
+
+The result-list
+control saves the selected messages as a ZIP and remains draggable to Finder.
+The window title identifies the archive and its deduplicated searchable-message
+count. 
+
+Start it with:
 
 ```console
 make gui ARGS="--archive /path/to/mail-archive"
