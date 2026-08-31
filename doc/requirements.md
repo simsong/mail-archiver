@@ -381,7 +381,11 @@ text occupy separate FTS5 tables so callers can exclude attachments from the
 default search. It does not index attachment bytes by default.
 `--index-attachments` populates the separate table with decoded text
 attachments. Binary attachment extraction through Apache Tika is not yet
-implemented; the optional Tika installer only downloads and verifies the JAR.
+implemented; the optional installer downloads, SHA-512 verifies, and unpacks
+the complete Tika 4 `tika-app` distribution (JAR plus `lib/` directory).
+It rejects checksum metadata unless its first token is exactly 128 hexadecimal
+characters, and removes the private temporary extraction directory after any
+failed extraction, layout validation, or rename.
 The search database must be fully rebuildable from the
 canonical MBOX files and `archive.sqlite3`, and is not backed up as a required
 preservation object.
