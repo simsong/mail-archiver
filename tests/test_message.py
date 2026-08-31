@@ -235,18 +235,7 @@ def test_configured_earliest_year_is_applied_after_utc_normalization() -> None:
 
 def test_epoch_like_date_uses_latest_embedded_quoted_email_date() -> None:
     """Requirement: absent Received evidence permits a documented quoted-date fallback."""
-    raw = b"\n".join(
-        [
-            b"Message-ID: <quoted-date@example>",
-            b"From: sender@example.net",
-            b"Date: Thu, 1 Jan 1970 15:05:09 -0500",
-            b"",
-            b"Reply text.",
-            b"",
-            b"> On Wednesday, January 1, 2003, at 07:21 AM, Debby Russell wrote:",
-            b"> Date: Wed, 1 Jan 2003 07:21:00 -0500",
-        ]
-    )
+    raw = (Path(__file__).parent / "data" / "quoted_date_message.eml").read_bytes()
 
     parsed = parse_message(raw, Path("/input/2003/message.eml"), None)
 
@@ -258,15 +247,7 @@ def test_epoch_like_date_uses_latest_embedded_quoted_email_date() -> None:
 
 def test_embedded_body_date_does_not_override_credible_header_date() -> None:
     """Requirement: body dates are a fallback, never a replacement for a credible Date header."""
-    raw = b"\n".join(
-        [
-            b"Message-ID: <credible-date@example>",
-            b"From: sender@example.net",
-            b"Date: Thu, 1 Feb 2024 12:00:00 +0000",
-            b"",
-            b"> On Wednesday, January 1, 2003, at 07:21 AM, Debby Russell wrote:",
-        ]
-    )
+    raw = (Path(__file__).parent / "data" / "credible_date_with_quoted_body.eml").read_bytes()
 
     parsed = parse_message(raw, Path("/input/2024/message.eml"), None)
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from yaml import safe_load
 
 
 YEAR = re.compile(r"^(19|20)\d{2}$")
@@ -27,9 +28,22 @@ GOOGLE_CHAT_SENDER = re.compile(
 EMBEDDED_MBOX_ENVELOPE = re.compile(br"(?m)^>From [^\r\n]*\r?\n")
 HEADER_SEPARATOR = re.compile(br"\r?\n\r?\n")
 BODY_DATE_HEADER = re.compile(r"(?im)^[ \t>]*Date:[ \t]*(.+)$")
-QUOTED_BODY_DATE = re.compile(
-    r"(?im)^[ \t>]*On\s+(?:[A-Za-z]+,\s+)?"
-    r"([A-Za-z]+\s+\d{1,2},\s+\d{4},\s+at\s+\d{1,2}:\d{2}(?::\d{2})?\s+(?:AM|PM))"
+
+
+class MessagePatternConfig(BaseModel):
+    """Localized patterns used while recovering dates from quoted message text."""
+
+    quoted_body_date: list[str] = Field(min_length=1)
+
+
+def _load_message_patterns() -> MessagePatternConfig:
+    with Path(__file__).with_name("message_patterns.yaml").open(encoding="utf-8") as source:
+        return MessagePatternConfig.model_validate(safe_load(source))
+
+
+MESSAGE_PATTERNS = _load_message_patterns()
+QUOTED_BODY_DATE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE | re.MULTILINE) for pattern in MESSAGE_PATTERNS.quoted_body_date
 )
 
 
@@ -141,15 +155,16 @@ def embedded_body_date(message: Message, earliest_year: int = 1900) -> datetime 
         for value in BODY_DATE_HEADER.findall(body)
         if (parsed := parse_date(value.lstrip("> "), earliest_year)) is not None
     ]
-    for value in QUOTED_BODY_DATE.findall(body):
-        for format_string in ("%B %d, %Y, at %I:%M %p", "%b %d, %Y, at %I:%M %p"):
-            try:
-                candidate = datetime.strptime(value, format_string).replace(tzinfo=timezone.utc)
-            except ValueError:
-                continue
-            if plausible_year(candidate.year, earliest_year):
-                candidates.append(candidate)
-            break
+    for pattern in QUOTED_BODY_DATE_PATTERNS:
+        for value in pattern.findall(body):
+            for format_string in ("%B %d, %Y, at %I:%M %p", "%b %d, %Y, at %I:%M %p"):
+                try:
+                    candidate = datetime.strptime(value, format_string).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if plausible_year(candidate.year, earliest_year):
+                    candidates.append(candidate)
+                break
     return max(candidates) if candidates else None
 
 
