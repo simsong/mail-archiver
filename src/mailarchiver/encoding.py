@@ -8,13 +8,11 @@ from typing import Final
 
 from charset_normalizer import from_bytes
 from ftfy import fix_encoding
-from pycld2 import detect as detect_language
 from pydantic import BaseModel
 
 
 DETECTION_SAMPLE_BYTES: Final = 512 * 1024
 DETECTION_RESULTS: Final = 8
-LANGUAGE_SAMPLE_CHARS: Final = 64 * 1024
 FALLBACK_ENCODINGS: Final = (
     "utf-8",
     "cp1252",
@@ -36,12 +34,6 @@ class DecodedText(BaseModel):
     encoding: str
     repaired: bool = False
     defect: str | None = None
-
-
-class _EncodingCandidate(BaseModel):
-    encoding: str
-    quality: float
-    detector_rank: int
 
 
 def _encoding_name(value: str | None) -> str | None:
@@ -87,28 +79,11 @@ def _quality(text: str) -> float:
 
 def _candidate_encodings(payload: bytes) -> list[str]:
     names: list[str] = []
-    # Detector ordering is evidence.  Put universal single-byte codecs last;
-    # otherwise cp1252/Latin-1 can decode almost anything and hide better
-    # detector candidates behind an equal printable-text score.
-    for name in (*_detected_encodings(payload), *FALLBACK_ENCODINGS):
+    for name in (*FALLBACK_ENCODINGS, *_detected_encodings(payload)):
         canonical = _encoding_name(name)
         if canonical is not None and canonical not in names:
             names.append(canonical)
     return names
-
-
-def _language_quality(text: str) -> float:
-    """Use CLD2 character n-grams only as a small decoded-text tie breaker."""
-    try:
-        reliable, _, details = detect_language(text[:LANGUAGE_SAMPLE_CHARS], isPlainText=False)
-    except Exception:
-        return 0.0
-    if not reliable or not details:
-        return 0.0
-    _, language, percent, _ = details[0]
-    if language == "un":
-        return 0.0
-    return min(0.1, max(0.0, percent / 1000))
 
 
 def _repair(text: str) -> tuple[str, bool]:
@@ -148,31 +123,20 @@ def decode_text(payload: bytes, declared_encoding: str | None = None) -> Decoded
             repaired, changed = _repair(text)
             return DecodedText(value=repaired, encoding="utf-8", repaired=changed)
 
-    sample = _sample(payload)
-    candidates: list[_EncodingCandidate] = []
-    for detector_rank, encoding in enumerate(_candidate_encodings(payload)):
+    best_quality = 0.0
+    best_encoding: str | None = None
+    best_text = ""
+    for encoding in _candidate_encodings(payload):
         try:
-            text = sample.decode(encoding)
+            text = payload.decode(encoding)
         except UnicodeError:
             continue
-        candidates.append(
-            _EncodingCandidate(
-                encoding=encoding,
-                quality=_quality(text) + _language_quality(text),
-                detector_rank=detector_rank,
-            )
-        )
-    candidates.sort(key=lambda candidate: (candidate.quality, -candidate.detector_rank), reverse=True)
-    for candidate in candidates:
-        if candidate.quality <= 0.5:
-            break
-        try:
-            # Decode the complete part once, after the bounded ranking pass.
-            text = payload.decode(candidate.encoding)
-        except UnicodeError:
-            continue
-        repaired, changed = _repair(text)
-        return DecodedText(value=repaired, encoding=candidate.encoding, repaired=changed, defect=declared_error)
+        quality = _quality(text)
+        if best_encoding is None or quality > best_quality:
+            best_quality, best_encoding, best_text = quality, encoding, text
+    if best_encoding is not None and best_quality > 0.5:
+        repaired, changed = _repair(best_text)
+        return DecodedText(value=repaired, encoding=best_encoding, repaired=changed, defect=declared_error)
 
     text = payload.decode("utf-8", "replace")
     repaired, changed = _repair(text)

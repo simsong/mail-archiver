@@ -11,6 +11,24 @@ Run it only through the Makefile:
 make test-e2e
 ```
 
+## Synthetic name-resolution benchmark
+
+The privacy-safe benchmark under `benchmarks/name_resolution/` captures the
+five alias shapes needed to evaluate automatic name assembly: short initials,
+concatenated names, numeric suffixes, and dotted names across organization,
+public-mail, academic, university, and museum-style domains. All addresses
+use reserved `.test` domains and the expected identity is synthetic.
+
+Run it with:
+
+```console
+make benchmark-name-resolution
+```
+
+The current score measures only the header-only baseline; it is a benchmark
+fixture for a future resolver, not a claim that address-only names are already
+inferred.
+
 Install the pinned Chromium build once with `make install-test-browser`.
 `make test-e2e` is headless and does not create or flash a desktop window.
 
