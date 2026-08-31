@@ -443,10 +443,11 @@ def test_gui_prepares_named_single_and_multi_message_exports(tmp_path: Path) -> 
     """Requirement: drag-out exports use stable IDs and preserve exact message bytes."""
     archive = make_gui_archive(tmp_path)
     exports = tmp_path / "exports"
-    api = GuiApi(archive, temporary_directory=exports)
+    api = GuiApi(archive, temporary_directory=exports, e2e_directory=exports)
     try:
         single = api.prepare_drag(1)
         bundle = api.prepare_drag_zip([1, 2])
+        saved = api.save_selected_zip([1, 2])
     finally:
         api.close()
 
@@ -456,6 +457,9 @@ def test_gui_prepares_named_single_and_multi_message_exports(tmp_path: Path) -> 
         assert zipped.namelist() == ["mid-1.eml", "mid-2.eml"]
         assert zipped.read("mid-1.eml") == SIMPLE_MESSAGE
     assert bundle["filename"] == "selected-messages.zip"
+    assert saved == str(exports / "saved-selected-messages.zip")
+    with zipfile.ZipFile(exports / "saved-selected-messages.zip") as zipped:
+        assert zipped.namelist() == ["mid-1.eml", "mid-2.eml"]
 
 
 def test_gui_flags_executable_attachment_types() -> None:

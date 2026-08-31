@@ -360,8 +360,9 @@ one selects that message immediately. Command-F opens an in-window find bar in
 the message pane; Return or Command-F advances through highlighted matches,
 and Escape closes it. Command-Shift-U opens the raw RFC 5322 source in a new
 window. Command-A in the result list selects visible messages for ZIP drag-out;
-Command-A in the message heading selects only that heading.
-window title identifies the archive and its deduplicated searchable-message
+Command-A in the message heading selects only that heading. The result-list
+control saves the selected messages as a ZIP and remains draggable to Finder.
+The window title identifies the archive and its deduplicated searchable-message
 count. Start it with:
 
 ```console

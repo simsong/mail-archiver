@@ -404,6 +404,9 @@ The SHA-256 primary key in ordinary message metadata maps each message to its
 message-body and optional attachment FTS row IDs. Updating or removing indexed
 content must resolve SHA-256 through that ordinary index and address FTS rows
 by row ID; it must never scan an FTS table by its unindexed SHA-256 column.
+FTS-to-catalog search joins must use the indexed `message_fts_rowid` mapping;
+when attachment search is enabled, every ordinary term must match the union of
+the message-body and text-attachment FTS tables.
 The canonical catalog separately indexes message SHA-256 for FTS-to-message
 lookups. Bounded date-ordered listings must use the date/message index to
 select the requested page before recipient aggregation. Year-scoped reports
@@ -458,6 +461,11 @@ independent message window. The result list can sort by date, subject, or
 sender in either direction. When it has keyboard focus, Up Arrow and Down
 Arrow move the selection and display the newly selected message. Result rows
 show the indexed attachment count with a paperclip.
+Command-A in the focused result list selects every visible row, including rows
+loaded by pagination. With at least two selected rows, a keyboard-operable
+**Save selected ZIP** button saves exact `mid-####.eml` members and also
+supports macOS Finder drag-out. ZIP preparation is atomic and concurrent
+preparations cannot share a staging path.
 An unchecked **Search attachments** control searches only headers and message
 bodies. When checked, the same ordinary full-text expression also matches the
 separate indexed text-attachment table; metadata selectors retain their normal
@@ -490,6 +498,10 @@ the message and gives the message well a slight red tint. The original `Date:`
 header remains visible and unchanged.
 Command-1 through Command-9 select the MIME part having that numeric part ID;
 Command-0 and Command-Shift-U select the raw RFC 5322 source.
+An independent message window renders its preferred part after the message
+parameter; it renders an explicit MIME part only when a valid `part` parameter
+is present. The in-message find bar ignores empty queries, starts at the first
+match, and advances exactly once per Return or Command-F.
 
 Saving or dragging a message creates a disposable `.eml` copy containing the
 exact SHA-256-verified RFC 5322 bytes; it never creates or changes canonical

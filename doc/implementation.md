@@ -393,8 +393,11 @@ Result paperclips use attachment counts joined from the disposable search
 metadata without rereading MBOX content. Each row reserves a third line; after
 the header rows are painted, JavaScript queues one page of preview IDs through
 the Python bridge. A single-worker executor reads the indexed 18-word previews,
-and JavaScript polls the typed result batch until it can fill the rows. Global macOS Command-key handlers
-select numeric MIME part IDs or raw source.
+and JavaScript polls the typed result batch until it can fill the rows. Global
+macOS Command-key handlers select numeric MIME part IDs or raw source; the
+find-input handler stops propagation so one Command-F advances one match, and
+empty queries never enter the highlighter. Standalone windows render an
+explicit part only when the URL includes a valid `part` parameter.
 The toolbar's **Search attachments** checkbox passes an explicit boolean to the
 typed search service. Ordinary terms search `message_fts` by default; when the
 box is selected they search the union of `message_fts` and `attachment_fts`.
@@ -452,12 +455,18 @@ Indexing parses each message once for FTS body text and attachment metadata;
 `--index-attachments` additionally writes decoded text attachments to
 `attachment_fts`.
 The tables are derived and are replaced together with FTS by `refresh-index`.
+Search joins `message_fts.rowid` to the indexed
+`message_metadata.message_fts_rowid` mapping; attachment-enabled terms use an
+AND of per-term unions across `message_fts` and `attachment_fts`.
 
 `.eml` export writes the bytes returned by hash-verified direct retrieval.
 Finder dragging uses a temporary `.eml` file URL and the Cocoa webview's native
 file/link drag support. Only the message-file icon well is draggable; the
 header region remains normal selectable text. `window.print()` is handled by pywebview's WKWebView
-print operation. Temporary exports live only for the application process.
+print operation. The result-list Save selected ZIP button writes exact
+`mid-####.eml` members through a unique temporary path and atomically replaces
+the chosen destination; the same ZIP is prepared for drag-out. Temporary
+exports live only for the application process.
 
 The shell page permits `unsafe-eval` only for local scripts because pywebview
 constructs its typed Python API wrappers with JavaScript `Function`. Message
