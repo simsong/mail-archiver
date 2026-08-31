@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import shutil
 import zipfile
 from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel
+
+
+SHA512_PATTERN = re.compile(r"[0-9a-fA-F]{128}\Z")
 
 
 class TikaDistribution(BaseModel):
@@ -20,10 +24,13 @@ class TikaDistribution(BaseModel):
 
 
 def checksum_value(path: Path) -> str:
-    value = path.read_text(encoding="ascii").split(maxsplit=1)
-    if not value:
+    values = path.read_text(encoding="ascii").split(maxsplit=1)
+    if not values:
         raise ValueError(f"empty checksum file: {path}")
-    return value[0].lower()
+    value = values[0]
+    if SHA512_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"invalid SHA-512 checksum in {path}")
+    return value.lower()
 
 
 def validate_members(names: list[str], distribution: TikaDistribution) -> None:
@@ -49,14 +56,17 @@ def install(archive: Path, checksum: Path, destination: Path, version: str) -> P
     temporary = destination.with_name(f".{destination.name}.tmp")
     if temporary.exists():
         raise FileExistsError(f"temporary Tika directory already exists: {temporary}")
-    with zipfile.ZipFile(archive) as bundle:
-        names = bundle.namelist()
-        validate_members(names, distribution)
-        bundle.extractall(temporary)
-    if not (temporary / distribution.jar_name).is_file() or not (temporary / "lib").is_dir():
-        shutil.rmtree(temporary)
-        raise ValueError("incomplete Tika application layout")
-    temporary.rename(destination)
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+            validate_members(names, distribution)
+            bundle.extractall(temporary)
+        if not (temporary / distribution.jar_name).is_file() or not (temporary / "lib").is_dir():
+            raise ValueError("incomplete Tika application layout")
+        temporary.rename(destination)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
     return destination / distribution.jar_name
 
 

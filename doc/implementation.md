@@ -603,7 +603,9 @@ than filtering the virtual tables on their unindexed SHA-256 columns. The
 Makefile's `install-mac` and `install-linux` targets download, SHA-512 verify,
 and unpack Tika 4's application ZIP distribution under the ignored
 project-local `.tools/tika/<version>/` directory. The runnable JAR and its
-adjacent `lib/` directory remain together; Tika is an optional future extractor
+adjacent `lib/` directory remain together. The checksum token must be exactly
+128 hexadecimal characters. Failed extraction, layout validation, or rename
+removes the private temporary directory. Tika is an optional future extractor
 for PDF and Office attachments, not a service. Rebuild the
 index in a temporary database,
 validate row identities against `archive.sqlite3`, then atomically replace the
