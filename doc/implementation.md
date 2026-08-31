@@ -406,6 +406,13 @@ five seconds is displayed as stale without rewriting its retained JSON.
 Result ordering is a server-side SQL whitelist over date, case-folded subject,
 or case-folded sender with a stable message-number tie break. The listbox owns
 keyboard focus after a pointer selection and implements Up/Down selection.
+Pure body-text searches in the default newest-first order first scan at most
+1,000 messages through `messages_date_message` and test each candidate through
+the indexed `message_metadata.sha256` to FTS-row-ID mapping. A full requested
+page proves that no older match can displace it. A short page transparently
+reruns the complete SHA-256/FTS query, preserving sparse searches, deep pages,
+and empty results. Structured, attachment, alternate-sort, and unlimited
+searches continue to use the complete query directly.
 Result paperclips use attachment counts joined from the disposable search
 metadata without rereading MBOX content. Each row reserves a third line; after
 the header rows are painted, JavaScript queues one page of preview IDs through

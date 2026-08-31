@@ -26,6 +26,7 @@ from .mbox import MboxLocation, read_verified_location
 from .search import SEARCH_CATEGORIES, decoded_part, html_text, is_attachment
 
 DEFAULT_LIMIT = 10
+RECENT_FTS_SCAN_LIMIT = 1000
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
@@ -234,6 +235,66 @@ def _search_statement(
     return SearchStatement(sql=sql, parameters=parameters)
 
 
+def _recent_text_statement(terms: SearchTerms, limit: int, offset: int) -> SearchStatement:
+    """Search a bounded newest-first catalog window by indexed FTS row ID."""
+    sql = (
+        "WITH recent AS NOT MATERIALIZED ("
+        "SELECT m.message_pk, m.sha256, sender.address AS sender, m.subject, m.date_utc "
+        "FROM messages m INDEXED BY messages_date_message "
+        "JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
+        "WHERE m.category IN (?, ?) "
+        "ORDER BY m.date_utc DESC, m.message_pk DESC LIMIT ?), "
+        "candidates AS MATERIALIZED ("
+        "SELECT m.message_pk, m.sha256, m.sender, m.subject, m.date_utc FROM recent m "
+        "WHERE EXISTS (SELECT 1 FROM search.message_metadata metadata "
+        "JOIN search.message_fts ON message_fts.rowid = metadata.message_fts_rowid "
+        "WHERE metadata.sha256 = m.sha256 AND message_fts MATCH ?) "
+        "ORDER BY m.date_utc DESC, m.message_pk DESC LIMIT ? OFFSET ?) "
+        "SELECT c.message_pk, COALESCE(group_concat(DISTINCT recipient.address), ''), "
+        "c.sender, c.subject, c.date_utc, COALESCE(metadata.attachment_count, 0) "
+        "FROM candidates c "
+        "LEFT JOIN search.message_metadata metadata ON metadata.sha256 = c.sha256 "
+        "LEFT JOIN recipients r ON r.message_pk = c.message_pk "
+        "LEFT JOIN email_addresses recipient ON recipient.address_pk = r.address_pk "
+        "GROUP BY c.message_pk "
+        "ORDER BY c.date_utc DESC, c.message_pk DESC"
+    )
+    return SearchStatement(
+        sql=sql,
+        parameters=[*SEARCH_CATEGORIES, RECENT_FTS_SCAN_LIMIT, fts_query(terms.text), limit, offset],
+    )
+
+
+def _is_plain_recent_text_search(
+    terms: SearchTerms,
+    limit: int,
+    sort_by: SortField,
+    direction: SortDirection,
+    search_attachments: bool,
+    mailbox_selections: list[MailboxSelection] | None,
+) -> bool:
+    structured = (
+        terms.any_address,
+        terms.to,
+        terms.from_,
+        terms.cc,
+        terms.bcc,
+        terms.subject,
+        terms.date,
+        terms.before,
+        terms.after,
+    )
+    return bool(
+        terms.text
+        and limit
+        and sort_by is SortField.DATE
+        and direction is SortDirection.DESCENDING
+        and not search_attachments
+        and not mailbox_selections
+        and not any(structured)
+    )
+
+
 def search_headers(
     archive: Path,
     terms: SearchTerms,
@@ -250,10 +311,17 @@ def search_headers(
     database = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
     try:
         database.execute("ATTACH DATABASE ? AS search", (f"file:{search_path}?mode=ro",))
+        fields = ("message_pk", "recipients", "sender", "subject", "date_utc", "attachment_count")
+        if _is_plain_recent_text_search(
+            terms, limit, sort_by, direction, search_attachments, mailbox_selections
+        ):
+            recent = _recent_text_statement(terms, limit, offset)
+            rows = database.execute(recent.sql, recent.parameters).fetchall()
+            if len(rows) == limit:
+                return [MessageHeader.model_validate(dict(zip(fields, row))) for row in rows]
         statement = _search_statement(
             terms, limit, offset, sort_by, direction, search_attachments, mailbox_selections
         )
-        fields = ("message_pk", "recipients", "sender", "subject", "date_utc", "attachment_count")
         return [MessageHeader.model_validate(dict(zip(fields, row))) for row in database.execute(statement.sql, statement.parameters)]
     finally:
         database.close()

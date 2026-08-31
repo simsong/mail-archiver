@@ -432,6 +432,11 @@ lookups. Bounded date-ordered listings must use the date/message index to
 select the requested page before recipient aggregation. Year-scoped reports
 must express their bounds as indexed `date_utc` ranges rather than applying a
 function to every stored date.
+An ordinary body-text search in newest-first order may first test a bounded
+window from that date/message index against the message's indexed FTS row ID.
+It may return that page only when the window contains every requested row;
+otherwise it must fall back to the complete FTS-to-catalog query. Limiting the
+unordered FTS hit list is forbidden because it can omit newer matches.
 Index extraction and insertion happen after canonical MBOX/catalog publication.
 An indexing failure is recorded as a metadata defect and does not reject mail;
 `refresh-index` repairs missing disposable content.

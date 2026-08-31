@@ -15,12 +15,15 @@ from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mailsearch import (
     MessageHeader,
+    RECENT_FTS_SCAN_LIMIT,
     SearchTerms,
     SortDirection,
     SortField,
     _search_statement,
+    _recent_text_statement,
     format_header,
     render_message,
+    search_headers,
 )
 from mailarchiver.mbox import add_message
 from mailarchiver.search import index_message
@@ -178,6 +181,91 @@ def test_full_text_candidates_use_fts_and_catalog_sha_indexes(tmp_path: Path) ->
 
     assert any("messages_sha256" in step for step in plan)
     assert any("message_fts VIRTUAL TABLE INDEX" in step for step in plan)
+
+
+def test_recent_full_text_page_uses_date_and_fts_rowid_indexes(tmp_path: Path) -> None:
+    """Requirement: common newest-first text searches bound catalog work before aggregation."""
+    archive, _ = make_archive(tmp_path)
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        catalog.execute("ATTACH DATABASE ? AS search", (str(archive / "search.sqlite3"),))
+        statement = _recent_text_statement(SearchTerms(text=["agenda"]), 10, 0)
+        plan = [row[3] for row in catalog.execute("EXPLAIN QUERY PLAN " + statement.sql, statement.parameters)]
+    finally:
+        catalog.close()
+
+    assert any("messages_date_message" in step for step in plan)
+    assert any("message_metadata" in step and "sha256" in step for step in plan)
+    assert any("message_fts VIRTUAL TABLE INDEX" in step for step in plan)
+
+
+def test_common_text_fast_path_returns_newest_requested_page(tmp_path: Path) -> None:
+    """Requirement: a full bounded FTS page preserves newest-first result semantics."""
+    archive = tmp_path / "archive"
+    initialize_bag(archive)
+    catalog = create_catalog(archive / "archive.sqlite3")
+    search = create_search(archive / "search.sqlite3")
+    try:
+        sender = address_pk(catalog, "sender@example.net")
+        for number in range(12):
+            raw = f"Message-ID: <{number}@example>\nFrom: sender@example.net\n\ncommon-search-needle\n".encode()
+            catalog.execute(
+                "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
+                "VALUES (?, ?, ?, '', '2024-01-01T00:00:00+00:00', 'date', 'Archive')",
+                (f"{number}@example", hashlib.sha256(raw).hexdigest(), sender),
+            )
+            index_message(search, raw, False)
+        catalog.commit()
+        search.commit()
+    finally:
+        catalog.close()
+        search.close()
+
+    found = search_headers(archive, SearchTerms(text=["common-search-needle"]), 10)
+
+    assert [header.message_pk for header in found] == list(range(12, 2, -1))
+
+
+def test_sparse_text_match_beyond_recent_window_uses_exact_fallback(tmp_path: Path) -> None:
+    """Requirement: a bounded fast-path miss must not hide an older FTS result."""
+    archive = tmp_path / "archive"
+    initialize_bag(archive)
+    catalog = create_catalog(archive / "archive.sqlite3")
+    search = create_search(archive / "search.sqlite3")
+    raw = b"Message-ID: <old-match@example>\nFrom: sender@example.net\nSubject: old match\n\nunique-search-needle\n"
+    try:
+        sender = address_pk(catalog, "sender@example.net")
+        catalog.execute(
+            "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "old-match@example",
+                hashlib.sha256(raw).hexdigest(),
+                sender,
+                "old match",
+                "2024-01-01T00:00:00+00:00",
+                "date",
+                "Archive",
+            ),
+        )
+        catalog.executemany(
+            "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
+            "VALUES (?, ?, ?, '', '2024-01-01T00:00:00+00:00', 'date', 'Archive')",
+            (
+                (f"recent-{number}@example", hashlib.sha256(f"recent-{number}".encode()).hexdigest(), sender)
+                for number in range(RECENT_FTS_SCAN_LIMIT)
+            ),
+        )
+        catalog.commit()
+        index_message(search, raw, False)
+        search.commit()
+    finally:
+        catalog.close()
+        search.close()
+
+    found = search_headers(archive, SearchTerms(text=["unique-search-needle"]), 10)
+
+    assert [header.message_pk for header in found] == [1]
 
 
 def test_mailsearch_limit_zero_and_number_print_original_message(tmp_path: Path) -> None:
