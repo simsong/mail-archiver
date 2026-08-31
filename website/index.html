@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#13243d">
+    <meta name="description" content="Mail Archiver preserves and searches a personal email history.">
+    <title>Mail Archiver</title>
+    <link rel="icon" type="image/svg+xml" href="assets/rainbow-post.svg">
+    <link rel="icon" type="image/png" sizes="48x48" href="assets/rainbow-post-48.png">
+    <link rel="icon" type="image/png" sizes="64x64" href="assets/rainbow-post-64.png">
+    <link rel="icon" type="image/png" sizes="128x128" href="assets/rainbow-post-128.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="assets/rainbow-post-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="assets/rainbow-post-192.png">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="./"><img src="assets/rainbow-post.svg" alt=""> <span>Mail Archiver</span></a>
+      <a class="header-link" href="https://github.com/simsong/mail-archiver">View on GitHub</a>
+    </header>
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Personal email, preserved</p>
+          <h1 id="hero-title">Find the message you remember.</h1>
+          <p class="lede">Mail Archiver turns decades of mail from local sources into a durable, searchable, read-only archive.</p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/simsong/mail-archiver">Explore the project</a>
+            <a class="button secondary" href="https://github.com/simsong/mail-archiver/blob/main/doc/USER_MANUAL.md">Read the guide</a>
+          </div>
+        </div>
+        <div class="hero-art" aria-hidden="true"><img src="assets/rainbow-post.svg" alt=""></div>
+      </section>
+
+      <section class="feature-grid" aria-label="Project principles">
+        <article><span class="feature-number">01</span><h2>Preserve first</h2><p>Original RFC 5322 bytes remain canonical. Search databases and interface views are rebuildable derivatives.</p></article>
+        <article><span class="feature-number">02</span><h2>Search quickly</h2><p>Stable <code>mid-####</code> identifiers, indexed full-text search, date rules, and provenance make old mail easy to revisit.</p></article>
+        <article><span class="feature-number">03</span><h2>Keep it inspectable</h2><p>BagIt metadata, SHA-256 fixity, source locations, and documented recovery rules keep the archive understandable.</p></article>
+      </section>
+
+      <section class="callout" aria-labelledby="status-title">
+        <div><p class="eyebrow">Open source</p><h2 id="status-title">Built for a long memory.</h2></div>
+        <p>Mail Archiver is under active development. Follow the repository for implementation notes, issues, and releases.</p>
+      </section>
+    </main>
+    <footer><span>Mail Archiver · version 0.1.0</span><span>Read-only archive tooling</span></footer>
+  </body>
+</html>

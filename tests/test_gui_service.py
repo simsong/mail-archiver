@@ -170,6 +170,14 @@ def test_gui_application_metadata_names_the_product() -> None:
     assert "Mail Archiver" in metadata.copyright
 
 
+def test_gui_uses_only_the_rainbow_post_icon() -> None:
+    """Requirement: the selected program icon is the sole checked-in SVG asset."""
+    icon_directory = GUI_DIRECTORY / "icons"
+
+    assert (icon_directory / "rainbow-post.svg").is_file()
+    assert sorted(path.name for path in icon_directory.glob("*.svg")) == ["rainbow-post.svg"]
+
+
 def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:
     """Requirement: the native Windows menu exposes the independent ingest browser."""
     api = GuiApi(None, e2e_directory=tmp_path)

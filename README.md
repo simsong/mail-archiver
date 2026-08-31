@@ -367,13 +367,16 @@ window.
 * Command-A in the result list selects visible messages for ZIP drag-out;
 * Command-A in the message heading selects only that heading. The window title
 identifies the archive and its deduplicated searchable-message count. The
+application uses `rainbow-post.svg` in the Dock and About panel. About
+identifies the application as Mail Archiver version 0.1.0. Start it with:
 The native application uses the resolution-independent `rainbow-post.svg` icon.
 
-About identifies the application as Mail Archiver version 0.1.0. Start it with:
-Command-A in the message heading selects only that heading. The result-list
+The result-list
 control saves the selected messages as a ZIP and remains draggable to Finder.
 The window title identifies the archive and its deduplicated searchable-message
-count. Start it with:
+count. 
+
+Start it with:
 
 ```console
 make gui ARGS="--archive /path/to/mail-archive"
@@ -383,6 +386,15 @@ The bottom status line shows the current ingest, or the latest completed run.
 Click it to open the separate ingest-history and worker-detail window. The same
 window is available from **Windows → Ingest**; choosing it again brings the
 existing window to the front.
+
+## GitHub Pages scratch website
+
+The static project site is kept in [`website/`](website/) and deployed from
+the default branch by [`.github/workflows/pages.yml`](.github/workflows/pages.yml).
+This directory-plus-Action model keeps website changes reviewable with the
+application and avoids a separate long-lived `gh-pages` development branch.
+After merging, select **GitHub Actions** as the Pages source in repository
+settings; the project site will be `https://simsong.github.io/mail-archiver/`.
 
 Select **Search attachments** to include the separate text-attachment index in
 ordinary full-text searches. Build the attachment index with `uv run

@@ -1,4 +1,4 @@
-.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality test-e2e test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance validation-aws-start validation-aws-start-all validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
+.PHONY: check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality test-e2e test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance validation-aws-start validation-aws-start-all validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify website-check
 
 TIKA_VERSION ?= 3.3.2
 TIKA_DIR ?= $(CURDIR)/.tools/tika/$(TIKA_VERSION)
@@ -16,7 +16,22 @@ OCR_ENGINES ?= native,ocrmypdf,tesseract
 OCR_INVENTORY_ARGS ?=
 OCR_RUN_ARGS ?=
 
-check: test test-e2e
+check: test test-e2e website-check
+
+website-check:
+	@test -f website/index.html
+	@test -f website/styles.css
+	@test -f website/assets/rainbow-post.svg
+	@test -f gui/icons/rainbow-post.svg
+	@test -z "$$(find gui/icons -maxdepth 1 -type f -name '*.svg' ! -name 'rainbow-post.svg' -print)"
+	@test -f gui/icons/rainbow-post-48.png
+	@test -f gui/icons/rainbow-post-64.png
+	@test -f gui/icons/rainbow-post-128.png
+	@test -f gui/icons/rainbow-post-192.png
+	@test -f website/assets/rainbow-post-48.png
+	@test -f website/assets/rainbow-post-64.png
+	@test -f website/assets/rainbow-post-128.png
+	@test -f website/assets/rainbow-post-192.png
 
 data-quality-audit:
 	@test -n "$(ARCHIVE)" || { echo 'usage: make data-quality-audit ARCHIVE=/path/to/mailbag EARLY_SOURCE=/path/to/source'; exit 2; }
