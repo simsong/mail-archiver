@@ -389,9 +389,15 @@ available when the user needs the source representation.
 The `gui/` prototype uses pywebview's Cocoa/WKWebView backend on macOS.  Its
 Python API delegates query parsing, SQLite reads, and direct MBOX retrieval to
 the same typed functions used by `mailsearch`.  Search pages request 101 rows
-to return 100 plus a `has_more` indicator.  The UI is conventional: a search
-toolbar above a result list and message pane. Independent message windows load
-the same static application with a message-number parameter.
+to return 100 plus a `has_more` indicator. **Load more** requests one such page;
+**Load all** repeats the same bounded request with the next offset until
+`has_more` is false, updating the displayed count after each page. Both paths
+use the search request generation, so a newer query discards a stale page and
+stops the loop. Page preview requests share one promise queue, preventing a
+multi-page load from creating concurrent polling loops; queued work from an
+older search generation is skipped. The UI is conventional: a search toolbar
+above a result list and message pane. Independent message windows load the same
+static application with a message-number parameter.
 The main window polls the latest shared `IngestStatus` once per second and
 renders it in a bottom status line. The separate `ingests.html` application
 polls all typed status files and presents run history beside aggregate and

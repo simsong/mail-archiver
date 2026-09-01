@@ -1,4 +1,4 @@
-/* Exercise the shipped search UI inside its real pywebview/WKWebView window. */
+/* Requirement: the real GUI can load one page or every remaining search-result page. */
 (() => {
   "use strict";
   const checks = [];
@@ -38,11 +38,12 @@
     await waitFor(() => typeof window.pywebview?.api?.search === "function", "native bridge injected");
     await waitFor(() => rows().length === 100, "initial search displays first 100 results", 20000);
     assert(document.getElementById("archive-label").textContent.includes("archive"), "archive status displayed");
-    assert(document.title.includes("archive") && document.title.includes("(107 messages)"), "window title identifies archive and total message count");
+    assert(document.title.includes("archive") && document.title.includes("(207 messages)"), "window title identifies archive and total message count");
     await waitFor(() => document.getElementById("ingest-status-line").textContent.includes("Last ingest completed"), "completed ingest status appears in the main status line");
     document.getElementById("ingest-status-line").click();
     await waitFor(() => document.getElementById("ingest-status-line").dataset.openedWindow === "true", "ingest status line invokes the independent ingest window");
     assert(!document.getElementById("load-more").hidden, "pagination control displayed");
+    assert(!document.getElementById("load-all").hidden, "load-all control displayed");
     await waitFor(() => document.querySelector(".result-preview")?.textContent.length > 0, "background preview displayed");
 
     const searchInput = document.getElementById("search");
@@ -83,9 +84,21 @@
     document.querySelector(".search-chip-remove").click();
     await waitFor(() => !document.querySelector(".search-chip") && rows().length === 100, "subject filter chip can be removed");
 
-    document.getElementById("load-more").click();
-    await waitFor(() => rows().length === 107, "Load More appends the second page");
+    document.getElementById("load-all").click();
+    document.getElementById("search").value = 'subject:"Rich UI message"';
+    document.getElementById("search-form").dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
+    await waitFor(() => rows().length === 1 && subjects()[0] === "Rich UI message", "a newer search stops an in-progress Load all");
+    await search("", 100, false);
+    document.getElementById("load-all").click();
+    assert(document.getElementById("result-status").textContent.startsWith("Loading all…"), "Load all reports running progress");
+    await waitFor(() => rows().length === 207, "Load all appends every remaining page", 20000);
     assert(document.getElementById("load-more").hidden, "Load More hides on the final page");
+    assert(document.getElementById("load-all").hidden, "Load all hides on the final page");
+    await waitFor(
+      () => rows().every(row => row.querySelector(".result-preview").textContent.length > 0),
+      "serialized preview queue fills every loaded result",
+      20000,
+    );
     const chooseArchive = document.getElementById("choose-archive");
     const completedChoices = chooseArchive.dataset.completed || "0";
     chooseArchive.click();
@@ -172,7 +185,7 @@
     showTree.checked = true;
     showTree.dispatchEvent(new Event("change", {bubbles: true}));
     await waitFor(() => !document.getElementById("mailbox-browser").hidden && treeNode("Inbox"), "original-mailbox tree appears");
-    assert(treeNode("Inbox").textContent.includes("104"), "mailbox count is deduplicated");
+    assert(treeNode("Inbox").textContent.includes("204"), "mailbox count is deduplicated");
     const mailboxLabels = [...document.querySelectorAll(".mailbox-node")].map(node => node.dataset.label);
     assert(
       treeNode("Loose Mail") && !treeNode("001-single.eml"),
@@ -181,7 +194,8 @@
     treeNode("Inbox").querySelector("input[type=checkbox]").click();
     await waitFor(() => rows().length === 100 && !document.getElementById("load-more").hidden, "mailbox selection filters before pagination");
     document.getElementById("load-more").click();
-    await waitFor(() => rows().length === 104, "mailbox selection returns its complete result union");
+    await waitFor(() => rows().length === 200, "Load more appends one mailbox-filtered page");
+    assert(!document.getElementById("load-more").hidden, "Load more remains available before the final mailbox-filtered page");
 
     showTree.checked = false;
     showTree.dispatchEvent(new Event("change", {bubbles: true}));
@@ -213,7 +227,7 @@
     await sleep(300);
     await waitFor(() => rows().length === 100 && !document.getElementById("load-more").hidden, "named filter set restores its selection");
     document.getElementById("load-more").click();
-    await waitFor(() => rows().length === 104, "restored filter set returns the saved mailbox union");
+    await waitFor(() => rows().length === 200, "restored filter set appends one page from the saved mailbox union");
     filterSets.value = "__save__";
     filterSets.dispatchEvent(new Event("change", {bubbles: true}));
     await waitFor(() => document.getElementById("save-filter-dialog").open, "Save can clone the active filter set");

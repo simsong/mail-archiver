@@ -252,7 +252,11 @@ Useful search forms include:
 | `after:2024-01-01` | message is later than this date |
 
 All supplied terms must match. Use the sort controls above the result list to
-sort by date, subject, or sender.
+sort by date, subject, or sender. Search results initially appear 100 at a
+time. At the bottom of the list, select **Load more** to append the next 100 or
+**Load all** to append every remaining result automatically. While **Load all**
+runs, the result status shows how many messages have been displayed; starting
+a different search stops the earlier load.
 
 Select **Search attachments** to include indexed text attachments. This works
 only after an attachment index has been built:

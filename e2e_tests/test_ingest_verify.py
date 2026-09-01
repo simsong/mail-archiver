@@ -28,8 +28,8 @@ from e2e_tests.eicar_fixture import write_eicar_emlx
 
 
 DATA = Path(__file__).parent / "data"
-NORMAL_MESSAGE_COUNT = 107
-PROCESSED_MESSAGE_COUNT = 110
+NORMAL_MESSAGE_COUNT = 207
+PROCESSED_MESSAGE_COUNT = 210
 GUI_API_METHODS = (
     "attachment", "choose_archive", "delete_filter_set", "mailbox_tree", "message",
     "ingest_overview", "open_attachment", "open_ingest_window", "open_message_window", "part", "prepare_drag", "rename_filter_set",
@@ -221,7 +221,7 @@ def test_ingest_history_ui_end_to_end(built_archive: BuiltArchive, page: Page) -
     assert page.locator(".history-row").count() == 1
     assert "Completed" in page.locator(".history-row").inner_text()
     assert page.locator(".worker-table tbody tr").count() == 2
-    assert "110" in page.locator(".statistics").inner_text()
+    assert str(PROCESSED_MESSAGE_COUNT) in page.locator(".statistics").inner_text()
 
 
 @pytest.mark.skipif(
