@@ -535,7 +535,8 @@ release notes, GitHub releases, the current stable `v1.2.3`-shaped tag and
 current beta `v1.2.3-beta1`-shaped tag when present, and project discussions.
 It provides a clearly labeled index of digital-email-curation reports and
 related organizations; it does not imply that planned application features
-are implemented.
+are implemented. The Pages build pins its Zola release and verifies the
+downloaded archive against a source-controlled SHA-256 digest before execution.
 
 ## Ingest sources
 

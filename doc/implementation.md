@@ -406,8 +406,9 @@ The native shell loads the checked-in 192-pixel PNG derived from
 Python application and its About/Dock identity use a stable project asset. The
 `website/` directory is a Zola site using the local
 `envelope-rainbow` theme. GitHub Pages builds it from `main`; the workflow
-resolves the newest exact stable and beta tags into Zola data, then deploys a
-Pages artifact. The release workflow follows the repository's draft-release
+SHA-256 verifies the pinned Zola archive before extraction, resolves the newest
+exact stable and beta tags into Zola data, then deploys a Pages artifact. The
+release workflow follows the repository's draft-release
 pattern: it requires a version-matching signed annotated tag, builds a source
 distribution, writes `SHA256SUMS`, and creates a draft GitHub Release.
 

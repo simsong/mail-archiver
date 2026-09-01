@@ -22,6 +22,18 @@ def png_size(path: Path) -> tuple[int, int]:
     return struct.unpack(">II", header[16:24])
 
 
+def validate_png(path: Path, expected_size: int) -> None:
+    """Report missing or malformed icon assets without a traceback."""
+    if not path.is_file():
+        raise SystemExit(f"missing PNG icon: {path}")
+    try:
+        dimensions = png_size(path)
+    except (OSError, ValueError, struct.error) as error:
+        raise SystemExit(f"invalid PNG icon {path}: {error}") from None
+    if dimensions != (expected_size, expected_size):
+        raise SystemExit(f"{path} is not {expected_size}x{expected_size}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).parents[1])
@@ -57,8 +69,7 @@ def main() -> int:
     for size in SIZES:
         for directory in (root / "gui/icons", root / "website/static/icons"):
             path = directory / f"rainbow-post-{size}.png"
-            if png_size(path) != (size, size):
-                raise SystemExit(f"{path} is not {size}x{size}")
+            validate_png(path, size)
     print("website assets and required links are valid")
     return 0
 
