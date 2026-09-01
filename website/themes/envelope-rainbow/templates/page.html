@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title }} · {{ config.title }}{% endblock title %}
+{% block content %}
+<main class="page shell">
+  <p class="eyebrow">Mail Archiver</p>
+  <h1>{{ page.title }}</h1>
+  {% if page.description %}<p class="lede">{{ page.description }}</p>{% endif %}
+  <div class="prose">{{ page.content | safe }}</div>
+</main>
+{% endblock content %}

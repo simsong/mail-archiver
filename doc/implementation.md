@@ -389,11 +389,19 @@ available when the user needs the source representation.
 The `gui/` prototype uses pywebview's Cocoa/WKWebView backend on macOS.  Its
 Python API delegates query parsing, SQLite reads, and direct MBOX retrieval to
 the same typed functions used by `mailsearch`. Search pages request 101 rows
-to return 100 plus `has_more`; `older_results_unchecked` separately says that
-the page came from the recent-message search and that older mail has not yet
-been searched. The UI is conventional: a search toolbar above a result list
-and message pane. Independent message windows load the same static application
-with a message-number parameter.
+to return 100 plus a `has_more` indicator. **Load more** requests one such page;
+**Load all** repeats the same bounded request with the next offset until
+`has_more` is false, updating the displayed count after each page. Both paths
+use the search request generation, so a newer query discards a stale page and
+stops the loop. Page preview requests share one promise queue, preventing a
+multi-page load from creating concurrent polling loops; queued work from an
+older search generation is skipped. `older_results_unchecked` separately says
+that a body-text page came from the recent-message search and that older mail
+has not yet been searched. In that state **Load more** is labeled **Find older
+ones** and switches subsequent pages to the complete query; **Load all** makes
+the same switch and continues until the complete query is exhausted. The UI is
+conventional: a search toolbar above a result list and message pane. Independent
+message windows load the same static application with a message-number parameter.
 The main window polls the latest shared `IngestStatus` once per second and
 renders it in a bottom status line. The separate `ingests.html` application
 polls all typed status files and presents run history beside aggregate and
@@ -402,6 +410,17 @@ per-worker detail. Both the status-line action and the native
 window is restored and ordered to the front, while a closed one is recreated
 with its own normal close box. A running file whose heartbeat is older than
 five seconds is displayed as stale without rewriting its retained JSON.
+
+The native shell loads the checked-in 192-pixel PNG derived from
+`gui/icons/rainbow-post.svg` before falling back to a system symbol, so the
+Python application and its About/Dock identity use a stable project asset. The
+`website/` directory is a Zola site using the local
+`envelope-rainbow` theme. GitHub Pages builds it from `main`; the workflow
+SHA-256 verifies the pinned Zola archive before extraction, resolves the newest
+exact stable and beta tags into Zola data, then deploys a Pages artifact. The
+release workflow follows the repository's draft-release
+pattern: it requires a version-matching signed annotated tag, builds a source
+distribution, writes `SHA256SUMS`, and creates a draft GitHub Release.
 
 Result ordering is a server-side SQL whitelist over date, case-folded subject,
 or case-folded sender with a stable message-number tie break. The listbox owns
@@ -461,7 +480,15 @@ loaded only for the selected part.  HTML parsing removes active elements,
 event handlers, file URLs, and unsafe URL schemes, replaces image CID references
 with message-local data, and injects a restrictive CSP.  The HTML is displayed
 inside a sandboxed iframe. Remote image URLs are omitted unless the user
-explicitly enables them for that view. Individual image and PDF attachments
+explicitly enables them for that view. Reserved part IDs identify raw RFC 5322
+source (`-1`) and a synthesized legacy x-html view (`-2`). Before enumerating
+parts, the viewer tests a non-multipart message's raw body against an anchored,
+case-insensitive `<x-html>...</x-html>` wrapper. This includes a malformed
+multipart declaration that produced no parsed children, but excludes valid
+multipart messages and bodies that merely mention the tag. The enclosed bytes
+are decoded through the archive's best-effort text decoder, sanitized by the
+same HTML path, and derived again from verified raw bytes when selected; the
+canonical message is never rewritten. Individual image and PDF attachments
 are base64-transferred only on an explicit preview action; other attachment
 payloads are written to a private temporary directory before macOS opens them.
 The viewer also reads the archive mailbox location and linked source
@@ -470,6 +497,13 @@ and source or forensic path at the bottom without treating an archive mailbox
 as a source. Direct provider observations sort before local evidence; retained
 Apple Gmail observations are labeled as local cache copies rather than as the
 authoritative cloud source.
+
+For a catalog row whose `date_source` is `received-median`, the typed message
+response includes the decoded original `Date:` header, the stored UTC
+`date_utc` as the Received-header median, and that same UTC value as the archive
+routing date. The UI renders all three values in its warning banner. Keeping the
+median and routing fields distinct makes the current routing decision explicit
+without requiring the viewer to recompute archival date policy from headers.
 
 `search.sqlite3` contains separate `message_fts` and `attachment_fts` virtual
 tables so message text remains searchable without attachment matches.
