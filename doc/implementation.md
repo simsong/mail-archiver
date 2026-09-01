@@ -401,9 +401,10 @@ window is restored and ordered to the front, while a closed one is recreated
 with its own normal close box. A running file whose heartbeat is older than
 five seconds is displayed as stale without rewriting its retained JSON.
 
-The native shell loads `gui/icons/rainbow-post.svg` before falling back to a
-system symbol, so the Python application and its About/Dock identity use a
-stable project asset. The `website/` directory is a Zola site using the local
+The native shell loads the checked-in 192-pixel PNG derived from
+`gui/icons/rainbow-post.svg` before falling back to a system symbol, so the
+Python application and its About/Dock identity use a stable project asset. The
+`website/` directory is a Zola site using the local
 `envelope-rainbow` theme. GitHub Pages builds it from `main`; the workflow
 resolves the newest exact stable and beta tags into Zola data, then deploys a
 Pages artifact. The release workflow follows the repository's draft-release

@@ -44,7 +44,7 @@ GUI_DIRECTORY = Path(__file__).parents[2] / "gui"
 E2E_DRIVER = Path(__file__).parents[2] / "e2e_tests" / "gui_driver.js"
 DEFAULT_PAGE_SIZE = 100
 APPLICATION_NAME = "Mail Archiver"
-APPLICATION_ICON = GUI_DIRECTORY / "icons" / "rainbow-post.svg"
+APPLICATION_ICON = GUI_DIRECTORY / "icons" / "rainbow-post-192.png"
 
 
 class ApplicationMetadata(BaseModel):

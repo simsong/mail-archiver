@@ -161,7 +161,7 @@ def test_gui_application_uses_the_source_controlled_rainbow_icon() -> None:
     """Requirement: the Python application uses the same named icon as the site."""
     icon = application_icon_path()
 
-    assert icon.name == "rainbow-post.svg"
+    assert icon.name == "rainbow-post-192.png"
     assert icon.is_file()
 
 
