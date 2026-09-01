@@ -444,7 +444,15 @@ loaded only for the selected part.  HTML parsing removes active elements,
 event handlers, file URLs, and unsafe URL schemes, replaces image CID references
 with message-local data, and injects a restrictive CSP.  The HTML is displayed
 inside a sandboxed iframe. Remote image URLs are omitted unless the user
-explicitly enables them for that view. Individual image and PDF attachments
+explicitly enables them for that view. Reserved part IDs identify raw RFC 5322
+source (`-1`) and a synthesized legacy x-html view (`-2`). Before enumerating
+parts, the viewer tests a non-multipart message's raw body against an anchored,
+case-insensitive `<x-html>...</x-html>` wrapper. This includes a malformed
+multipart declaration that produced no parsed children, but excludes valid
+multipart messages and bodies that merely mention the tag. The enclosed bytes
+are decoded through the archive's best-effort text decoder, sanitized by the
+same HTML path, and derived again from verified raw bytes when selected; the
+canonical message is never rewritten. Individual image and PDF attachments
 are base64-transferred only on an explicit preview action; other attachment
 payloads are written to a private temporary directory before macOS opens them.
 The viewer also reads the archive mailbox location and linked source
@@ -453,6 +461,13 @@ and source or forensic path at the bottom without treating an archive mailbox
 as a source. Direct provider observations sort before local evidence; retained
 Apple Gmail observations are labeled as local cache copies rather than as the
 authoritative cloud source.
+
+For a catalog row whose `date_source` is `received-median`, the typed message
+response includes the decoded original `Date:` header, the stored UTC
+`date_utc` as the Received-header median, and that same UTC value as the archive
+routing date. The UI renders all three values in its warning banner. Keeping the
+median and routing fields distinct makes the current routing decision explicit
+without requiring the viewer to recompute archival date policy from headers.
 
 `search.sqlite3` contains separate `message_fts` and `attachment_fts` virtual
 tables so message text remains searchable without attachment matches.

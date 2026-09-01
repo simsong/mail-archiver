@@ -686,9 +686,15 @@ async function selectMessage(messagePk) {
   selectedRow?.setAttribute("aria-selected", "true");
   elements["result-list"].setAttribute("aria-activedescendant", `message-result-${messagePk}`);
   elements["message-content"].hidden = false;
-  const computedDate = view.date_source === "received-median";
-  elements["computed-date-banner"].hidden = !computedDate;
-  elements["message-well"].classList.toggle("computed-date", computedDate);
+  const adjustment = view.date_adjustment;
+  const banner = elements["computed-date-banner"];
+  banner.hidden = !adjustment;
+  banner.textContent = adjustment
+    ? `Date adjusted: The date in the Date: header (${adjustment.date_header}) is more than two days from ` +
+      `the median date of the Received: headers (${adjustment.received_median_utc}). ` +
+      `Archive routing uses the computed UTC date (${adjustment.archive_routing_utc}).`
+    : "";
+  elements["message-well"].classList.toggle("computed-date", Boolean(adjustment));
   elements["message-subject"].textContent = view.subject;
   elements["message-file-name"].textContent = state.dragExports.get(messagePk)?.filename || "Message.eml";
   elements["message-headers"].replaceChildren(...headerNodes(view.headers));
