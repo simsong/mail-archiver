@@ -32,6 +32,7 @@ const state = {
 const elements = {};
 const byId = id => document.getElementById(id);
 let initialized = false;
+let previewQueue = Promise.resolve();
 const SUGGESTION_MINIMUM = 3;
 const SUGGESTION_DELAY_MS = 120;
 const SUGGESTION_LIMIT = 20;
@@ -604,7 +605,7 @@ async function runSearch(append, loadAll = false) {
     state.searchAttachments = searchAttachments;
     if (!continuing) elements["result-list"].replaceChildren();
     for (const result of page.results) elements["result-list"].append(resultRow(result));
-    requestPreviews(page.results.map(result => result.message_pk));
+    queuePreviews(page.results.map(result => result.message_pk), request);
     offset += page.results.length;
     continuing = true;
     state.offset = offset;
@@ -697,6 +698,13 @@ async function requestPreviews(messagePks) {
     if (!batch.pending) return;
     await new Promise(resolve => setTimeout(resolve, 75));
   }
+}
+
+function queuePreviews(messagePks, request) {
+  previewQueue = previewQueue.then(() => {
+    if (request !== state.searchRequest) return undefined;
+    return requestPreviews(messagePks);
+  }).catch(error => showError(`Could not load message previews: ${error?.message || error}`));
 }
 
 async function selectMessage(messagePk) {

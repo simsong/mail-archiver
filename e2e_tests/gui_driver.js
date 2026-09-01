@@ -94,6 +94,11 @@
     await waitFor(() => rows().length === 207, "Load all appends every remaining page", 20000);
     assert(document.getElementById("load-more").hidden, "Load More hides on the final page");
     assert(document.getElementById("load-all").hidden, "Load all hides on the final page");
+    await waitFor(
+      () => rows().every(row => row.querySelector(".result-preview").textContent.length > 0),
+      "serialized preview queue fills every loaded result",
+      20000,
+    );
     const chooseArchive = document.getElementById("choose-archive");
     const completedChoices = chooseArchive.dataset.completed || "0";
     chooseArchive.click();
