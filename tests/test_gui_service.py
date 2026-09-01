@@ -29,7 +29,9 @@ from mailarchiver.gui_service import (
     write_attachment,
     write_message,
 )
-from mailarchiver.gui_app import GuiApi, application_menu, application_metadata, configure_macos_application
+from mailarchiver.gui_app import (
+    GuiApi, application_icon_path, application_menu, application_metadata, configure_macos_application,
+)
 from mailarchiver.mailsearch import _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, MailboxTreeNode, mailbox_tree
@@ -153,6 +155,14 @@ def test_gui_application_metadata_names_the_product() -> None:
     assert metadata.name == "Mail Archiver"
     assert metadata.version == "0.0.0"
     assert "Mail Archiver" in metadata.copyright
+
+
+def test_gui_application_uses_the_source_controlled_rainbow_icon() -> None:
+    """Requirement: the Python application uses the same named icon as the site."""
+    icon = application_icon_path()
+
+    assert icon.name == "rainbow-post.svg"
+    assert icon.is_file()
 
 
 def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:

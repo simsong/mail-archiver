@@ -527,6 +527,16 @@ All archive commands use `MAIL_ARCHIVE_DIR` as their default archive directory.
 `--archive DIRECTORY` overrides that environment variable. If neither is set,
 the command fails before reading or writing an archive.
 
+The Python GUI identifies itself as **Mail Archiver** and uses the
+source-controlled rainbow-envelope icon in its native application identity.
+The project also publishes a Zola-generated GitHub Pages site at
+`https://simsong.github.io/mail-archiver/`. The site links to the README,
+release notes, GitHub releases, the current stable `v1.2.3`-shaped tag and
+current beta `v1.2.3-beta1`-shaped tag when present, and project discussions.
+It provides a clearly labeled index of digital-email-curation reports and
+related organizations; it does not imply that planned application features
+are implemented.
+
 ## Ingest sources
 
 * Recursive local-directory ingest recognizes MBOX streams, Apple Mail MBOX

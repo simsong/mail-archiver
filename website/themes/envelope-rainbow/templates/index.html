@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Mail Archiver · {{ section.title }}{% endblock title %}
+{% block content %}
+{% set releases = load_data(path="data/releases.toml") %}
+<main>
+  <section class="hero shell">
+    <div class="hero-copy">
+      <p class="eyebrow">Personal email, preserved</p>
+      <h1>A durable home for the messages you keep.</h1>
+      <p class="lede">Mail Archiver turns scattered email exports into a local, inspectable, searchable archive that can outlive the application that created it.</p>
+      <div class="actions">
+        <a class="button primary" href="{{ config.extra.readme }}">Read the README</a>
+        <a class="button secondary" href="{{ config.extra.releases }}">Browse releases</a>
+      </div>
+    </div>
+    <div class="hero-art"><img src="{{ get_url(path='icons/rainbow-post.svg') }}" alt="Rainbow over an envelope"></div>
+  </section>
+
+  <section class="release-band shell" aria-labelledby="release-title">
+    <div>
+      <p class="eyebrow">Project status</p>
+      <h2 id="release-title">Current release: <a href="{{ releases.current_url }}">{{ releases.current_version }}</a></h2>
+    </div>
+    <div class="release-links">
+      <a href="{{ releases.stable.url }}"><span>Stable</span><strong>{{ releases.stable.version }}</strong></a>
+      <a href="{{ releases.beta.url }}"><span>Beta</span><strong>{{ releases.beta.version }}</strong></a>
+    </div>
+  </section>
+
+  <section class="principles shell" aria-label="Project principles">
+    <article><span>01</span><h2>Preserve first</h2><p>Original RFC 5322 bytes remain canonical. Search databases and interface views are rebuildable derivatives.</p></article>
+    <article><span>02</span><h2>Keep it inspectable</h2><p>Standard MBOX, BagIt metadata, SHA-256 fixity, and provenance keep the archive understandable.</p></article>
+    <article><span>03</span><h2>Know the boundary</h2><p>This is local preservation infrastructure—not a mail client, hosted mailbox, or compliance appliance.</p></article>
+  </section>
+
+  <section class="resource-grid shell" aria-labelledby="resources-title">
+    <div class="section-heading"><p class="eyebrow">Keep learning</p><h2 id="resources-title">Curation, context, conversation.</h2></div>
+    <a class="resource-card" href="{{ get_url(path='curation/') }}"><span>↗</span><h3>Digital email curation</h3><p>Reports, preservation guidance, and organizations shaping the field.</p></a>
+    <a class="resource-card" href="{{ get_url(path='discussions/') }}"><span>↗</span><h3>Project discussions</h3><p>Announcements belong in Discussions #55; feature requests belong in #56.</p></a>
+    <a class="resource-card" href="{{ config.extra.release_notes }}"><span>↗</span><h3>Release notes</h3><p>Follow the implementation as it moves from active development toward a first release.</p></a>
+  </section>
+
+  <section class="closing shell">
+    <div><p class="eyebrow">Open source · active development</p><h2>Build an archive you can still read later.</h2></div>
+    <a class="button primary" href="{{ config.extra.announcements }}">Follow announcements</a>
+  </section>
+</main>
+{% endblock content %}

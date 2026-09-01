@@ -1,0 +1,5 @@
+name = "envelope-rainbow"
+description = "A bright, readable Mail Archiver theme built around a rainbow envelope."
+license = "MIT"
+homepage = "https://github.com/simsong/mail-archiver"
+min_version = "0.20.0"

@@ -44,6 +44,7 @@ GUI_DIRECTORY = Path(__file__).parents[2] / "gui"
 E2E_DRIVER = Path(__file__).parents[2] / "e2e_tests" / "gui_driver.js"
 DEFAULT_PAGE_SIZE = 100
 APPLICATION_NAME = "Mail Archiver"
+APPLICATION_ICON = GUI_DIRECTORY / "icons" / "rainbow-post.svg"
 
 
 class ApplicationMetadata(BaseModel):
@@ -81,6 +82,11 @@ class GuiE2EClientResult(BaseModel):
 
 class GuiE2EReport(GuiE2EClientResult):
     exports: list[str]
+
+
+def application_icon_path() -> Path:
+    """Return the source-controlled icon used by the native application."""
+    return APPLICATION_ICON
 
 
 class IngestWindowApi:
@@ -444,7 +450,9 @@ def configure_macos_application() -> None:
     info["CFBundleVersion"] = metadata.version
     info["NSHumanReadableCopyright"] = metadata.copyright
     NSProcessInfo.processInfo().setProcessName_(metadata.name)
-    icon = NSImage.imageWithSystemSymbolName_accessibilityDescription_("archivebox", metadata.name)
+    icon = NSImage.alloc().initWithContentsOfFile_(str(application_icon_path()))
+    if icon is None:
+        icon = NSImage.imageWithSystemSymbolName_accessibilityDescription_("archivebox", metadata.name)
     if icon is not None:
         NSApplication.sharedApplication().setApplicationIconImage_(icon)
 
