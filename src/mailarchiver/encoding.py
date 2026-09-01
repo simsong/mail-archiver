@@ -131,7 +131,7 @@ def decode_text(payload: bytes, declared_encoding: str | None = None) -> Decoded
 
     sample = _sample(payload)
     candidates: list[_EncodingCandidate] = []
-    for detector_rank, encoding in enumerate(_candidate_encodings(payload)):
+    for detector_rank, encoding in enumerate(_candidate_encodings(sample)):
         try:
             text = sample.decode(encoding)
         except UnicodeError:

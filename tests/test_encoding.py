@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from mailarchiver.encoding import _candidate_encodings, decode_text
+from mailarchiver.encoding import (
+    DETECTION_SAMPLE_BYTES,
+    _candidate_encodings,
+    _detected_encodings,
+    _encoding_name,
+    decode_text,
+)
 from mailarchiver.search import decoded_part, message_text
 
 
@@ -47,9 +53,16 @@ def test_misdeclared_utf8_uses_readable_western_encoding() -> None:
 
 def test_detector_candidates_precede_universal_single_byte_fallbacks() -> None:
     """Requirement: detector evidence precedes codecs that accept nearly every byte."""
-    candidates = _candidate_encodings(b"The world\x92s largest")
+    body = b"The world\x92s largest"
+    detected = [
+        canonical
+        for name in _detected_encodings(body)
+        if (canonical := _encoding_name(name)) is not None
+    ]
+    expected_prefix = list(dict.fromkeys(detected))
 
-    assert candidates.index("cp1250") < candidates.index("cp1252")
+    assert expected_prefix
+    assert _candidate_encodings(body)[: len(expected_prefix)] == expected_prefix
 
 
 def test_large_payload_is_ranked_on_a_sample_before_one_full_fallback_decode() -> None:
@@ -57,11 +70,18 @@ def test_large_payload_is_ranked_on_a_sample_before_one_full_fallback_decode() -
 
     class DecodeCountingBytes(bytes):
         calls: list[str]
+        slices: list[slice]
 
         def __new__(cls, value: bytes) -> "DecodeCountingBytes":
             instance = super().__new__(cls, value)
             instance.calls = []
+            instance.slices = []
             return instance
+
+        def __getitem__(self, key: int | slice) -> int | bytes:
+            if isinstance(key, slice):
+                self.slices.append(key)
+            return super().__getitem__(key)
 
         def decode(self, encoding: str = "utf-8", errors: str = "strict") -> str:
             self.calls.append(encoding)
@@ -73,6 +93,8 @@ def test_large_payload_is_ranked_on_a_sample_before_one_full_fallback_decode() -
 
     assert result.value.startswith("한국어메시지")
     assert body.calls == ["utf-8", result.encoding]
+    half = DETECTION_SAMPLE_BYTES // 2
+    assert body.slices == [slice(None, half), slice(-half, None)]
 
 
 def test_ftfy_repairs_mojibake_after_valid_utf8_decode() -> None:
