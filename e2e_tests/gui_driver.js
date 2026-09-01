@@ -120,7 +120,10 @@
     const rich = rows()[0];
     rich.click();
     await waitFor(() => document.getElementById("message-subject").textContent === "Rich UI message", "message viewer opens");
-    assert(!document.getElementById("computed-date-banner").hidden, "computed-date warning banner displayed");
+    const dateBanner = document.getElementById("computed-date-banner");
+    assert(!dateBanner.hidden, "computed-date warning banner displayed");
+    assert(dateBanner.textContent.includes("Tue, 31 Dec 2024 12:00:00 +0000"), "banner identifies original Date header");
+    assert(dateBanner.textContent.includes("2024-02-02T00:00:00+00:00"), "banner identifies Received median and routing UTC date");
     assert(document.getElementById("message-well").classList.contains("computed-date"), "computed-date message tint applied");
     assert(document.getElementById("message-headers").textContent.includes("curator@example.net"), "message headers displayed");
     assert(document.getElementById("message-locations").textContent.includes("Source path"), "source provenance displayed");

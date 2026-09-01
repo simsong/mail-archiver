@@ -16,6 +16,7 @@ import pytest
 from mailarchiver.bagit import initialize_bag
 from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.gui_service import (
+    LEGACY_X_HTML_PART_ID,
     RAW_PART_ID,
     attachment_content,
     attachment_descriptor,
@@ -63,9 +64,24 @@ MULTIPART_MESSAGE = (
     b"Appendixquartz appears only in this attachment.\n"
     b"--outer--\n"
 )
+LEGACY_X_HTML_MESSAGE = (
+    b"Message-ID: <legacy-x-html@example>\nFrom: sender@example.net\nTo: recipient@example.net\n"
+    b"Subject: legacy x-html\nDate: Fri, 05 Jan 2024 10:00:00 +0000\nMIME-Version: 1.0\n"
+    b"Content-Type: multipart/alternative; boundary=missing\n\n"
+    b'<x-html><HTML><BODY onload="bad()"><script>bad()</script><p>Legacy HTML version.</p>'
+    b'<img src="https://tracker.example/pixel"></BODY></HTML></x-html>\n'
+)
+X_HTML_MENTION_MESSAGE = (
+    b"Message-ID: <x-html-mention@example>\nFrom: sender@example.net\nTo: recipient@example.net\n"
+    b"Subject: x-html mention\nDate: Sat, 06 Jan 2024 10:00:00 +0000\n\n"
+    b"This plain text mentions <x-html> without wrapping the whole body.\n"
+)
 
 
-def make_gui_archive(tmp_path: Path) -> Path:
+def make_gui_archive(
+    tmp_path: Path,
+    extra_messages: tuple[tuple[bytes, str, str, str], ...] = (),
+) -> Path:
     archive = tmp_path / "archive"
     initialize_bag(archive)
     catalog = create_catalog(archive / "archive.sqlite3")
@@ -74,10 +90,12 @@ def make_gui_archive(tmp_path: Path) -> Path:
     try:
         sender = address_pk(catalog, "sender@example.net")
         recipient = address_pk(catalog, "recipient@example.net")
-        for raw, message_id, subject, timestamp in (
+        records = (
             (SIMPLE_MESSAGE, "simple@example", "annual plan", "2024-01-03T10:00:00+00:00"),
             (MULTIPART_MESSAGE, "multipart@example", "multipart message", "2024-01-04T10:00:00+00:00"),
-        ):
+            *extra_messages,
+        )
+        for raw, message_id, subject, timestamp in records:
             cursor = catalog.execute(
                 "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
                 "VALUES (?, ?, ?, ?, ?, 'date', 'Archive')",
@@ -97,7 +115,7 @@ def make_gui_archive(tmp_path: Path) -> Path:
     path = mbox_directory(archive) / "2024-Archive1.mbox"
     box = mailbox.mbox(path)
     try:
-        locations = [add_message(box, path, raw) for raw in (SIMPLE_MESSAGE, MULTIPART_MESSAGE)]
+        locations = [add_message(box, path, raw) for raw, _, _, _ in records]
     finally:
         box.close()
     catalog = create_catalog(archive / "archive.sqlite3")
@@ -338,6 +356,41 @@ def test_gui_selects_multipart_views_and_sanitizes_html(tmp_path: Path) -> None:
     assert "Subject: multipart message" in render_part(archive, 2, RAW_PART_ID).content
 
 
+def test_gui_recognizes_whole_body_legacy_x_html_without_hiding_raw_source(tmp_path: Path) -> None:
+    """Requirement: a whole-body x-html wrapper is a safe HTML view while raw RFC 5322 remains selectable."""
+    archive = make_gui_archive(
+        tmp_path,
+        (
+            (LEGACY_X_HTML_MESSAGE, "legacy-x-html@example", "legacy x-html", "2024-01-05T10:00:00+00:00"),
+            (X_HTML_MENTION_MESSAGE, "x-html-mention@example", "x-html mention", "2024-01-06T10:00:00+00:00"),
+        ),
+    )
+
+    legacy = describe_message(archive, 3)
+    assert [(part.part_id, part.content_type, part.label) for part in legacy.body_parts] == [
+        (LEGACY_X_HTML_PART_ID, "text/html", "HTML — legacy x-html"),
+        (RAW_PART_ID, "message/rfc822", "Raw Source"),
+    ]
+    assert legacy.preferred_part_id == LEGACY_X_HTML_PART_ID
+    rendered = render_part(archive, 3, LEGACY_X_HTML_PART_ID)
+    assert rendered.kind == "html"
+    assert "Legacy HTML version." in rendered.content
+    assert "x-html" not in rendered.content.casefold()
+    assert "<script" not in rendered.content.casefold()
+    assert "onload" not in rendered.content.casefold()
+    assert "tracker.example" not in rendered.content
+    assert rendered.remote_content_blocked
+    assert "<x-html>" in render_part(archive, 3, RAW_PART_ID).content
+
+    mention = describe_message(archive, 4)
+    assert [(part.part_id, part.content_type) for part in mention.body_parts] == [
+        (0, "text/plain"),
+        (RAW_PART_ID, "message/rfc822"),
+    ]
+    with pytest.raises(ValueError, match="no legacy x-html"):
+        render_part(archive, 4, LEGACY_X_HTML_PART_ID)
+
+
 def test_gui_displays_archive_and_source_locations(tmp_path: Path) -> None:
     """Requirement: the message viewer distinguishes archive mailboxes from source discoveries."""
     archive = make_gui_archive(tmp_path)
@@ -412,12 +465,22 @@ def test_gui_exposes_computed_date_tag_for_warning_banner(tmp_path: Path) -> Non
     archive = make_gui_archive(tmp_path)
     database = sqlite3.connect(archive / "archive.sqlite3")
     try:
-        database.execute("UPDATE messages SET date_source = 'received-median' WHERE message_pk = 1")
+        database.execute(
+            "UPDATE messages SET date_utc = '2024-02-02T00:00:00+00:00', date_source = 'received-median' "
+            "WHERE message_pk = 1"
+        )
         database.commit()
     finally:
         database.close()
 
-    assert describe_message(archive, 1).date_source == "received-median"
+    view = describe_message(archive, 1)
+    assert view.date_source == "received-median"
+    assert view.date_adjustment is not None
+    assert view.date_adjustment.model_dump() == {
+        "date_header": "Wed, 03 Jan 2024 10:00:00 +0000",
+        "received_median_utc": "2024-02-02T00:00:00+00:00",
+        "archive_routing_utc": "2024-02-02T00:00:00+00:00",
+    }
 
 
 def test_gui_exports_exact_eml_and_decoded_attachment(tmp_path: Path) -> None:

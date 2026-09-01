@@ -499,12 +499,24 @@ HTTP(S) images may load only after an explicit per-message action. Embedded
 CID images may render from the verified message. Attachments appear in a list,
 safe images and PDFs can be previewed inline, and opening any attachment is an
 explicit action with an additional warning for executable or container types.
+For a non-multipart message whose complete raw body, apart from surrounding
+ASCII whitespace, is enclosed by case-insensitive `<x-html>` and `</x-html>`
+tags, the GUI exposes the enclosed content as a preferred **HTML — legacy
+x-html** view. This recovery also applies when a malformed multipart declaration
+has no usable boundaries and therefore parses as non-multipart. An inline
+mention of `<x-html>` does not trigger it, valid MIME parts take precedence, and
+the recovered view passes through the same sanitizer and remote-content policy
+as MIME HTML. **Raw Source** remains selectable and unchanged.
 At the bottom of every message view, the GUI displays the archive mailbox path
 separately from every source volume and source/forensic path where the message
 was found.
 When `date_source` is `received-median`, the GUI shows a warning banner across
 the message and gives the message well a slight red tint. The original `Date:`
-header remains visible and unchanged.
+header remains visible and unchanged. The banner identifies the original
+`Date:` header value, the computed UTC median of the usable `Received:` header
+dates, and the computed UTC date used for archive routing. The latter two values
+are currently equal but are reported separately so the archival decision is
+explicit.
 Command-1 through Command-9 select the MIME part having that numeric part ID;
 Command-0 and Command-Shift-U select the raw RFC 5322 source.
 
