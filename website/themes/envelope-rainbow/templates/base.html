@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#182239">
+    <meta name="description" content="{{ config.description }}">
+    <title>{% block title %}{{ config.title }}{% endblock title %}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ get_url(path='icons/rainbow-post.svg') }}">
+    <link rel="icon" type="image/png" sizes="48x48" href="{{ get_url(path='icons/rainbow-post-48.png') }}">
+    <link rel="apple-touch-icon" sizes="192x192" href="{{ get_url(path='icons/rainbow-post-192.png') }}">
+    <link rel="stylesheet" href="{{ get_url(path='styles.css') }}">
+  </head>
+  <body>
+    <header class="site-header shell">
+      <a class="brand" href="{{ get_url(path='') }}"><img src="{{ get_url(path='icons/rainbow-post.svg') }}" alt=""><span>Mail Archiver</span></a>
+      <nav aria-label="Primary navigation">
+        <a href="{{ get_url(path='curation/') }}">Curation</a>
+        <a href="{{ get_url(path='discussions/') }}">Discussions</a>
+        <a href="{{ config.extra.repository }}">GitHub</a>
+      </nav>
+    </header>
+    {% block content %}{% endblock content %}
+    <footer class="site-footer shell">
+      <span>Mail Archiver · preservation-first email tools</span>
+      <span><a href="{{ config.extra.release_notes }}">Release notes</a> · <a href="{{ config.extra.releases }}">Releases</a></span>
+    </footer>
+  </body>
+</html>

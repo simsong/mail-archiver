@@ -401,6 +401,17 @@ window is restored and ordered to the front, while a closed one is recreated
 with its own normal close box. A running file whose heartbeat is older than
 five seconds is displayed as stale without rewriting its retained JSON.
 
+The native shell loads the checked-in 192-pixel PNG derived from
+`gui/icons/rainbow-post.svg` before falling back to a system symbol, so the
+Python application and its About/Dock identity use a stable project asset. The
+`website/` directory is a Zola site using the local
+`envelope-rainbow` theme. GitHub Pages builds it from `main`; the workflow
+SHA-256 verifies the pinned Zola archive before extraction, resolves the newest
+exact stable and beta tags into Zola data, then deploys a Pages artifact. The
+release workflow follows the repository's draft-release
+pattern: it requires a version-matching signed annotated tag, builds a source
+distribution, writes `SHA256SUMS`, and creates a draft GitHub Release.
+
 Result ordering is a server-side SQL whitelist over date, case-folded subject,
 or case-folded sender with a stable message-number tie break. The listbox owns
 keyboard focus after a pointer selection and implements Up/Down selection.

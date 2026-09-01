@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Add the rainbow-envelope identity to the Python GUI and create the Zola
+  `envelope-rainbow` GitHub Pages site. The site links to project documents,
+  curation resources, discussions, and tag-derived stable/beta release data.
+  Add a pinned draft-release workflow modeled on bulk_extractor's signed-tag,
+  source-artifact, checksum, and draft-publication flow.
 * Add an OCR-engine-independent standalone printed-email PDF extractor. It
   streams page-addressable native text through Poppler, accounts for message
   and non-message pages, records PDF/page/policy and handwriting provenance,
