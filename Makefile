@@ -1,6 +1,6 @@
-.PHONY: benchmark-name-resolution check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke
+.PHONY: benchmark-name-resolution check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke website-build-check website-check release-tag-check
 .PHONY: install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality
-.PHONY: test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance test-tika validation-aws-start validation-aws-start-all
+.PHONY: test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance test-tika test-website validation-aws-start validation-aws-start-all
 .PHONY: validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
 
 
@@ -22,7 +22,7 @@ OCR_ENGINES ?= native,ocrmypdf,tesseract
 OCR_INVENTORY_ARGS ?=
 OCR_RUN_ARGS ?=
 
-check: test test-e2e
+check: test test-e2e website-check
 
 data-quality-audit:
 	@test -n "$(ARCHIVE)" || { echo 'usage: make data-quality-audit ARCHIVE=/path/to/mailbag EARLY_SOURCE=/path/to/source'; exit 2; }
@@ -75,6 +75,16 @@ gui:
 gui-smoke:
 	uv run mailsearch-gui --smoke-test
 
+website-check:
+	uv run python scripts/check_website.py
+
+website-build-check: website-check
+	zola --root website build --output-dir "$(CURDIR)/.tmp/website-check" --force
+
+release-tag-check:
+	@test -n "$(GITHUB_REF_NAME)" || { echo 'usage: make release-tag-check GITHUB_REF_NAME=v1.2.3'; exit 2; }
+	uv run python scripts/release_tag.py --tag "$(GITHUB_REF_NAME)"
+
 test:
 	uv run pytest -q
 
@@ -117,6 +127,9 @@ test-progress:
 
 test-tika:
 	uv run pytest -q tests/test_tika.py
+
+test-website:
+	uv run pytest -q tests/test_website_scripts.py
 
 test-plugins:
 	uv run pytest -q tests/test_plugin_loader.py tests/test_source_integrity.py tests/test_archive_integrity.py
