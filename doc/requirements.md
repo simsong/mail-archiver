@@ -460,6 +460,10 @@ the CLI selectors and ordinary ANDed terms; shell-style quotes group spaces,
 so `subject:"annual report"` is one selector while `subject:annual report`
 retains the CLI meaning of a subject selector plus a free-text term.  It loads
 the newest 100 results at a time without changing the CLI's ten-result default.
+When more results exist, **Load more** appends one page and **Load all** appends
+every remaining page without further user action. A newer search must supersede
+an in-progress **Load all** operation, and the status must show its accumulated
+result count while it runs.
 After three characters and a 120-millisecond debounce, the GUI suggests at most
 20 matching addresses and 20 matching subjects with deduplicated message
 counts. Stale responses are discarded. Addresses rank by message count, then
