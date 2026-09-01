@@ -496,6 +496,13 @@ meaning. The control does not extract attachment content on demand.
 The GUI paints each result page from header metadata first, then requests its
 indexed body previews on a background worker and fills a reserved third line
 without blocking the initial result display.
+Literal, case-insensitive occurrences of every ordinary free-text query term
+must be highlighted in the selected message's displayed headers and body.
+Highlighting applies to plain text, sanitized HTML, and raw-source views without
+changing canonical bytes or weakening the HTML sandbox. Its background color
+comes from the strictly validated, versioned packaged `configuration.yaml`;
+the initial value is yellow (`#fff59d`). Structured selector values and date
+filters do not create body highlights.
 
 The bottom of the main GUI contains a clickable ingest-status line. During a
 run it shows live completion, message count, active/configured workers, and ETA;

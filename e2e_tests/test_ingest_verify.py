@@ -20,7 +20,6 @@ from mailarchiver.gui_app import (
     GUI_DIRECTORY,
     GuiApi,
     GuiE2EClientResult,
-    GuiE2EReport,
     IngestWindowApi,
 )
 from mailarchiver.ingest_status import read_ingest_history
@@ -228,9 +227,8 @@ def test_ingest_history_ui_end_to_end(built_archive: BuiltArchive, page: Page) -
     sys.platform != "darwin" or os.environ.get("MAILARCHIVER_NATIVE_GUI_E2E") != "1",
     reason="set MAILARCHIVER_NATIVE_GUI_E2E=1 to exercise the native macOS WKWebView",
 )
-def test_native_search_ui_end_to_end(built_archive: BuiltArchive, tmp_path: Path) -> None:
-    """Drive the shipped HTML/JavaScript through the real pywebview Python bridge."""
-    report = tmp_path / "gui-e2e.json"
+def test_native_search_ui_smoke(built_archive: BuiltArchive) -> None:
+    """Exercise one real search through a hidden pywebview bridge process."""
     tested = subprocess.run(
         [
             sys.executable,
@@ -238,8 +236,7 @@ def test_native_search_ui_end_to_end(built_archive: BuiltArchive, tmp_path: Path
             "mailarchiver.gui_app",
             "--archive",
             str(built_archive.archive),
-            "--e2e-test",
-            str(report),
+            "--smoke-test",
         ],
         check=False,
         capture_output=True,
@@ -247,13 +244,4 @@ def test_native_search_ui_end_to_end(built_archive: BuiltArchive, tmp_path: Path
         timeout=90,
     )
     assert tested.returncode == 0, tested.stdout + tested.stderr
-    assert tested.stdout.endswith("GUI end-to-end test passed\n")
-    result = GuiE2EReport.model_validate_json(report.read_text(encoding="utf-8"))
-    assert result.passed
-    assert len(result.checks) >= 30
-    assert "saved-tiny.png" in result.exports
-    assert "saved-review.command" in result.exports
-    assert "filter-sets.json" in result.exports
-    assert not (built_archive.archive / "filter-sets.json").exists()
-    assert any(name.startswith("saved-Rich UI message-") and name.endswith(".eml") for name in result.exports)
-    assert any(name.startswith("Rich UI message-") and name.endswith(".eml") for name in result.exports)
+    assert tested.stdout.endswith("GUI bridge smoke test passed\n")

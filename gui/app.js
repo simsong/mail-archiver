@@ -9,6 +9,8 @@ const state = {
   searchAttachments: false,
   completeSearch: false,
   olderResultsUnchecked: false,
+  highlightTerms: [],
+  highlightBackground: "transparent",
   selected: null,
   selectionRequest: null,
   searchRequest: 0,
@@ -90,6 +92,7 @@ async function initialize() {
   if (parameters.get("standalone") === "1") document.body.classList.add("standalone");
   const status = await call(() => window.pywebview.api.status());
   if (!status) return;
+  state.highlightTerms = parameters.getAll("highlight");
   await loadFilterSets();
   applyStatus(status);
   await refreshIngestOverview();
@@ -125,6 +128,7 @@ function resetArchiveView() {
   state.searchFilters = [];
   state.completeSearch = false;
   state.olderResultsUnchecked = false;
+  state.highlightTerms = [];
   state.dragExports.clear();
   renderSearchFilters();
   closeSuggestions();
@@ -134,6 +138,8 @@ function resetArchiveView() {
 }
 
 function applyStatus(status) {
+  state.highlightBackground = status.configuration.search_highlight_background;
+  document.documentElement.style.setProperty("--search-highlight-background", state.highlightBackground);
   elements["archive-label"].textContent = status.archive || "No archive selected";
   document.title = status.ready
     ? `Mail Archiver — ${status.archive} (${status.message_count.toLocaleString()} messages)`
@@ -598,6 +604,7 @@ async function runSearch(append) {
   state.searchAttachments = searchAttachments;
   state.completeSearch = findOlder;
   state.olderResultsUnchecked = page.older_results_unchecked;
+  state.highlightTerms = page.highlight_terms;
   state.offset = offset + page.results.length;
   if (!append) elements["result-list"].replaceChildren();
   for (const result of page.results) {
@@ -674,7 +681,7 @@ function resultRow(result) {
   row.addEventListener("mousedown", () => elements["result-list"].focus({preventScroll: true}));
   row.addEventListener("click", () => selectMessage(result.message_pk));
   row.addEventListener("dblclick", async () => {
-    await call(() => window.pywebview.api.open_message_window(result.message_pk));
+    await call(() => window.pywebview.api.open_message_window(result.message_pk, state.highlightTerms));
     row.dataset.openedWindow = "true";
   });
   installDrag(row, () => result.message_pk);
@@ -717,7 +724,7 @@ async function selectMessage(messagePk) {
   const computedDate = view.date_source === "received-median";
   elements["computed-date-banner"].hidden = !computedDate;
   elements["message-well"].classList.toggle("computed-date", computedDate);
-  elements["message-subject"].textContent = view.subject;
+  setHighlightedText(elements["message-subject"], view.subject);
   elements["message-file-name"].textContent = state.dragExports.get(messagePk)?.filename || "Message.eml";
   elements["message-headers"].replaceChildren(...headerNodes(view.headers));
   elements["part-select"].replaceChildren(...view.body_parts.map(partOption));
@@ -774,7 +781,7 @@ function headerNodes(headers) {
   const important = new Set(["from", "to", "cc", "subject", "date"]);
   return headers.filter(header => important.has(header.name.toLowerCase())).flatMap(header => {
     const term = document.createElement("dt"); term.textContent = `${header.name}:`;
-    const value = document.createElement("dd"); value.textContent = header.value;
+    const value = document.createElement("dd"); setHighlightedText(value, header.value);
     return [term, value];
   });
 }
@@ -798,15 +805,72 @@ async function showPart(partId, allowRemote) {
     const frame = document.createElement("iframe");
     frame.className = "html-frame";
     frame.setAttribute("sandbox", "allow-popups");
-    frame.srcdoc = part.content;
+    const highlighted = highlightedHtml(part.content);
+    frame.srcdoc = highlighted.content;
+    frame.dataset.highlightCount = String(highlighted.count);
     frame.addEventListener("load", () => resizeFrame(frame));
     elements["body-view"].append(frame);
   } else {
     const body = document.createElement("div");
     body.className = part.kind === "raw" ? "raw" : "plain";
-    body.textContent = part.content;
+    setHighlightedText(body, part.content);
     elements["body-view"].append(body);
   }
+}
+
+function highlightPattern() {
+  const terms = [...new Map(state.highlightTerms
+    .filter(term => term.length)
+    .map(term => [term.toLocaleLowerCase(), term])).values()]
+    .sort((left, right) => right.length - left.length);
+  if (!terms.length) return null;
+  const escaped = terms.map(term => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(escaped.join("|"), "giu");
+}
+
+function highlightedFragment(value, owner = document) {
+  const fragment = owner.createDocumentFragment();
+  const pattern = highlightPattern();
+  let cursor = 0;
+  let count = 0;
+  if (pattern) {
+    for (const match of value.matchAll(pattern)) {
+      fragment.append(owner.createTextNode(value.slice(cursor, match.index)));
+      const mark = owner.createElement("mark");
+      mark.className = "search-highlight";
+      mark.textContent = match[0];
+      fragment.append(mark);
+      cursor = match.index + match[0].length;
+      count += 1;
+    }
+  }
+  fragment.append(owner.createTextNode(value.slice(cursor)));
+  return {fragment, count};
+}
+
+function setHighlightedText(element, value) {
+  element.replaceChildren(highlightedFragment(value, element.ownerDocument).fragment);
+}
+
+function highlightedHtml(value) {
+  const parsed = new DOMParser().parseFromString(value, "text/html");
+  const walker = parsed.createTreeWalker(parsed.body, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) {
+    if (!walker.currentNode.parentElement?.closest("style, noscript, template")) {
+      nodes.push(walker.currentNode);
+    }
+  }
+  let count = 0;
+  for (const node of nodes) {
+    const highlighted = highlightedFragment(node.nodeValue, parsed);
+    count += highlighted.count;
+    node.replaceWith(highlighted.fragment);
+  }
+  const style = parsed.createElement("style");
+  style.textContent = `mark.search-highlight { color: inherit; background: ${state.highlightBackground}; }`;
+  parsed.head.append(style);
+  return {content: `<!doctype html>${parsed.documentElement.outerHTML}`, count};
 }
 
 function resizeFrame(frame) {

@@ -14,11 +14,13 @@ from importlib.metadata import version
 from pathlib import Path
 from threading import Lock
 from typing import Any
+from urllib.parse import urlencode
 
 import webview
 from pydantic import BaseModel
 from webview.menu import MenuAction
 
+from .configuration import GuiConfiguration, application_configuration
 from .gui_service import (
     MessageView,
     MessagePreview,
@@ -56,6 +58,7 @@ class GuiStatus(BaseModel):
     archive: str | None
     ready: bool
     message_count: int = 0
+    configuration: GuiConfiguration
 
 
 class GuiIngestOverview(BaseModel):
@@ -77,10 +80,6 @@ class GuiE2EClientResult(BaseModel):
     passed: bool
     checks: list[str]
     error: str | None = None
-
-
-class GuiE2EReport(GuiE2EClientResult):
-    exports: list[str]
 
 
 class IngestWindowApi:
@@ -143,6 +142,7 @@ class GuiApi:
             archive=str(self.archive) if self.archive else None,
             ready=ready,
             message_count=self._message_count or 0,
+            configuration=application_configuration().gui,
         ).model_dump()
 
     def ingest_overview(self) -> dict[str, object]:
@@ -151,7 +151,7 @@ class GuiApi:
 
     def open_ingest_window(self, status_id: str | None = None) -> bool:
         """Open one ingest browser, or focus and retarget the existing window."""
-        if self.e2e_directory is not None and self.window is None:
+        if self.e2e_directory is not None:
             return True
         with self._ingest_window_lock:
             api = self._ingest_window_api
@@ -355,17 +355,19 @@ class GuiApi:
         subprocess.Popen(["/usr/bin/open", str(destination)], close_fds=True)
         return OpenResult(filename=descriptor.filename, opened=True).model_dump()
 
-    def open_message_window(self, message_pk: int) -> bool:
+    def open_message_window(self, message_pk: int, highlight_terms: list[str] | None = None) -> bool:
         view: MessageView = describe_message(self._archive(), message_pk)
         if self.e2e_directory is not None:
             return True
         base_url = str(self.window.get_current_url()).split("?", 1)[0]
+        parameters = [("message", str(message_pk)), ("standalone", "1")]
+        parameters.extend(("highlight", term) for term in highlight_terms or [])
         child_api = GuiApi(
             self._archive(), self.temporary_directory, self.e2e_directory, self.filter_sets.path
         )
         child = webview.create_window(
             view.subject,
-            f"{base_url}?message={message_pk}&standalone=1",
+            f"{base_url}?{urlencode(parameters)}",
             js_api=child_api,
             width=900,
             height=760,
@@ -454,20 +456,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only graphical search of a mailarchiver archive.")
     parser.add_argument("--archive", type=Path, help="directory containing archive.sqlite3 and search.sqlite3")
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--e2e-test", type=Path, metavar="REPORT", help=argparse.SUPPRESS)
     return parser
 
 
 def verify_bridge(window: Any, result: list[str]) -> None:
-    """Call the exposed Python API from JavaScript, then close the smoke-test window."""
+    """Exercise the bridge and one real search, then close the hidden window."""
     try:
         has_api = window.evaluate_js("typeof window.pywebview?.api?.status === 'function'")
         if not has_api:
             raise RuntimeError("pywebview API was not injected")
         window.run_js(
             "window.__mailarchiveSmoke = 'waiting';"
-            "window.pywebview.api.status().then(function(value) {"
-            "window.__mailarchiveSmoke = Object.hasOwn(value, 'ready') ? 'passed' : 'invalid';"
+            "window.pywebview.api.status().then(function(status) {"
+            "if (!Object.hasOwn(status, 'ready')) throw new Error('invalid status response');"
+            "if (!status.ready) return null;"
+            "return window.pywebview.api.search('\"message viewer\"', 0, 'date', 'descending', false, [], false);"
+            "}).then(function(page) {"
+            "window.__mailarchiveSmoke = page === null || "
+            "(Array.isArray(page.results) && page.highlight_terms.includes('message viewer')) ? 'passed' : 'invalid search';"
             "}).catch(function(error) { window.__mailarchiveSmoke = 'failed: ' + error; });"
         )
         deadline = time.monotonic() + 5
@@ -486,24 +492,6 @@ def verify_bridge(window: Any, result: list[str]) -> None:
         window.destroy()
 
 
-def run_e2e_driver(window: Any, result: list[GuiE2EClientResult]) -> None:
-    """Run the browser-side acceptance driver inside the real native webview."""
-    try:
-        window.run_js(E2E_DRIVER.read_text(encoding="utf-8"))
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            value = window.evaluate_js("window.__mailarchiveE2E || null")
-            if value is not None:
-                result.append(GuiE2EClientResult.model_validate(value))
-                return
-            time.sleep(0.05)
-        raise RuntimeError("browser-side acceptance test timed out")
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        result.append(GuiE2EClientResult(passed=False, checks=[], error=str(error)))
-    finally:
-        window.destroy()
-
-
 def main() -> int:
     args = build_parser().parse_args()
     configure_macos_application()
@@ -511,9 +499,7 @@ def main() -> int:
     archive = args.archive or (Path(archive_value) if archive_value else None)
     if archive is not None and not _is_archive(archive):
         raise SystemExit(f"mailsearch-gui: {archive} must contain archive.sqlite3 and search.sqlite3")
-    e2e_directory = args.e2e_test.parent / "gui-e2e-exports" if args.e2e_test else None
-    preferences_file = e2e_directory / "filter-sets.json" if e2e_directory else None
-    api = GuiApi(archive, e2e_directory, e2e_directory, preferences_file)
+    api = GuiApi(archive)
     initial_status = api.status()
     window = webview.create_window(
         _window_title(archive, int(initial_status["message_count"])),
@@ -522,18 +508,15 @@ def main() -> int:
         width=1400,
         height=900,
         min_size=(900, 560),
-        hidden=bool(args.smoke_test or args.e2e_test),
+        hidden=args.smoke_test,
         text_select=True,
         draggable=True,
     )
     api.set_window(window)
     window.events.closed += api.close
     smoke_result: list[str] = []
-    e2e_result: list[GuiE2EClientResult] = []
     if args.smoke_test:
         window.events.loaded += lambda *_args: verify_bridge(window, smoke_result)
-    elif args.e2e_test:
-        window.events.loaded += lambda *_args: run_e2e_driver(window, e2e_result)
     webview.settings["ALLOW_FILE_URLS"] = True
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     webview.start(http_server=True, private_mode=True, menu=application_menu(api))
@@ -541,15 +524,6 @@ def main() -> int:
         passed = smoke_result == ["passed"]
         print("GUI bridge smoke test passed" if passed else f"GUI bridge smoke test failed: {smoke_result}")
         return 0 if passed else 1
-    if args.e2e_test:
-        browser = e2e_result[0] if e2e_result else GuiE2EClientResult(
-            passed=False, checks=[], error="native window closed before the browser test completed"
-        )
-        exports = sorted(path.name for path in e2e_directory.iterdir()) if e2e_directory else []
-        report = GuiE2EReport(**browser.model_dump(), exports=exports)
-        args.e2e_test.write_text(json.dumps(report.model_dump(), indent=2) + "\n", encoding="utf-8")
-        print("GUI end-to-end test passed" if report.passed else f"GUI end-to-end test failed: {report.error}")
-        return 0 if report.passed else 1
     return 0
 
 

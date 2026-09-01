@@ -1,0 +1,3 @@
+version: 1
+gui:
+  search_highlight_background: "#fff59d"

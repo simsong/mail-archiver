@@ -85,7 +85,7 @@ test-encoding:
 	uv run pytest -q tests/test_encoding.py
 
 test-native-gui:
-	MAILARCHIVER_NATIVE_GUI_E2E=1 uv run pytest -q e2e_tests/test_ingest_verify.py::test_native_search_ui_end_to_end
+	MAILARCHIVER_NATIVE_GUI_E2E=1 uv run pytest -q e2e_tests/test_ingest_verify.py::test_native_search_ui_smoke
 
 test-pdf-mail:
 	@command -v pdftotext >/dev/null || { echo 'test-pdf-mail requires Poppler pdftotext'; exit 1; }

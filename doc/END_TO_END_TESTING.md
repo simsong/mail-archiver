@@ -98,17 +98,17 @@ The test retains a Playwright trace on failure.
 
 ### Native macOS smoke test
 
-A macOS job still launches the real pywebview application using its
-Cocoa/WKWebView backend. It verifies that the window loads, pywebview injects
-the JavaScript-to-Python bridge, one real search completes, and the application
-closes cleanly. This is the boundary Chromium cannot test.
+A macOS job launches the real pywebview application in an isolated subprocess
+using its Cocoa/WKWebView backend. It verifies that the hidden window loads,
+pywebview injects the JavaScript-to-Python bridge, one real search returns its
+highlight terms, and the application closes cleanly. This is the boundary
+Chromium cannot test.
 
 Run it explicitly with `make test-native-gui`. The native test window is created
-hidden, so it does not flash during local or hosted execution. The driver still
-exercises the interface through the real WKWebView. E2E mode validates the
-message-window action without opening that window, but the ingest-status action
-creates and closes the real independent Ingests window to retain the
-multiwindow lifecycle boundary. Normal application behavior is unchanged.
+hidden and no secondary windows, dialogs, attachment openers, or exports are
+allowed in smoke mode, so local and hosted execution must not disturb the
+desktop. The comprehensive interaction flow remains in headless Chromium;
+normal application behavior is unchanged.
 
 Testing window contents through Cocoa accessibility, system dialogs, Finder
 drag-out, and native-menu selection requires XCUITest/XCUIAutomation in a
@@ -164,7 +164,7 @@ keyboard equivalents, and dispatch.
 | Complete HTML interaction | No | Yes | Smoke | Optional |
 | Chromium rendering | No | Yes | No | No |
 | Cocoa bridge injection and shutdown | No | No | Yes | Yes |
-| Independent Ingests-window creation and shutdown | No | No | Yes | Yes |
+| Independent Ingests-window content and action routing | No | Yes | No | Yes |
 | Native menu inspection, dialogs, Finder drag | No | No | No | Yes |
 
 The end-to-end gate is successful only when the archive lifecycle passes and

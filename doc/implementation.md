@@ -432,6 +432,15 @@ typed search service. Ordinary terms search `message_fts` by default; when the
 box is selected they search the union of `message_fts` and `attachment_fts`.
 Metadata selectors are unchanged.
 
+Each typed GUI search page also returns its deduplicated ordinary free-text
+terms. JavaScript marks literal case-insensitive matches when it renders header,
+plain-text, or raw-source text nodes. For sanitized HTML it parses the already
+inert document, marks body text nodes, injects only the configured mark style,
+and then supplies the result to the existing sandboxed iframe. The versioned
+packaged `configuration.yaml` is loaded into strict Pydantic models and exposes
+the initial `#fff59d` highlight background through the GUI status response;
+the color accepts only six-digit hexadecimal syntax before it reaches CSS.
+
 Search completion starts after three characters, waits 120 milliseconds after
 the latest keystroke, caps each address and subject group at 20 entries, and
 discards responses superseded by newer input. Address results rank by

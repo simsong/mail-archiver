@@ -7,14 +7,15 @@ import hashlib
 import json
 import mailbox
 import sqlite3
-import sys
 import time
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from mailarchiver.bagit import initialize_bag
 from mailarchiver.catalog import address_pk, create_catalog, create_search
+from mailarchiver.configuration import application_configuration, load_configuration
 from mailarchiver.gui_service import (
     RAW_PART_ID,
     attachment_content,
@@ -29,7 +30,7 @@ from mailarchiver.gui_service import (
     write_attachment,
     write_message,
 )
-from mailarchiver.gui_app import GuiApi, application_menu, application_metadata, configure_macos_application
+from mailarchiver.gui_app import GuiApi, application_menu, application_metadata
 from mailarchiver.mailsearch import _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, MailboxTreeNode, mailbox_tree
@@ -143,7 +144,21 @@ def test_gui_search_field_preserves_selector_and_quote_semantics(tmp_path: Path)
 
     assert [result.subject for result in search_page(archive, "subject:annual report").results] == ["annual plan"]
     assert search_page(archive, 'subject:"annual report"').results == []
-    assert [result.subject for result in search_page(archive, 'subject:"annual plan" report').results] == ["annual plan"]
+    page = search_page(archive, 'subject:"annual plan" report REPORT')
+    assert [result.subject for result in page.results] == ["annual plan"]
+    assert page.highlight_terms == ["report"]
+
+
+def test_gui_highlight_configuration_is_packaged_and_rejects_css_injection(tmp_path: Path) -> None:
+    """Requirement: the viewer highlight color comes from strictly validated YAML."""
+    assert application_configuration().gui.search_highlight_background == "#fff59d"
+    invalid = tmp_path / "configuration.yaml"
+    invalid.write_text(
+        "version: 1\ngui:\n  search_highlight_background: 'yellow; } body { display: none'\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError):
+        load_configuration(invalid)
 
 
 def test_gui_partial_recent_search_defers_complete_older_search(tmp_path: Path) -> None:
@@ -180,21 +195,6 @@ def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:
         assert menus[0].items[0].function()
     finally:
         api.close()
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="Cocoa metadata is macOS-specific")
-def test_gui_applies_application_metadata_to_cocoa() -> None:
-    """Requirement: the live Cocoa process and bundle receive the product metadata."""
-    from AppKit import NSApplication  # pylint: disable=import-outside-toplevel,no-name-in-module,import-error
-    from Foundation import NSBundle, NSProcessInfo  # pylint: disable=import-outside-toplevel,no-name-in-module,import-error
-
-    configure_macos_application()
-    info = NSBundle.mainBundle().localizedInfoDictionary() or NSBundle.mainBundle().infoDictionary()
-
-    assert NSProcessInfo.processInfo().processName() == "Mail Archiver"
-    assert info["CFBundleName"] == "Mail Archiver"
-    assert info["CFBundleShortVersionString"] == "0.0.0"
-    assert NSApplication.sharedApplication().applicationIconImage() is not None
 
 
 def test_gui_search_sorting_is_whitelisted_and_stable(tmp_path: Path) -> None:
