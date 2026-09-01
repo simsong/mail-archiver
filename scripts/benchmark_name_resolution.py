@@ -24,7 +24,7 @@ class BenchmarkCase(BaseModel):
 
 def load_cases(path: Path = CORPUS) -> list[BenchmarkCase]:
     """Load the YAML boundary into strict typed benchmark cases."""
-    document = yaml.safe_load(path.read_text())
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(document, list):
         raise ValueError("name-resolution benchmark must be a YAML list")
     return [BenchmarkCase.model_validate(item) for item in document]

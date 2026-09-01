@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mailarchiver.encoding import decode_text
+from mailarchiver.encoding import _candidate_encodings, decode_text
 from mailarchiver.search import decoded_part, message_text
 
 
@@ -36,13 +36,43 @@ def test_undeclared_euc_kr_is_recovered_before_replacement() -> None:
     assert "�" not in result.value
 
 
-def test_misdeclared_utf8_uses_cp1252_for_invalid_bytes() -> None:
+def test_misdeclared_utf8_uses_readable_western_encoding() -> None:
     """Requirement: invalid declared UTF-8 falls back to a readable Western encoding."""
     result = decode_text(b"The world\x92s largest", "utf-8")
 
     assert result.value == "The world’s largest"
-    assert result.encoding == "cp1252"
+    assert result.encoding in {"cp1250", "cp1252"}
     assert result.defect is not None
+
+
+def test_detector_candidates_precede_universal_single_byte_fallbacks() -> None:
+    """Requirement: detector evidence precedes codecs that accept nearly every byte."""
+    candidates = _candidate_encodings(b"The world\x92s largest")
+
+    assert candidates.index("cp1250") < candidates.index("cp1252")
+
+
+def test_large_payload_is_ranked_on_a_sample_before_one_full_fallback_decode() -> None:
+    """Requirement: candidate ranking must not repeatedly decode a complete large MIME part."""
+
+    class DecodeCountingBytes(bytes):
+        calls: list[str]
+
+        def __new__(cls, value: bytes) -> "DecodeCountingBytes":
+            instance = super().__new__(cls, value)
+            instance.calls = []
+            return instance
+
+        def decode(self, encoding: str = "utf-8", errors: str = "strict") -> str:
+            self.calls.append(encoding)
+            return super().decode(encoding, errors)
+
+    body = DecodeCountingBytes("한국어메시지".encode("euc-kr") * 50_000)
+
+    result = decode_text(body, "utf-8")
+
+    assert result.value.startswith("한국어메시지")
+    assert body.calls == ["utf-8", result.encoding]
 
 
 def test_ftfy_repairs_mojibake_after_valid_utf8_decode() -> None:
