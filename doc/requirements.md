@@ -426,6 +426,22 @@ lookups. Bounded date-ordered listings must use the date/message index to
 select the requested page before recipient aggregation. Year-scoped reports
 must express their bounds as indexed `date_utc` ranges rather than applying a
 function to every stored date.
+An ordinary body-text GUI search may first test the 10,000 newest catalog
+messages from that date/message index against each message's indexed FTS row
+ID. A partial page is returned immediately with an explicit indication that
+older results have not been checked; it must not be represented as a complete
+result set. In this state **Load more** is relabeled **Find older ones** and
+runs the complete FTS-to-catalog query from the number of results already
+displayed, without skipping or duplicating messages. **Load all** makes the
+same transition and continues through all remaining complete-query pages. The
+command-line search remains exact and performs that fallback automatically
+when the recent search does not fill its requested page.
+Selecting Subject or Sender (author) rather than Date must still select the
+most recent matching messages; the alternate sort applies within each page,
+not globally across older unchecked mail. The **Find older ones** control must
+include the displayed messages' oldest-to-newest date range when results are
+visible. Limiting the unordered FTS hit list is forbidden because it can omit
+newer matches.
 Index extraction and insertion happen after canonical MBOX/catalog publication.
 An indexing failure is recorded as a metadata defect and does not reject mail;
 `refresh-index` repairs missing disposable content.
@@ -461,9 +477,10 @@ so `subject:"annual report"` is one selector while `subject:annual report`
 retains the CLI meaning of a subject selector plus a free-text term.  It loads
 the newest 100 results at a time without changing the CLI's ten-result default.
 When more results exist, **Load more** appends one page and **Load all** appends
-every remaining page without further user action. A newer search must supersede
-an in-progress **Load all** operation, and the status must show its accumulated
-result count while it runs.
+every remaining page without further user action, including the complete-query
+transition for an unchecked recent body-text page. A newer search must
+supersede an in-progress **Load all** operation, and the status must show its
+accumulated result count while it runs.
 After three characters and a 120-millisecond debounce, the GUI suggests at most
 20 matching addresses and 20 matching subjects with deduplicated message
 counts. Stale responses are discarded. Addresses rank by message count, then

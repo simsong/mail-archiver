@@ -44,6 +44,7 @@
     await waitFor(() => document.getElementById("ingest-status-line").dataset.openedWindow === "true", "ingest status line invokes the independent ingest window");
     assert(!document.getElementById("load-more").hidden, "pagination control displayed");
     assert(!document.getElementById("load-all").hidden, "load-all control displayed");
+    assert(document.getElementById("load-more").textContent === "Load more", "ordinary pagination is labeled Load more");
     await waitFor(() => document.querySelector(".result-preview")?.textContent.length > 0, "background preview displayed");
 
     const searchInput = document.getElementById("search");
@@ -84,6 +85,19 @@
     document.querySelector(".search-chip-remove").click();
     await waitFor(() => !document.querySelector(".search-chip") && rows().length === 100, "subject filter chip can be removed");
 
+    await search("bulk", 100, false);
+    assert(
+      document.getElementById("load-more").textContent.startsWith("Find older ones — shown:"),
+      "deferred pagination names older results and the displayed date range",
+    );
+    document.getElementById("load-more").click();
+    await waitFor(() => rows().length === 200, "Find older ones appends a complete-query page");
+    assert(document.getElementById("load-more").textContent === "Load more", "complete-query continuation returns to Load more");
+    document.getElementById("load-more").click();
+    await waitFor(() => rows().length === 203, "Load more appends the final complete-query page");
+    assert(document.getElementById("load-more").hidden, "Load more hides on the final page");
+
+    await search("", 100, false);
     document.getElementById("load-all").click();
     document.getElementById("search").value = 'subject:"Rich UI message"';
     document.getElementById("search-form").dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
@@ -115,6 +129,12 @@
     assert(document.getElementById("sort-direction").textContent === "↑", "sort direction control updates");
 
     await search("Appendixquartz", 0, false);
+    assert(
+      !document.getElementById("load-more").hidden && document.getElementById("load-more").textContent === "Find older ones",
+      "partial recent search offers an explicit complete older-message search",
+    );
+    document.getElementById("load-more").click();
+    await waitFor(() => document.getElementById("load-more").hidden, "complete older-message search confirms no body match");
     await search("Appendixquartz", 1, true);
     assert(subjects()[0] === "Rich UI message", "attachment-only match identifies its message");
 

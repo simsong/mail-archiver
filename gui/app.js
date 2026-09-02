@@ -7,6 +7,8 @@ const state = {
   sortBy: "date",
   sortDirection: "descending",
   searchAttachments: false,
+  completeSearch: false,
+  olderResultsUnchecked: false,
   hasMore: false,
   selected: null,
   selectionRequest: null,
@@ -125,6 +127,8 @@ function resetArchiveView() {
   state.hasMore = false;
   state.mailboxTree = [];
   state.searchFilters = [];
+  state.completeSearch = false;
+  state.olderResultsUnchecked = false;
   state.dragExports.clear();
   renderSearchFilters();
   closeSuggestions();
@@ -585,13 +589,14 @@ async function runSearch(append, loadAll = false) {
   const sameSearch = query === state.query && sortBy === state.sortBy && sortDirection === state.sortDirection && searchAttachments === state.searchAttachments;
   let offset = append && sameSearch ? state.offset : 0;
   let continuing = offset > 0;
+  const findOlder = append && sameSearch && (state.completeSearch || state.olderResultsUnchecked);
   const request = ++state.searchRequest;
   elements["result-status"].textContent = loadAll ? `Loading all… ${offset.toLocaleString()} messages shown` : "Searching…";
   updatePagination(state.hasMore, true);
   const mailboxSelections = state.showTree ? [...state.mailboxSelections] : [];
   while (true) {
     const page = await call(() => window.pywebview.api.search(
-      query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections,
+      query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections, findOlder,
     ));
     if (request !== state.searchRequest) return;
     if (!page) {
@@ -603,6 +608,8 @@ async function runSearch(append, loadAll = false) {
     state.sortBy = sortBy;
     state.sortDirection = sortDirection;
     state.searchAttachments = searchAttachments;
+    state.completeSearch = findOlder;
+    state.olderResultsUnchecked = page.older_results_unchecked;
     if (!continuing) elements["result-list"].replaceChildren();
     for (const result of page.results) elements["result-list"].append(resultRow(result));
     queuePreviews(page.results.map(result => result.message_pk), request);
@@ -629,6 +636,21 @@ function updatePagination(hasMore, busy = false) {
     elements[id].hidden = busy || !hasMore;
     elements[id].disabled = busy;
   }
+  const button = elements["load-more"];
+  if (!state.olderResultsUnchecked) {
+    button.textContent = "Load more";
+    return;
+  }
+  const dates = [...document.querySelectorAll("#result-list .result")]
+    .map(row => new Date(row.dataset.dateUtc))
+    .filter(date => !Number.isNaN(date.valueOf()))
+    .sort((left, right) => left - right);
+  const range = dates.length
+    ? dates[0].valueOf() === dates[dates.length - 1].valueOf()
+      ? formatDate(dates[0].toISOString())
+      : `${formatDate(dates[0].toISOString())}–${formatDate(dates[dates.length - 1].toISOString())}`
+    : "";
+  button.textContent = range ? `Find older ones — shown: ${range}` : "Find older ones";
 }
 
 function toggleSortDirection() {
@@ -647,6 +669,7 @@ function resultRow(result) {
   row.setAttribute("role", "option");
   row.setAttribute("aria-selected", "false");
   row.dataset.messagePk = result.message_pk;
+  row.dataset.dateUtc = result.date_utc;
   row.draggable = true;
   const subjectLine = document.createElement("div");
   subjectLine.className = "result-subject-line";

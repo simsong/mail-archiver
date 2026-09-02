@@ -17,7 +17,14 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
 from .encoding import decode_text
-from .mailsearch import MessageHeader, SortDirection, SortField, parse_query, read_message_bytes, search_headers
+from .mailsearch import (
+    MessageHeader,
+    SortDirection,
+    SortField,
+    parse_query,
+    read_message_bytes,
+    search_header_page,
+)
 from .mailbox_tree import MailboxSelection
 from .message import decoded_header
 from .plugin_api import SourceContainerMetadata
@@ -62,6 +69,7 @@ class SearchPage(BaseModel):
     results: list[MessageHeader]
     offset: int
     has_more: bool
+    older_results_unchecked: bool = False
 
 
 class AddressSuggestion(BaseModel):
@@ -171,16 +179,22 @@ def search_page(
     direction: SortDirection | str = SortDirection.DESCENDING,
     search_attachments: bool = False,
     mailbox_selections: list[str] | None = None,
+    find_older: bool = False,
 ) -> SearchPage:
     """Return one bounded page using exactly the CLI query language."""
     if offset < 0 or limit < 1:
         raise ValueError("search offset and limit must be positive")
     selections = [MailboxSelection.from_token(token) for token in mailbox_selections or []]
-    found = search_headers(
+    page = search_header_page(
         archive, parse_query(query), limit + 1, offset, SortField(sort_by),
-        SortDirection(direction), search_attachments, selections,
+        SortDirection(direction), search_attachments, selections, find_older,
     )
-    return SearchPage(results=found[:limit], offset=offset, has_more=len(found) > limit)
+    return SearchPage(
+        results=page.results[:limit],
+        offset=offset,
+        has_more=len(page.results) > limit or page.older_results_unchecked,
+        older_results_unchecked=page.older_results_unchecked,
+    )
 
 
 def search_suggestions(archive: Path, query: str, limit: int = 20) -> SearchSuggestions:
