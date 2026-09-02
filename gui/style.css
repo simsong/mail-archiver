@@ -77,7 +77,7 @@ button { min-height: 28px; }
 .result-date { white-space: nowrap; }
 .result-preview { min-height: 1.25em; margin-top: 3px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .result.selected .result-line, .result.selected .result-preview, .result.selected .result-attachment { color: inherit; opacity: 0.76; }
-.load-more { display: block; margin: 12px auto; }
+.pagination-controls { display: flex; justify-content: center; gap: 8px; margin: 12px; }
 
 .message { overflow: auto; min-width: 0; }
 .message-actions { position: sticky; top: 0; z-index: 3; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, Canvas 92%, transparent); backdrop-filter: blur(16px); }

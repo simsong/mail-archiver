@@ -430,10 +430,12 @@ An ordinary body-text GUI search may first test the 10,000 newest catalog
 messages from that date/message index against each message's indexed FTS row
 ID. A partial page is returned immediately with an explicit indication that
 older results have not been checked; it must not be represented as a complete
-result set. **Find older ones** then runs the complete FTS-to-catalog query
-from the number of results already displayed, without skipping or duplicating
-messages. The command-line search remains exact and performs that fallback
-automatically when the recent search does not fill its requested page.
+result set. In this state **Load more** is relabeled **Find older ones** and
+runs the complete FTS-to-catalog query from the number of results already
+displayed, without skipping or duplicating messages. **Load all** makes the
+same transition and continues through all remaining complete-query pages. The
+command-line search remains exact and performs that fallback automatically
+when the recent search does not fill its requested page.
 Selecting Subject or Sender (author) rather than Date must still select the
 most recent matching messages; the alternate sort applies within each page,
 not globally across older unchecked mail. The **Find older ones** control must
@@ -474,6 +476,11 @@ the CLI selectors and ordinary ANDed terms; shell-style quotes group spaces,
 so `subject:"annual report"` is one selector while `subject:annual report`
 retains the CLI meaning of a subject selector plus a free-text term.  It loads
 the newest 100 results at a time without changing the CLI's ten-result default.
+When more results exist, **Load more** appends one page and **Load all** appends
+every remaining page without further user action, including the complete-query
+transition for an unchecked recent body-text page. A newer search must
+supersede an in-progress **Load all** operation, and the status must show its
+accumulated result count while it runs.
 After three characters and a 120-millisecond debounce, the GUI suggests at most
 20 matching addresses and 20 matching subjects with deduplicated message
 counts. Stale responses are discarded. Addresses rank by message count, then
@@ -520,12 +527,24 @@ HTTP(S) images may load only after an explicit per-message action. Embedded
 CID images may render from the verified message. Attachments appear in a list,
 safe images and PDFs can be previewed inline, and opening any attachment is an
 explicit action with an additional warning for executable or container types.
+For a non-multipart message whose complete raw body, apart from surrounding
+ASCII whitespace, is enclosed by case-insensitive `<x-html>` and `</x-html>`
+tags, the GUI exposes the enclosed content as a preferred **HTML — legacy
+x-html** view. This recovery also applies when a malformed multipart declaration
+has no usable boundaries and therefore parses as non-multipart. An inline
+mention of `<x-html>` does not trigger it, valid MIME parts take precedence, and
+the recovered view passes through the same sanitizer and remote-content policy
+as MIME HTML. **Raw Source** remains selectable and unchanged.
 At the bottom of every message view, the GUI displays the archive mailbox path
 separately from every source volume and source/forensic path where the message
 was found.
 When `date_source` is `received-median`, the GUI shows a warning banner across
 the message and gives the message well a slight red tint. The original `Date:`
-header remains visible and unchanged.
+header remains visible and unchanged. The banner identifies the original
+`Date:` header value, the computed UTC median of the usable `Received:` header
+dates, and the computed UTC date used for archive routing. The latter two values
+are currently equal but are reported separately so the archival decision is
+explicit.
 Command-1 through Command-9 select the MIME part having that numeric part ID;
 Command-0 and Command-Shift-U select the raw RFC 5322 source.
 
@@ -547,6 +566,17 @@ Apple Intelligence is disabled, or the model is not ready.
 All archive commands use `MAIL_ARCHIVE_DIR` as their default archive directory.
 `--archive DIRECTORY` overrides that environment variable. If neither is set,
 the command fails before reading or writing an archive.
+
+The Python GUI identifies itself as **Mail Archiver** and uses the
+source-controlled rainbow-envelope icon in its native application identity.
+The project also publishes a Zola-generated GitHub Pages site at
+`https://simsong.github.io/mail-archiver/`. The site links to the README,
+release notes, GitHub releases, the current stable `v1.2.3`-shaped tag and
+current beta `v1.2.3-beta1`-shaped tag when present, and project discussions.
+It provides a clearly labeled index of digital-email-curation reports and
+related organizations; it does not imply that planned application features
+are implemented. The Pages build pins its Zola release and verifies the
+downloaded archive against a source-controlled SHA-256 digest before execution.
 
 ## Ingest sources
 

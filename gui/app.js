@@ -11,6 +11,7 @@ const state = {
   olderResultsUnchecked: false,
   highlightTerms: [],
   highlightBackground: "transparent",
+  hasMore: false,
   selected: null,
   selectionRequest: null,
   searchRequest: 0,
@@ -35,6 +36,7 @@ const state = {
 const elements = {};
 const byId = id => document.getElementById(id);
 let initialized = false;
+let previewQueue = Promise.resolve();
 const SUGGESTION_MINIMUM = 3;
 const SUGGESTION_DELAY_MS = 120;
 const SUGGESTION_LIMIT = 20;
@@ -49,7 +51,7 @@ window.setTimeout(() => {
 async function initialize() {
   if (initialized) return;
   initialized = true;
-  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "load-more",
+  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "pagination-controls", "load-more", "load-all",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
     "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
@@ -69,6 +71,7 @@ async function initialize() {
   elements.search.addEventListener("keydown", navigateSuggestions);
   elements.search.addEventListener("blur", () => window.setTimeout(closeSuggestions, 150));
   elements["load-more"].addEventListener("click", () => runSearch(true));
+  elements["load-all"].addEventListener("click", () => runSearch(true, true));
   elements["sort-by"].addEventListener("change", () => runSearch(false));
   elements["sort-direction"].addEventListener("click", toggleSortDirection);
   elements["search-attachments"].addEventListener("change", () => runSearch(false));
@@ -124,6 +127,7 @@ function resetArchiveView() {
   state.selected = null;
   state.selectionRequest = null;
   state.view = null;
+  state.hasMore = false;
   state.mailboxTree = [];
   state.searchFilters = [];
   state.completeSearch = false;
@@ -134,6 +138,7 @@ function resetArchiveView() {
   closeSuggestions();
   clearAttachmentPreview();
   elements["result-list"].replaceChildren();
+  updatePagination(false);
   elements["message-content"].hidden = true;
 }
 
@@ -582,45 +587,65 @@ function renderSearchFilters() {
   elements["search-filters"]?.replaceChildren(...chips);
 }
 
-async function runSearch(append) {
+async function runSearch(append, loadAll = false) {
   const query = effectiveQuery();
   const sortBy = elements["sort-by"].value;
   const sortDirection = state.sortDirection;
   const searchAttachments = elements["search-attachments"].checked;
   const sameSearch = query === state.query && sortBy === state.sortBy && sortDirection === state.sortDirection && searchAttachments === state.searchAttachments;
-  const continuing = append && sameSearch;
-  const offset = continuing ? state.offset : 0;
-  const findOlder = continuing && (state.completeSearch || state.olderResultsUnchecked);
+  let offset = append && sameSearch ? state.offset : 0;
+  let continuing = offset > 0;
+  const findOlder = append && sameSearch && (state.completeSearch || state.olderResultsUnchecked);
   const request = ++state.searchRequest;
-  elements["result-status"].textContent = "Searching…";
+  elements["result-status"].textContent = loadAll ? `Loading all… ${offset.toLocaleString()} messages shown` : "Searching…";
+  updatePagination(state.hasMore, true);
   const mailboxSelections = state.showTree ? [...state.mailboxSelections] : [];
-  const page = await call(() => window.pywebview.api.search(
-    query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections, findOlder,
-  ));
-  if (!page || request !== state.searchRequest) return;
-  state.query = query;
-  state.sortBy = sortBy;
-  state.sortDirection = sortDirection;
-  state.searchAttachments = searchAttachments;
-  state.completeSearch = findOlder;
-  state.olderResultsUnchecked = page.older_results_unchecked;
-  state.highlightTerms = page.highlight_terms;
-  state.offset = offset + page.results.length;
-  if (!append) elements["result-list"].replaceChildren();
-  for (const result of page.results) {
-    const row = resultRow(result);
-    elements["result-list"].append(row);
+  while (true) {
+    const page = await call(() => window.pywebview.api.search(
+      query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections, findOlder,
+    ));
+    if (request !== state.searchRequest) return;
+    if (!page) {
+      updateResultStatus(state.hasMore);
+      updatePagination(state.hasMore);
+      return;
+    }
+    state.query = query;
+    state.sortBy = sortBy;
+    state.sortDirection = sortDirection;
+    state.searchAttachments = searchAttachments;
+    state.completeSearch = findOlder;
+    state.olderResultsUnchecked = page.older_results_unchecked;
+    state.highlightTerms = page.highlight_terms;
+    if (!continuing) elements["result-list"].replaceChildren();
+    for (const result of page.results) elements["result-list"].append(resultRow(result));
+    queuePreviews(page.results.map(result => result.message_pk), request);
+    offset += page.results.length;
+    continuing = true;
+    state.offset = offset;
+    state.hasMore = page.has_more;
+    updateResultStatus(page.has_more, loadAll && page.has_more);
+    if (!loadAll || !page.has_more || !page.results.length) break;
   }
-  requestPreviews(page.results.map(result => result.message_pk));
-  elements["result-status"].textContent = `${state.offset.toLocaleString()} message${state.offset === 1 ? "" : "s"}${page.has_more ? " shown" : ""}`;
-  updateFindOlder(page.has_more);
+  updatePagination(state.hasMore);
 }
 
-function updateFindOlder(hasMore) {
+function updateResultStatus(hasMore, loadingAll = false) {
+  const count = state.offset.toLocaleString();
+  elements["result-status"].textContent = loadingAll
+    ? `Loading all… ${count} messages shown`
+    : `${count} message${state.offset === 1 ? "" : "s"}${hasMore ? " shown" : ""}`;
+}
+
+function updatePagination(hasMore, busy = false) {
+  elements["pagination-controls"].hidden = busy || !hasMore;
+  for (const id of ["load-more", "load-all"]) {
+    elements[id].hidden = busy || !hasMore;
+    elements[id].disabled = busy;
+  }
   const button = elements["load-more"];
-  button.hidden = !hasMore;
-  if (!hasMore) {
-    button.textContent = "Find older ones";
+  if (!state.olderResultsUnchecked) {
+    button.textContent = "Load more";
     return;
   }
   const dates = [...document.querySelectorAll("#result-list .result")]
@@ -705,6 +730,13 @@ async function requestPreviews(messagePks) {
   }
 }
 
+function queuePreviews(messagePks, request) {
+  previewQueue = previewQueue.then(() => {
+    if (request !== state.searchRequest) return undefined;
+    return requestPreviews(messagePks);
+  }).catch(error => showError(`Could not load message previews: ${error?.message || error}`));
+}
+
 async function selectMessage(messagePk) {
   state.selectionRequest = messagePk;
   state.partRequest += 1;
@@ -721,9 +753,15 @@ async function selectMessage(messagePk) {
   selectedRow?.setAttribute("aria-selected", "true");
   elements["result-list"].setAttribute("aria-activedescendant", `message-result-${messagePk}`);
   elements["message-content"].hidden = false;
-  const computedDate = view.date_source === "received-median";
-  elements["computed-date-banner"].hidden = !computedDate;
-  elements["message-well"].classList.toggle("computed-date", computedDate);
+  const adjustment = view.date_adjustment;
+  const banner = elements["computed-date-banner"];
+  banner.hidden = !adjustment;
+  banner.textContent = adjustment
+    ? `Date adjusted: The date in the Date: header (${adjustment.date_header}) is more than two days from ` +
+      `the median date of the Received: headers (${adjustment.received_median_utc}). ` +
+      `Archive routing uses the computed UTC date (${adjustment.archive_routing_utc}).`
+    : "";
+  elements["message-well"].classList.toggle("computed-date", Boolean(adjustment));
   setHighlightedText(elements["message-subject"], view.subject);
   elements["message-file-name"].textContent = state.dragExports.get(messagePk)?.filename || "Message.eml";
   elements["message-headers"].replaceChildren(...headerNodes(view.headers));

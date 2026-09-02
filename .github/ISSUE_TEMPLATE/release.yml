@@ -1,0 +1,56 @@
+name: Release
+description: Plan, validate, and publish a versioned Mail Archiver release.
+title: "release: "
+labels: [release]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this issue as the release record. Keep credentials and private archive data out of it.
+  - type: input
+    id: version
+    attributes:
+      label: Target version
+      description: Use 1.2.3 for stable or 1.2.3b1 for beta metadata.
+      placeholder: "1.2.3"
+    validations:
+      required: true
+  - type: input
+    id: tag
+    attributes:
+      label: Release tag
+      description: Signed annotated tag created after the release change is reviewed.
+      placeholder: "v1.2.3"
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Reviewed commit SHA
+      description: Full SHA at which the immutable tag will be created.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Build and validation evidence
+      description: Record CI URLs, artifact names, SHA-256 checksums, and the draft release URL.
+      placeholder: |
+        - [ ] make check:
+        - [ ] make website-check:
+        - [ ] Source distribution:
+        - [ ] SHA256SUMS:
+        - [ ] Draft GitHub Release:
+    validations:
+      required: true
+  - type: checkboxes
+    id: gates
+    attributes:
+      label: Release gates
+      options:
+        - label: The tag is signed, annotated, immutable, and points at the reviewed SHA.
+          required: true
+        - label: The GitHub Release remains a draft until its evidence is reviewed.
+          required: true
+        - label: No confidential archive data or credentials are included.
+          required: true

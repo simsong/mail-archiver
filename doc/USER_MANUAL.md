@@ -260,7 +260,11 @@ Useful search forms include:
 | `after:2024-01-01` | message is later than this date |
 
 All supplied terms must match. Use the sort controls above the result list to
-sort by date, subject, or sender.
+sort by date, subject, or sender. Search results initially appear 100 at a
+time. At the bottom of the list, select **Load more** to append the next 100 or
+**Load all** to append every remaining result automatically. While **Load all**
+runs, the result status shows how many messages have been displayed; starting
+a different search stops the earlier load.
 
 Select **Search attachments** to include indexed text attachments. This works
 only after an attachment index has been built:
@@ -270,6 +274,55 @@ make run ARGS='--archive "/path/to/mail-archive" refresh-index --index-attachmen
 ```
 
 PDF and Microsoft Office attachment extraction is not implemented yet.
+
+## Viewing messages
+
+Select a search result to view it beside the result list, or double-click the
+result to open it in an independent window. The pull-down menu above the message
+lists its displayable plain-text and HTML MIME parts and always offers **Raw
+Source**, which shows the complete RFC 5322 message. Command-1 through Command-9
+select the part with that numeric MIME part ID; Command-0 and Command-Shift-U
+select **Raw Source**.
+
+Some early Netscape messages use `<x-html>...</x-html>` around an HTML body even
+though their multipart declaration has no usable MIME boundaries. When the
+wrapper encloses the entire body, the viewer recognizes it automatically,
+offers **HTML — legacy x-html**, and selects that HTML view by default. A message
+that merely mentions `<x-html>` in ordinary text is not reinterpreted. **Raw
+Source** remains available, and this display recovery never changes the archived
+message bytes.
+
+All HTML views are sanitized before display. Scripts, forms, plugins, file URLs,
+event handlers, and unsafe URL schemes are removed. Remote images remain blocked
+unless you choose **Load Remote Content** for that message; embedded CID images
+may render from the verified message.
+
+### Date adjusted
+
+The archive normally routes a message using its `Date:` header. When a usable
+`Date:` value is more than two days from the trimmed median of the usable dates
+in its `Received:` headers, the archive instead uses that median in UTC and
+marks the catalog date source as `received-median`. The message then has a
+red-tinted warning such as:
+
+> **Date adjusted:** The date in the Date: header (Tue, 31 Dec 2024 12:00:00
+> +0000) is more than two days from the median date of the Received: headers
+> (2024-02-02T00:00:00+00:00). **Archive routing uses the computed UTC date
+> (2024-02-02T00:00:00+00:00).**
+
+The first value is the original `Date:` header exactly as decoded for display.
+The second is the computed UTC median of the usable `Received:` header dates.
+The third is the UTC date used to place the message in the archive. The median
+and routing dates are currently the same, but both are shown so an archivist can
+see the source evidence and the resulting routing decision. The original header
+and canonical message remain unchanged.
+
+Attachments and their previews appear below the body. Opening an attachment is
+always explicit, with an additional warning for executable or container types.
+The bottom of the message view separately lists the canonical archive mailbox
+and every source volume and source or forensic path where the message was found.
+**Save Message…** exports an exact, SHA-256-verified `.eml` copy without changing
+the archive.
 
 ## Filter by original mailbox
 

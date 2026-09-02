@@ -16,7 +16,16 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
-from .mailsearch import MessageHeader, SearchTerms, SortDirection, SortField, parse_query, read_message_bytes, search_header_page
+from .encoding import decode_text
+from .mailsearch import (
+    MessageHeader,
+    SearchTerms,
+    SortDirection,
+    SortField,
+    parse_query,
+    read_message_bytes,
+    search_header_page,
+)
 from .mailbox_tree import MailboxSelection
 from .message import decoded_header
 from .plugin_api import SourceContainerMetadata
@@ -24,6 +33,12 @@ from .search import SEARCH_CATEGORIES, decoded_part, is_attachment
 
 PAGE_SIZE = 100
 RAW_PART_ID = -1
+LEGACY_X_HTML_PART_ID = -2
+HEADER_BODY_SEPARATOR = re.compile(br"\r\n\r\n|\n\n|\r\r")
+LEGACY_X_HTML = re.compile(
+    br"\A[ \t\r\n]*<x-html>[ \t\r\n]*(?P<body>.*?)[ \t\r\n]*</x-html>[ \t\r\n]*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 PROVIDER_LABELS = {
     "gmail": "Gmail",
     "imap": "IMAP",
@@ -119,10 +134,17 @@ class SourceLocation(BaseModel):
     preferred: bool = False
 
 
+class DateAdjustment(BaseModel):
+    date_header: str
+    received_median_utc: str
+    archive_routing_utc: str
+
+
 class MessageView(BaseModel):
     message_pk: int
     subject: str
     date_source: str
+    date_adjustment: DateAdjustment | None = None
     headers: list[HeaderField]
     body_parts: list[BodyPart]
     preferred_part_id: int
@@ -276,11 +298,14 @@ def parsed_message(archive: Path, message_pk: int) -> tuple[bytes, Message]:
 
 def describe_message(archive: Path, message_pk: int) -> MessageView:
     """Describe selectable body parts and attachments without returning payloads."""
-    _, message = parsed_message(archive, message_pk)
+    raw, message = parsed_message(archive, message_pk)
     headers = [HeaderField(name=name, value=decoded_header(str(value))) for name, value in message.items()]
     body_parts: list[BodyPart] = []
     attachments: list[AttachmentInfo] = []
+    legacy_x_html = legacy_x_html_body(raw, message)
     for part_id, part in enumerate(_parts(message)):
+        if legacy_x_html is not None and part is message:
+            continue
         content_type = part.get_content_type()
         attachment = _is_gui_attachment(part)
         if attachment:
@@ -301,15 +326,25 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
         elif content_type in {"text/plain", "text/html"}:
             label = "Plain Text" if content_type == "text/plain" else "HTML"
             body_parts.append(BodyPart(part_id=part_id, content_type=content_type, label=f"{label} — part {part_id}"))
+    if legacy_x_html is not None:
+        body_parts.append(BodyPart(part_id=LEGACY_X_HTML_PART_ID, content_type="text/html", label="HTML — legacy x-html"))
     body_parts.append(BodyPart(part_id=RAW_PART_ID, content_type="message/rfc822", label="Raw Source"))
     html_part = next((part.part_id for part in body_parts if part.content_type == "text/html"), None)
     text_part = next((part.part_id for part in body_parts if part.content_type == "text/plain"), RAW_PART_ID)
     archive_path, source_locations = message_locations(archive, message_pk)
-    date_source = message_date_source(archive, message_pk)
+    date_utc, date_source = message_catalog_date(archive, message_pk)
+    date_adjustment = None
+    if date_source == "received-median":
+        date_adjustment = DateAdjustment(
+            date_header=decoded_header(str(message.get("Date", "(missing)"))),
+            received_median_utc=date_utc,
+            archive_routing_utc=date_utc,
+        )
     return MessageView(
         message_pk=message_pk,
         subject=decoded_header(str(message.get("Subject", "(no subject)"))),
         date_source=date_source,
+        date_adjustment=date_adjustment,
         headers=headers,
         body_parts=body_parts,
         preferred_part_id=html_part if html_part is not None else text_part,
@@ -319,13 +354,13 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
     )
 
 
-def message_date_source(archive: Path, message_pk: int) -> str:
+def message_catalog_date(archive: Path, message_pk: int) -> tuple[str, str]:
     database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
     try:
-        row = database.execute("SELECT date_source FROM messages WHERE message_pk = ?", (message_pk,)).fetchone()
+        row = database.execute("SELECT date_utc, date_source FROM messages WHERE message_pk = ?", (message_pk,)).fetchone()
         if row is None:
             raise ValueError(f"unknown message {message_pk}")
-        return str(row[0])
+        return str(row[0]), str(row[1])
     finally:
         database.close()
 
@@ -415,6 +450,18 @@ def render_part(archive: Path, message_pk: int, part_id: int, allow_remote: bool
     raw, message = parsed_message(archive, message_pk)
     if part_id == RAW_PART_ID:
         return PartContent(part_id=part_id, kind="raw", content_type="message/rfc822", content=raw.decode("utf-8", "replace"))
+    if part_id == LEGACY_X_HTML_PART_ID:
+        content = legacy_x_html_body(raw, message)
+        if content is None:
+            raise ValueError("message has no legacy x-html body")
+        content, blocked = safe_html(content, message, allow_remote)
+        return PartContent(
+            part_id=part_id,
+            kind="html",
+            content_type="text/html",
+            content=content,
+            remote_content_blocked=blocked,
+        )
     part = _part(message, part_id)
     content_type = part.get_content_type()
     if content_type == "text/plain":
@@ -522,6 +569,19 @@ def safe_html(value: str, message: Message, allow_remote: bool) -> tuple[str, bo
     else:
         soup.insert(0, csp)
     return str(soup), remote_blocked
+
+
+def legacy_x_html_body(raw: bytes, message: Message) -> str | None:
+    """Decode a whole raw body wrapped by the pre-MIME Netscape x-html convention."""
+    if message.is_multipart():
+        return None
+    separator = HEADER_BODY_SEPARATOR.search(raw)
+    if separator is None:
+        return None
+    match = LEGACY_X_HTML.fullmatch(raw[separator.end():])
+    if match is None:
+        return None
+    return decode_text(match.group("body"), message.get_content_charset()).value
 
 
 def _parts(message: Message) -> list[Message]:

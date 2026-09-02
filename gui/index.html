@@ -49,7 +49,10 @@
             <button id="sort-direction" type="button" aria-label="Sort descending" title="Sort descending">↓</button>
           </div>
           <div id="result-list" role="listbox" aria-label="Search results" tabindex="0"></div>
-          <button id="load-more" class="load-more" type="button" hidden>Find older ones</button>
+          <div id="pagination-controls" class="pagination-controls" hidden>
+            <button id="load-more" type="button" hidden>Load more</button>
+            <button id="load-all" type="button" hidden>Load all</button>
+          </div>
         </aside>
 
         <article class="message" id="message-pane">
@@ -61,9 +64,7 @@
               <button id="print-message" type="button">Print…</button>
             </div>
             <div id="message-well">
-              <div id="computed-date-banner" class="computed-date-banner" role="status" hidden>
-                Date adjusted: the Date header is more than two days from the Received-header median. Archive routing uses the computed UTC date.
-              </div>
+              <div id="computed-date-banner" class="computed-date-banner" role="status" hidden></div>
               <div class="message-summary">
                 <div class="message-heading">
                   <h1 id="message-subject"></h1>

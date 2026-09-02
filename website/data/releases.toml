@@ -1,0 +1,12 @@
+current_version = "Unreleased"
+current_url = "https://github.com/simsong/mail-archiver/releases"
+
+[stable]
+version = "No stable release yet"
+tag = ""
+url = "https://github.com/simsong/mail-archiver/releases"
+
+[beta]
+version = "No beta release yet"
+tag = ""
+url = "https://github.com/simsong/mail-archiver/releases"
