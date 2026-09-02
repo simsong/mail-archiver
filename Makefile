@@ -72,8 +72,7 @@ summary-smoke:
 gui:
 	uv run mailsearch-gui $(ARGS)
 
-gui-smoke:
-	uv run mailsearch-gui --smoke-test
+gui-smoke: test-native-gui
 
 website-check:
 	uv run python scripts/check_website.py

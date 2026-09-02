@@ -537,8 +537,12 @@ print operation. Temporary exports live only for the application process.
 The shell page permits `unsafe-eval` only for local scripts because pywebview
 constructs its typed Python API wrappers with JavaScript `Function`. Message
 HTML remains isolated in a sandboxed frame with its own restrictive CSP. The
-`gui-smoke` Makefile target verifies that Cocoa injects the bridge and that
-JavaScript can call the Python `status()` API.
+`test-native-gui` Makefile target opens a hidden smoke-only page over Cocoa. The
+page calls `status()` and one real `search()` through the injected bridge, then
+reports exactly one result to Python instead of making Python synchronously
+poll WKWebView JavaScript. The child atomically records timestamped phases and
+requests shutdown from a watchdog; the pytest parent has a separate timeout,
+captures a macOS process sample, and terminates the process group if needed.
 
 `aisummarize.py` implements the `summarize` console entry point. It reads stdin
 before doing any native work and invokes a content-addressed Swift helper built
@@ -973,8 +977,13 @@ exercise real result pagination and rich MIME behavior. `make test-e2e` drives
 the complete interface in headless Chromium while binding every bridge method
 to the real Python service and disposable test archive. It therefore works
 without a visible desktop on macOS and Linux. `make test-native-gui` separately
-drives a hidden Cocoa/WKWebView window on macOS to retain the native bridge
-boundary. `make test-bagit`
+drives a hidden Cocoa/WKWebView window on macOS against a purpose-built
+one-message derived archive to retain the native bridge boundary without
+ClamAV or the full lifecycle fixture. Hosted CI pins the macOS image, uploads
+the phase report and any timeout sample, and reports a failed smoke as an
+explicit advisory warning rather than a merge-blocking job failure. Making
+native behavior a required gate needs a logged-in self-hosted Mac and
+XCUITest/XCUIAutomation. `make test-bagit`
 validates the database-independent three-message fixture and corruption cases.
 The installed `verify_mail_archive.py
 DIRECTORY` performs read-only validation of a supplied bag. The first acceptance run is against a copied

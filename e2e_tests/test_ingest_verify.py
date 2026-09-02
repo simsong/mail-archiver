@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import shutil
 import sqlite3
 import subprocess
@@ -15,14 +16,18 @@ import pytest
 from playwright.sync_api import Page
 from pydantic import BaseModel
 
+from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.gui_app import (
     E2E_DRIVER,
     GUI_DIRECTORY,
     GuiApi,
     GuiE2EClientResult,
     IngestWindowApi,
+    NativeSmokeController,
+    NativeSmokeReport,
 )
 from mailarchiver.ingest_status import read_ingest_history
+from mailarchiver.search import index_message
 from e2e_tests.eicar_fixture import write_eicar_emlx
 
 
@@ -34,6 +39,11 @@ GUI_API_METHODS = (
     "ingest_overview", "open_attachment", "open_ingest_window", "open_message_window", "part", "prepare_drag", "rename_filter_set",
     "request_previews", "save_attachment", "save_filter_set", "save_message",
     "saved_filter_sets", "search", "status", "suggestions", "take_previews",
+)
+NATIVE_SMOKE_MESSAGE = (
+    b"Message-ID: <native-smoke@example>\nFrom: sender@example.net\n"
+    b"Subject: Native smoke\nDate: Wed, 03 Jan 2024 10:00:00 +0000\n\n"
+    b"The message viewer bridge is ready.\n"
 )
 
 
@@ -92,6 +102,28 @@ def built_archive(tmp_path_factory: pytest.TempPathFactory) -> BuiltArchive:
         ingest_stdout=ingested.stdout,
         ingest_stderr=ingested.stderr,
     )
+
+
+@pytest.fixture(scope="module")
+def native_smoke_archive(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build the smallest derived archive that proves a real bridge search."""
+    archive = tmp_path_factory.mktemp("native-smoke-archive")
+    catalog = create_catalog(archive / "archive.sqlite3")
+    search = create_search(archive / "search.sqlite3")
+    try:
+        sender = address_pk(catalog, "sender@example.net")
+        catalog.execute(
+            "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
+            "VALUES ('native-smoke@example', ?, ?, 'Native smoke', '2024-01-03T10:00:00+00:00', 'date', 'Archive')",
+            (hashlib.sha256(NATIVE_SMOKE_MESSAGE).hexdigest(), sender),
+        )
+        index_message(search, NATIVE_SMOKE_MESSAGE, False)
+        catalog.commit()
+        search.commit()
+    finally:
+        catalog.close()
+        search.close()
+    return archive
 
 
 def test_fresh_ingest_builds_an_independently_verifiable_archive(built_archive: BuiltArchive) -> None:
@@ -223,25 +255,118 @@ def test_ingest_history_ui_end_to_end(built_archive: BuiltArchive, page: Page) -
     assert str(PROCESSED_MESSAGE_COUNT) in page.locator(".statistics").inner_text()
 
 
+def test_native_smoke_page_reports_one_real_search(
+    native_smoke_archive: Path, tmp_path: Path, page: Page
+) -> None:
+    """Requirement: the one-shot native page reports its real bridge search to Python."""
+    report_path = tmp_path / "native-smoke.json"
+    controller = NativeSmokeController(report_path)
+    api = GuiApi(native_smoke_archive, native_smoke=controller)
+    methods = ("status", "search", "native_smoke_complete")
+    javascript_errors: list[str] = []
+    page.on("pageerror", lambda error: javascript_errors.append(str(error)))
+    try:
+        for name in methods:
+            page.expose_function(f"mailarchive_{name}", getattr(api, name))
+        names = json.dumps(methods)
+        page.add_init_script(
+            f"const names = {names}; window.pywebview = {{api: {{}}}}; "
+            "for (const name of names) window.pywebview.api[name] = "
+            "(...args) => window[`mailarchive_${name}`](...args); "
+            "window.addEventListener('DOMContentLoaded', () => "
+            "window.dispatchEvent(new Event('pywebviewready')));"
+        )
+        page.goto((GUI_DIRECTORY / "index.html").as_uri() + "?native-smoke=1")
+        page.wait_for_function("window.__mailarchiveNativeSmoke", timeout=5_000)
+        assert controller.wait_for_result(0), "\n".join(javascript_errors) or "native smoke callback did not run"
+    finally:
+        api.close()
+
+    report = NativeSmokeReport.model_validate_json(report_path.read_text(encoding="utf-8"))
+    assert report.passed
+    assert [phase.name for phase in report.phases][-1] == "bridge-passed"
+
+
+def terminate_process_group(process: subprocess.Popen[str]) -> tuple[str, str]:
+    """Stop a timed-out smoke subprocess and collect its buffered output."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        return process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return process.communicate()
+
+
+def sample_process(process: subprocess.Popen[str], destination: Path) -> None:
+    """Capture a macOS stack sample before terminating an unbounded native process."""
+    sampler = Path("/usr/bin/sample")
+    if not sampler.is_file():
+        return
+    try:
+        sampled = subprocess.run(
+            [str(sampler), str(process.pid), "5", "-file", str(destination)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired as error:
+        destination.write_text(f"process sampler timed out: {error}\n", encoding="utf-8")
+        return
+    if sampled.returncode and not destination.exists():
+        destination.write_text(sampled.stdout + sampled.stderr, encoding="utf-8")
+
+
 @pytest.mark.skipif(
     sys.platform != "darwin" or os.environ.get("MAILARCHIVER_NATIVE_GUI_E2E") != "1",
     reason="set MAILARCHIVER_NATIVE_GUI_E2E=1 to exercise the native macOS WKWebView",
 )
-def test_native_search_ui_smoke(built_archive: BuiltArchive) -> None:
-    """Exercise one real search through a hidden pywebview bridge process."""
-    tested = subprocess.run(
+def test_native_search_ui_smoke(native_smoke_archive: Path, tmp_path: Path) -> None:
+    """Exercise one bounded real search through a hidden pywebview bridge process."""
+    configured_artifacts = os.environ.get("MAILARCHIVER_NATIVE_GUI_ARTIFACT_DIR")
+    artifacts = Path(configured_artifacts) if configured_artifacts else tmp_path
+    artifacts.mkdir(parents=True, exist_ok=True)
+    report_path = artifacts / "native-smoke-report.json"
+    sample_path = artifacts / "native-smoke-sample.txt"
+    report_path.unlink(missing_ok=True)
+    sample_path.unlink(missing_ok=True)
+    tested = subprocess.Popen(
         [
             sys.executable,
             "-m",
             "mailarchiver.gui_app",
             "--archive",
-            str(built_archive.archive),
+            str(native_smoke_archive),
             "--smoke-test",
+            "--smoke-report",
+            str(report_path),
         ],
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=90,
+        start_new_session=True,
     )
-    assert tested.returncode == 0, tested.stdout + tested.stderr
-    assert tested.stdout.endswith("GUI bridge smoke test passed\n")
+    timed_out = False
+    try:
+        stdout, stderr = tested.communicate(timeout=40)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        sample_process(tested, sample_path)
+        stdout, stderr = terminate_process_group(tested)
+
+    report_text = report_path.read_text(encoding="utf-8") if report_path.is_file() else "missing smoke report"
+    detail = stdout + stderr + "\n" + report_text
+    assert not timed_out, detail
+    assert tested.returncode == 0, detail
+    assert stdout.endswith("GUI bridge smoke test passed\n")
+    report = NativeSmokeReport.model_validate_json(report_text)
+    assert report.completed and report.passed, detail
+    assert {"window-loaded", "bridge-passed", "destroy-requested", "event-loop-returned"} <= {
+        phase.name for phase in report.phases
+    }

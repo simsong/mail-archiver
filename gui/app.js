@@ -51,6 +51,11 @@ window.setTimeout(() => {
 async function initialize() {
   if (initialized) return;
   initialized = true;
+  const parameters = new URLSearchParams(window.location.search);
+  if (parameters.get("native-smoke") === "1") {
+    await runNativeSmoke();
+    return;
+  }
   for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "pagination-controls", "load-more", "load-all",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
@@ -91,7 +96,6 @@ async function initialize() {
   installDrag(elements["message-file-well"], () => state.selected);
   document.addEventListener("keydown", handleCommandShortcut);
 
-  const parameters = new URLSearchParams(window.location.search);
   if (parameters.get("standalone") === "1") document.body.classList.add("standalone");
   const status = await call(() => window.pywebview.api.status());
   if (!status) return;
@@ -103,6 +107,22 @@ async function initialize() {
   const message = Number(parameters.get("message"));
   if (message) await selectMessage(message);
   else if (status.ready) await runSearch(false);
+}
+
+async function runNativeSmoke() {
+  let passed = false;
+  let error = null;
+  try {
+    const status = await window.pywebview.api.status();
+    if (!status?.ready) throw new Error("smoke archive is not ready");
+    const page = await window.pywebview.api.search('"message viewer"', 0, "date", "descending", false, [], false);
+    passed = Array.isArray(page.results) && page.results.length === 1 && page.highlight_terms.includes("message viewer");
+    if (!passed) throw new Error("native bridge search returned an invalid page");
+  } catch (failure) {
+    error = String(failure?.stack || failure);
+  }
+  await window.pywebview.api.native_smoke_complete(passed, error);
+  window.__mailarchiveNativeSmoke = {passed, error};
 }
 
 function showBridgeFailure() {
