@@ -55,13 +55,12 @@ reserializing canonical files. It is not the ingestion engine. Restricted or
 redacted releases are separate bags; PDF and WARC derivatives remain opt-in
 and sandboxed because rendering message HTML can contact remote resources.
 
-RATOM's [libratom](https://github.com/libratom/libratom) should be evaluated as
-the first PST/OST and entity-extraction backend. Reuse it behind the typed
-source-adapter boundary and contribute missing preservation behavior upstream
-rather than forking or writing another PST parser. Its lower-level
-`PffArchive` exposes folder/message traversal and attachment metadata, but its
-current high-level message formatter selects one body and does not construct a
-complete attachment-bearing MIME message. The adapter must therefore consume
+The [on-disk format inventory](ON_DISK_MAIL_FORMATS.md) is the authoritative
+PST/OST research and selection record. The selected first backend is libpff
+through pypff, wrapped by the typed source-adapter boundary. Libratom remains a
+useful higher-level comparison/entity-extraction layer, but its formatter must
+not define canonical MIME because it reconstructs a selected body rather than
+preserving a source RFC 5322 byte stream. The adapter must consume
 source-native components, account for every item, construct any necessary MIME
 with explicit reconstruction provenance, and remain replaceable by another
 backend. For extreme setup simplicity, supported releases need tested binary
