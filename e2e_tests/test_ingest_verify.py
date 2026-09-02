@@ -23,6 +23,7 @@ from mailarchiver.gui_app import (
     GuiApi,
     GuiE2EClientResult,
     IngestWindowApi,
+    NativeSmokeApi,
     NativeSmokeController,
     NativeSmokeReport,
 )
@@ -45,6 +46,7 @@ NATIVE_SMOKE_MESSAGE = (
     b"Subject: Native smoke\nDate: Wed, 03 Jan 2024 10:00:00 +0000\n\n"
     b"The message viewer bridge is ready.\n"
 )
+NATIVE_SMOKE_API_METHODS = ("status", "search", "native_smoke_complete")
 
 
 class BuiltArchive(BaseModel):
@@ -261,14 +263,19 @@ def test_native_smoke_page_reports_one_real_search(
     """Requirement: the one-shot native page reports its real bridge search to Python."""
     report_path = tmp_path / "native-smoke.json"
     controller = NativeSmokeController(report_path)
-    api = GuiApi(native_smoke_archive, native_smoke=controller)
-    methods = ("status", "search", "native_smoke_complete")
+    api = GuiApi(native_smoke_archive)
+    bridge = NativeSmokeApi(api, controller)
+    methods = {
+        name for name in dir(bridge)
+        if not name.startswith("_") and callable(getattr(bridge, name))
+    }
+    assert methods == set(NATIVE_SMOKE_API_METHODS)
     javascript_errors: list[str] = []
     page.on("pageerror", lambda error: javascript_errors.append(str(error)))
     try:
-        for name in methods:
-            page.expose_function(f"mailarchive_{name}", getattr(api, name))
-        names = json.dumps(methods)
+        for name in NATIVE_SMOKE_API_METHODS:
+            page.expose_function(f"mailarchive_{name}", getattr(bridge, name))
+        names = json.dumps(NATIVE_SMOKE_API_METHODS)
         page.add_init_script(
             f"const names = {names}; window.pywebview = {{api: {{}}}}; "
             "for (const name of names) window.pywebview.api[name] = "

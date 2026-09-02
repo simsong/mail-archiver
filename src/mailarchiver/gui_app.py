@@ -242,14 +242,12 @@ class GuiApi:
         temporary_directory: Path | None = None,
         e2e_directory: Path | None = None,
         preferences_file: Path | None = None,
-        native_smoke: NativeSmokeController | None = None,
     ) -> None:
         self.archive = archive
         self.window: Any = None
         self._temporary = tempfile.TemporaryDirectory(prefix="mailarchive-gui-") if temporary_directory is None else None
         self.temporary_directory = Path(self._temporary.name) if self._temporary else temporary_directory
         self.e2e_directory = e2e_directory
-        self.native_smoke = native_smoke
         self.filter_sets = FilterSetStore(preferences_file)
         if self.temporary_directory is not None:
             self.temporary_directory.mkdir(parents=True, exist_ok=True)
@@ -360,13 +358,6 @@ class GuiApi:
 
     def suggestions(self, query: str, limit: int = 20) -> dict[str, object]:
         return search_suggestions(self._archive(), query, limit).model_dump(mode="json")
-
-    def native_smoke_complete(self, passed: bool, error: str | None = None) -> bool:
-        """Accept the one-shot result from the hidden native smoke page."""
-        if self.native_smoke is None:
-            raise RuntimeError("native smoke callback is unavailable")
-        self.native_smoke.complete(passed, error)
-        return True
 
     def mailbox_tree(self, show_volumes: bool = False) -> list[dict[str, object]]:
         if show_volumes not in self._tree_cache:
@@ -548,6 +539,35 @@ class GuiApi:
         return self.archive
 
 
+class NativeSmokeApi:
+    """Expose only the three bridge calls required by the hidden smoke page."""
+
+    def __init__(self, api: GuiApi, controller: NativeSmokeController) -> None:
+        self._api = api
+        self._controller = controller
+
+    def status(self) -> dict[str, object]:
+        return self._api.status()
+
+    def search(
+        self,
+        query: str,
+        offset: int = 0,
+        sort_by: str = "date",
+        direction: str = "descending",
+        search_attachments: bool = False,
+        mailbox_selections: list[str] | None = None,
+        find_older: bool = False,
+    ) -> dict[str, object]:
+        return self._api.search(
+            query, offset, sort_by, direction, search_attachments, mailbox_selections, find_older
+        )
+
+    def native_smoke_complete(self, passed: bool, error: str | None = None) -> bool:
+        self._controller.complete(passed, error)
+        return True
+
+
 def _is_archive(path: Path) -> bool:
     return path.is_dir() and (path / "archive.sqlite3").is_file() and (path / "search.sqlite3").is_file()
 
@@ -618,7 +638,8 @@ def main() -> int:
     archive = args.archive or (Path(archive_value) if archive_value else None)
     if archive is not None and not _is_archive(archive):
         raise SystemExit(f"mailsearch-gui: {archive} must contain archive.sqlite3 and search.sqlite3")
-    api = GuiApi(archive, native_smoke=smoke)
+    api = GuiApi(archive)
+    bridge = NativeSmokeApi(api, smoke) if smoke else api
     initial_status = api.status()
     url = str(GUI_DIRECTORY / "index.html")
     if smoke:
@@ -626,7 +647,7 @@ def main() -> int:
     window = webview.create_window(
         _window_title(archive, int(initial_status["message_count"])),
         url,
-        js_api=api,
+        js_api=bridge,
         width=1400,
         height=900,
         min_size=(900, 560),
@@ -643,7 +664,7 @@ def main() -> int:
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     if smoke:
         smoke.mark("event-loop-starting")
-    webview.start(http_server=True, private_mode=True, menu=application_menu(api))
+    webview.start(http_server=True, private_mode=True, menu=[] if smoke else application_menu(api))
     if smoke:
         report = smoke.event_loop_returned()
         print("GUI bridge smoke test passed" if report.passed else f"GUI bridge smoke test failed: {report.error}")

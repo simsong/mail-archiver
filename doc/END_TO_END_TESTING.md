@@ -107,11 +107,13 @@ Chromium cannot test.
 Run it explicitly with `make test-native-gui`. The native test window is created
 hidden against a purpose-built one-message derived archive. It does not run
 ingest or ClamAV. The smoke-only page calls the real `status()` and `search()`
-bridge methods and sends one completion callback to Python; Python never polls
-WKWebView with a synchronous JavaScript evaluation. No secondary windows,
-dialogs, attachment openers, or exports are allowed in smoke mode, so local and
-hosted execution must not disturb the desktop. The comprehensive interaction
-flow remains in headless Chromium; normal application behavior is unchanged.
+bridge methods and sends one completion callback to Python. Its dedicated
+bridge exposes only those three calls, and smoke mode omits the custom
+application menu. Python never polls WKWebView with a synchronous JavaScript
+evaluation. Secondary windows, dialogs, attachment openers, and exports are
+therefore inaccessible in smoke mode, so local and hosted execution must not
+disturb the desktop. The comprehensive interaction flow remains in headless
+Chromium; normal application behavior is unchanged.
 
 The child process atomically writes a JSON report after each phase and has a
 watchdog for bridge completion and Cocoa shutdown. Pytest independently bounds

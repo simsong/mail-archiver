@@ -540,10 +540,12 @@ HTML remains isolated in a sandboxed frame with its own restrictive CSP. The
 `test-native-gui` Makefile target opens a hidden smoke-only page over Cocoa. The
 page calls `status()` and one real `search()` through the injected bridge, then
 reports exactly one result to Python instead of making Python synchronously
-poll WKWebView JavaScript. The child atomically records timestamped phases and
-requests shutdown from a watchdog; the pytest parent has a separate timeout,
-captures a macOS process sample, and terminates the process group if needed.
-Later shutdown failures add phases without replacing the original bridge error.
+poll WKWebView JavaScript. A dedicated bridge exposes only those three methods,
+and smoke mode supplies no custom application menu. The child atomically
+records timestamped phases and requests shutdown from a watchdog; the pytest
+parent has a separate timeout, captures a macOS process sample, and terminates
+the process group if needed. Later shutdown failures add phases without
+replacing the original bridge error.
 
 `aisummarize.py` implements the `summarize` console entry point. It reads stdin
 before doing any native work and invokes a content-addressed Swift helper built
