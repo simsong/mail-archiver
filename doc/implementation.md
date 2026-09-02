@@ -543,6 +543,7 @@ reports exactly one result to Python instead of making Python synchronously
 poll WKWebView JavaScript. The child atomically records timestamped phases and
 requests shutdown from a watchdog; the pytest parent has a separate timeout,
 captures a macOS process sample, and terminates the process group if needed.
+Later shutdown failures add phases without replacing the original bridge error.
 
 `aisummarize.py` implements the `summarize` console entry point. It reads stdin
 before doing any native work and invokes a content-addressed Swift helper built

@@ -188,7 +188,8 @@ class NativeSmokeController:
         with self._lock:
             self.completed = True
             self.passed = False
-            self.error = error
+            if self.error is None:
+                self.error = error
             self.phases.append(NativeSmokePhase(name="watchdog-abort", elapsed_seconds=time.monotonic() - self.started))
             self._write_locked()
             self._result.set()

@@ -287,6 +287,18 @@ def test_native_smoke_page_reports_one_real_search(
     assert [phase.name for phase in report.phases][-1] == "bridge-passed"
 
 
+def test_native_smoke_report_keeps_the_primary_failure(tmp_path: Path) -> None:
+    """Requirement: shutdown diagnostics must not replace the bridge failure."""
+    report_path = tmp_path / "native-smoke.json"
+    controller = NativeSmokeController(report_path)
+    controller.complete(False, "bridge timeout")
+    controller._abort("Cocoa shutdown timeout")  # pylint: disable=protected-access
+
+    report = NativeSmokeReport.model_validate_json(report_path.read_text(encoding="utf-8"))
+    assert report.error == "bridge timeout"
+    assert [phase.name for phase in report.phases][-1] == "watchdog-abort"
+
+
 def terminate_process_group(process: subprocess.Popen[str]) -> tuple[str, str]:
     """Stop a timed-out smoke subprocess and collect its buffered output."""
     try:
@@ -360,9 +372,11 @@ def test_native_search_ui_smoke(native_smoke_archive: Path, tmp_path: Path) -> N
         sample_process(tested, sample_path)
         stdout, stderr = terminate_process_group(tested)
 
-    report_text = report_path.read_text(encoding="utf-8") if report_path.is_file() else "missing smoke report"
+    report_exists = report_path.is_file()
+    report_text = report_path.read_text(encoding="utf-8") if report_exists else "missing smoke report"
     detail = stdout + stderr + "\n" + report_text
     assert not timed_out, detail
+    assert report_exists, detail
     assert tested.returncode == 0, detail
     assert stdout.endswith("GUI bridge smoke test passed\n")
     report = NativeSmokeReport.model_validate_json(report_text)

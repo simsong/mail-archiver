@@ -574,8 +574,10 @@ complete HTML interface with disposable fixtures. The hosted macOS native smoke
 job is advisory while it runs in an unattended hosted GUI session. It uses a
 purpose-built one-message derived archive, reports JavaScript-to-Python bridge
 completion once, persists timestamped phases atomically, and has independent
-child and parent watchdogs. A required native-application gate must instead use
-a logged-in self-hosted Mac and XCUITest/XCUIAutomation.
+child and parent watchdogs. The first failure remains the primary report error
+even when shutdown records additional failure phases. A required
+native-application gate must instead use a logged-in self-hosted Mac and
+XCUITest/XCUIAutomation.
 The project also publishes a Zola-generated GitHub Pages site at
 `https://simsong.github.io/mail-archiver/`. The site links to the README,
 release notes, GitHub releases, the current stable `v1.2.3`-shaped tag and
