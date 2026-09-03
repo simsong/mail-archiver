@@ -351,11 +351,10 @@ class GuiApi:
         search_attachments: bool = False,
         mailbox_selections: list[str] | None = None,
         limit: int = DEFAULT_PAGE_SIZE,
-        ordered_text_prefix: bool = False,
     ) -> dict[str, object]:
         return search_page(
             self._archive(), query, offset, limit, sort_by, direction,
-            search_attachments, mailbox_selections, ordered_text_prefix,
+            search_attachments, mailbox_selections,
         ).model_dump(mode="json")
 
     def search_count(

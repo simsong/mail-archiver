@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import mailbox
@@ -168,9 +169,9 @@ def test_gui_search_field_preserves_selector_and_quote_semantics(tmp_path: Path)
 
     assert [result.subject for result in search_page(archive, "subject:annual report").results] == ["annual plan"]
     assert search_page(archive, 'subject:"annual report"').results == []
-    page = search_page(archive, 'subject:"annual plan" report REPORT')
+    page = search_page(archive, 'from:sender subject:"annual plan" report REPORT')
     assert [result.subject for result in page.results] == ["annual plan"]
-    assert page.highlight_terms == ["report"]
+    assert page.highlight_terms == ["report", "sender", "annual plan"]
 
 
 def test_gui_highlight_configuration_is_packaged_and_rejects_css_injection(tmp_path: Path) -> None:
@@ -207,7 +208,7 @@ def test_gui_count_and_search_cover_the_complete_archive_time_span(tmp_path: Pat
     results = search_page(archive, "report")
 
     assert summary.total == 1
-    assert summary.immediate_limit == 10_000
+    assert summary.immediate_limit == 2_000
     assert [result.message_pk for result in results.results] == [1]
     assert not results.has_more
 
@@ -219,7 +220,6 @@ def test_gui_unlimited_remainder_continues_the_same_sorted_result_set(tmp_path: 
     summary = search_count(archive, "sender", immediate_limit=1)
     first = search_page(
         archive, "sender", limit=1, sort_by="subject", direction="ascending",
-        ordered_text_prefix=True,
     )
     remainder = search_page(
         archive, "sender", offset=1, limit=0, sort_by="subject", direction="ascending"
@@ -553,6 +553,17 @@ def test_gui_exports_exact_eml_and_decoded_attachment(tmp_path: Path) -> None:
     content = attachment_content(archive, 2, pdf.part_id)
     assert base64.b64decode(content.content_base64) == pdf_path.read_bytes()
     assert content.filename == "report.pdf"
+
+
+def test_gui_concurrent_drag_exports_have_distinct_temporary_paths(tmp_path: Path) -> None:
+    """Requirement: concurrent drag preparation cannot share a temporary export file."""
+    archive = make_gui_archive(tmp_path)
+    destination = tmp_path / "drag" / "message.eml"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda _: write_message(archive, 2, destination), range(16)))
+
+    assert destination.read_bytes() == MULTIPART_MESSAGE
 
 
 def test_gui_flags_executable_attachment_types() -> None:

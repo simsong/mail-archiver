@@ -197,20 +197,10 @@ def _search_statement(
     search_attachments: bool = False,
     mailbox_selections: list[MailboxSelection] | None = None,
     newest_page: bool = False,
-    ordered_text_prefix: bool = False,
 ) -> SearchStatement:
-    direct_catalog_scan = bool(ordered_text_prefix and terms.text and not search_attachments)
     predicate = _search_predicate(
-        terms, search_attachments, mailbox_selections, include_text=not direct_catalog_scan
+        terms, search_attachments, mailbox_selections,
     )
-    if direct_catalog_scan:
-        predicate.sql += (
-            " AND EXISTS (SELECT 1 FROM search.message_metadata matching_metadata "
-            "JOIN search.message_fts matching_fts "
-            "ON matching_fts.rowid = matching_metadata.message_fts_rowid "
-            "WHERE matching_metadata.sha256 = m.sha256 AND matching_fts.content MATCH ?)"
-        )
-        predicate.parameters.append(fts_query(terms.text))
     parameters = predicate.parameters.copy()
     candidate_sort = SortField.DATE if newest_page else sort_by
     candidate_direction = SortDirection.DESCENDING if newest_page else direction
@@ -235,7 +225,7 @@ def _search_statement(
         "messages m INDEXED BY messages_sha256 "
         "JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
     )
-    if not terms.text or direct_catalog_scan:
+    if not terms.text:
         if sort_by is SortField.DATE:
             candidate_source = (
                 "messages m INDEXED BY messages_date_message "
@@ -400,7 +390,6 @@ def search_header_page(
     mailbox_selections: list[MailboxSelection] | None = None,
     find_older: bool = False,
     complete_sort: bool = False,
-    ordered_text_prefix: bool = False,
 ) -> SearchHeaderPage:
     catalog_path, search_path = archive / "archive.sqlite3", archive / "search.sqlite3"
     if not catalog_path.is_file() or not search_path.is_file():
@@ -424,7 +413,6 @@ def search_header_page(
             newest_page=find_older and not complete_sort and _is_plain_text_search(
                 terms, sort_by, direction, search_attachments, mailbox_selections
             ),
-            ordered_text_prefix=ordered_text_prefix,
         )
         return SearchHeaderPage(
             results=[

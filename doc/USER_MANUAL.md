@@ -219,13 +219,13 @@ list is on the left and the selected message is on the right. The message view
 also shows its canonical archive mailbox and every remembered source location.
 Search and viewing do not modify the archive.
 
-Ordinary search words are highlighted with a yellow background wherever they
-appear in the selected message's displayed headers or body. Matching is
-case-insensitive and works in the HTML, plain-text, and raw-source views.
-Quoted text is highlighted as one phrase. Values used only in structured
-selectors such as `from:`, `subject:`, or `date:` are filters and are not
-highlighted. Highlighting changes only the viewer; it never changes canonical
-message bytes or the search index.
+Ordinary search words and textual selector values are highlighted with a yellow
+background wherever they appear in the selected message's displayed headers or
+body. Matching is case-insensitive and works in the HTML, plain-text, and
+raw-source views. Thus `from:beth` highlights `beth` in the displayed From
+header. Quoted text is highlighted as one phrase; date selectors remain filters
+and do not create highlights. Highlighting changes only the viewer; it never
+changes canonical message bytes or the search index.
 
 Mail Archiver searches an archival collection; it is not an inbox or mail
 program. A search therefore covers the collection's complete time span. Recent
@@ -266,9 +266,9 @@ Useful search forms include:
 
 All supplied terms must match. Use the sort controls above the result list to
 sort the complete matching set by date, subject, or sender. The application
-first counts up to 10,001 matches. If that scan ends at 10,000 or fewer, the
+first counts up to 2,001 matches. If that scan ends at 2,000 or fewer, the
 count is exact and every result is displayed. Otherwise it displays the first
-10,000 in the selected sort order and automatically retrieves the rest. During
+2,000 in the selected sort order and automatically retrieves the rest. During
 that work the result status is red, says **Searching in background**, and shows
 the displayed count. When the background search finishes, the full result set
 and exact count are shown. Starting another search supersedes the earlier
@@ -335,7 +335,10 @@ always explicit, with an additional warning for executable or container types.
 The bottom of the message view separately lists the canonical archive mailbox
 and every source volume and source or forensic path where the message was found.
 **Save Message…** exports an exact, SHA-256-verified `.eml` copy without changing
-the archive.
+the archive. To drag a message to Finder, use the message-file icon beside its
+headers. The application creates no temporary mail files while you browse or
+hover over results. The first drag prepares the verified disposable `.eml` file;
+drag it again to transfer the ready file.
 
 ## Filter by original mailbox
 

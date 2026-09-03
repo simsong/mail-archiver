@@ -367,7 +367,7 @@ filters with **Any**, **From**, **To**, **Cc**, and **Bcc** role menus. The
 window title identifies the archive and its deduplicated searchable-message
 count. This is an archive interface, not an inbox: every nonempty query searches
 the complete collection without treating recent mail as more important. Up to
-10,000 matches appear together; larger result sets show the first 10,000 while
+2,000 matches appear together; larger result sets show the first 2,000 while
 the remainder loads automatically in the background. Start it with:
 
 ```console

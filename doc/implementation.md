@@ -389,15 +389,15 @@ available when the user needs the source representation.
 The `gui/` prototype uses pywebview's Cocoa/WKWebView backend on macOS.  Its
 Python API delegates query parsing, SQLite reads, and direct MBOX retrieval to
 the same typed functions used by `mailsearch`. A nonempty query first executes
-a capped `count(*)` over at most 10,001 rows from the shared catalog/FTS
+a capped `count(*)` over at most 2,001 rows from the shared catalog/FTS
 predicate. That threshold probe omits sorting, recipient aggregation, and
 header materialization. A result below the cap is exact; reaching the cap
 returns an intentionally unknown total. The GUI then asks the exact query for
-up to 10,000 headers. A larger result set immediately shows that prefix and
-uses the selected catalog sort index to scan in result order, probing each
-candidate through the indexed SHA-256-to-FTS-row-ID mapping until 10,000
-matches are found. It then requests the unlimited remainder from offset 10,000
-through a second bridge promise. The result status is red and says **Searching in background** until
+up to 2,000 headers. A larger result set immediately shows that prefix and
+then requests the unlimited remainder from offset 2,000 through a second
+bridge promise using the same SQL predicate and stable sort, so the two phases
+are complementary and cannot change membership or ordering. The result status
+is red and says **Searching in background** until
 the remainder arrives, at which point the materialized length supplies the
 exact count. Search-generation checks discard a stale response when a newer
 query starts. Preview requests are split into
@@ -450,9 +450,10 @@ typed search service. Ordinary terms search `message_fts` by default; when the
 box is selected they search the union of `message_fts` and `attachment_fts`.
 Metadata selectors are unchanged.
 
-Each typed GUI search page also returns its deduplicated ordinary free-text
-terms. JavaScript marks literal case-insensitive matches when it renders header,
-plain-text, or raw-source text nodes. For sanitized HTML it parses the already
+Each typed GUI search page also returns its deduplicated ordinary free-text and
+textual-selector values; date selectors remain filters only. JavaScript marks
+literal case-insensitive matches when it renders header, plain-text, or
+raw-source text nodes. For sanitized HTML it parses the already
 inert document, marks body text nodes, injects only the configured mark style,
 and then supplies the result to the existing sandboxed iframe. The versioned
 packaged `configuration.yaml` is loaded into strict Pydantic models and exposes
@@ -530,7 +531,11 @@ The tables are derived and are replaced together with FTS by `refresh-index`.
 `.eml` export writes the bytes returned by hash-verified direct retrieval.
 Finder dragging uses a temporary `.eml` file URL and the Cocoa webview's native
 file/link drag support. Only the message-file icon well is draggable; the
-header region remains normal selectable text. `window.print()` is handled by pywebview's WKWebView
+header region remains normal selectable text. The browser never preloads an
+`.eml` file on hover or selection: a drag-start event begins asynchronous
+preparation, and a subsequent drag transfers the ready file. Each write uses a
+unique same-directory temporary pathname before atomic replacement.
+`window.print()` is handled by pywebview's WKWebView
 print operation. Temporary exports live only for the application process.
 
 The shell page permits `unsafe-eval` only for local scripts because pywebview

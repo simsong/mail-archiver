@@ -31,11 +31,13 @@ date/subject/sender sorting, keyboard result navigation, MIME-part shortcuts,
 message and MIME-part views, separate message windows, sanitized HTML with
 remote content blocked by default, inline image and PDF previews, attachment
 open/save actions, printing, exact `.eml` export, and experimental Finder
-drag-out from a result or the dedicated message-file well.
+drag-out from the dedicated message-file well. Browsing and hovering never
+creates a temporary `.eml`; the first drag prepares it and the next transfers
+the ready file.
 
 The interface is for archivists rather than inbox processing. Nonempty queries
 count and search the complete collection, regardless of message age. It shows
-up to 10,000 matches immediately and loads any remainder automatically in the
+up to 2,000 matches immediately and loads any remainder automatically in the
 background. An empty query displays no results; there are no manual result-page
 controls. At startup and after an empty query, the result pane shows examples
 for full text, phrases, and every supported selector.

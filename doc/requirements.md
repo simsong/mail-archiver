@@ -433,17 +433,17 @@ This is an archive search system, not a mail client. A GUI query must search the
 complete selected collection without favoring recent messages or requiring an
 archivist to request older results. Before materializing headers, the GUI runs
 the same query and mailbox scope without result sorting, recipient aggregation,
-or header materialization, stopping after 10,001 matches. Exhaustion gives an
-exact count of at most 10,000; reaching 10,001 proves that background loading
+or header materialization, stopping after 2,001 matches. Exhaustion gives an
+exact count of at most 2,000; reaching 2,001 proves that background loading
 is required without waiting for a full count. SQLite FTS5 provides no reliable
 approximate cardinality for an arbitrary combination of full-text terms and
 catalog filters, so the GUI must not display an estimated count.
-When the exact count is at most 10,000, the GUI displays every result. Otherwise
-it displays the first 10,000 results in the selected sort order, automatically
+When the exact count is at most 2,000, the GUI displays every result. Otherwise
+it displays the first 2,000 results in the selected sort order, automatically
 retrieves the remainder in the background, and then displays the complete
 result set and exact count. During that continuation, the result status is red
 and says **Searching in background** with the displayed count. A newer
-query supersedes the continuation; a failure retains the first 10,000 results
+query supersedes the continuation; a failure retains the first 2,000 results
 and reports that the background search failed. The GUI has no **Find older
 ones**, **Load more**, or **Load all** interaction. Limiting an unordered FTS
 hit list is forbidden because it can omit results required by the selected
@@ -510,12 +510,13 @@ The GUI paints each result page from header metadata first, then requests its
 indexed body previews on a background worker and fills a reserved third line
 without blocking the initial result display.
 Literal, case-insensitive occurrences of every ordinary free-text query term
-must be highlighted in the selected message's displayed headers and body.
+and every textual selector value (`any:`, `from:`, `to:`, `cc:`, `bcc:`, and
+`subject:`) must be highlighted in the selected message's displayed headers and
+body. Date-selector values do not create highlights.
 Highlighting applies to plain text, sanitized HTML, and raw-source views without
 changing canonical bytes or weakening the HTML sandbox. Its background color
 comes from the strictly validated, versioned packaged `configuration.yaml`;
-the initial value is yellow (`#fff59d`). Structured selector values and date
-filters do not create body highlights.
+the initial value is yellow (`#fff59d`).
 
 The bottom of the main GUI contains a clickable ingest-status line. During a
 run it shows live completion, message count, active/configured workers, and ETA;
@@ -554,11 +555,13 @@ explicit.
 Command-1 through Command-9 select the MIME part having that numeric part ID;
 Command-0 and Command-Shift-U select the raw RFC 5322 source.
 
-Saving or dragging a message creates a disposable `.eml` copy containing the
-exact SHA-256-verified RFC 5322 bytes; it never creates or changes canonical
-archive content. Message headers remain selectable text. Dragging is confined
-to a separate message-file icon well and is initially a macOS Finder
-integration. Printing
+Saving a message creates a disposable `.eml` copy containing the exact
+SHA-256-verified RFC 5322 bytes; it never creates or changes canonical archive
+content. Dragging is confined to a separate message-file icon well and creates
+that copy only when a drag starts, never while browsing, selecting, or hovering
+over a result. Because the pywebview bridge is asynchronous, the first drag
+prepares the disposable file and the next drag transfers it to Finder. Message
+headers remain selectable text. Printing
 prints the displayed headers and selected MIME part through the system print
 panel. Temporary message and attachment exports are removed when the GUI exits.
 

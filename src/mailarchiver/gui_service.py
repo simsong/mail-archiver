@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
@@ -33,7 +34,7 @@ from .plugin_api import SourceContainerMetadata
 from .search import SEARCH_CATEGORIES, decoded_part, is_attachment
 
 PAGE_SIZE = 100
-IMMEDIATE_SEARCH_LIMIT = 10_000
+IMMEDIATE_SEARCH_LIMIT = 2_000
 RAW_PART_ID = -1
 LEGACY_X_HTML_PART_ID = -2
 HEADER_BODY_SEPARATOR = re.compile(br"\r\n\r\n|\n\n|\r\r")
@@ -187,7 +188,6 @@ def search_page(
     direction: SortDirection | str = SortDirection.DESCENDING,
     search_attachments: bool = False,
     mailbox_selections: list[str] | None = None,
-    ordered_text_prefix: bool = False,
 ) -> SearchPage:
     """Return exact GUI results using the CLI query language."""
     if offset < 0 or limit < 0:
@@ -198,7 +198,7 @@ def search_page(
     page = search_header_page(
         archive, terms, fetch_limit, offset, SortField(sort_by),
         SortDirection(direction), search_attachments, selections, find_older=True,
-        complete_sort=True, ordered_text_prefix=ordered_text_prefix,
+        complete_sort=True,
     )
     return SearchPage(
         results=page.results[:limit] if limit else page.results,
@@ -230,10 +230,10 @@ def search_count(
 
 
 def _highlight_terms(terms: SearchTerms) -> list[str]:
-    """Return unique literal free-text values for viewer highlighting."""
+    """Return unique literal text and textual-selector values for viewer highlighting."""
     values: list[str] = []
     seen: set[str] = set()
-    for value in terms.text:
+    for value in (*terms.text, *terms.any_address, *terms.from_, *terms.to, *terms.cc, *terms.bcc, *terms.subject):
         folded = value.casefold()
         if folded and folded not in seen:
             seen.add(folded)
@@ -662,9 +662,10 @@ def _cid_images(message: Message) -> dict[str, str]:
 
 def _write_bytes(destination: Path, value: bytes) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
+    temporary = Path(temporary_name)
     try:
-        with temporary.open("wb") as output:
+        with os.fdopen(descriptor, "wb") as output:
             output.write(value)
             output.flush()
             os.fsync(output.fileno())

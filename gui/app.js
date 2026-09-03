@@ -15,6 +15,7 @@ const state = {
   partRequest: 0,
   view: null,
   dragExports: new Map(),
+  dragPreparing: new Set(),
   previewUrl: null,
   showTree: false,
   showVolumes: false,
@@ -150,6 +151,7 @@ function resetArchiveView() {
   state.searchFilters = [];
   state.highlightTerms = [];
   state.dragExports.clear();
+  state.dragPreparing.clear();
   renderSearchFilters();
   closeSuggestions();
   clearAttachmentPreview();
@@ -631,8 +633,7 @@ async function runCompleteSearch(context) {
   elements["result-list"].replaceChildren();
   if (summary.total === 0) { updateResultStatus(); return; }
   const first = await call(() => window.pywebview.api.search(
-    query, 0, sortBy, sortDirection, searchAttachments, mailboxSelections,
-    summary.immediate_limit, summary.total === null,
+    query, 0, sortBy, sortDirection, searchAttachments, mailboxSelections, summary.immediate_limit,
   ));
   if (request !== state.searchRequest) return;
   if (!first) { updateResultStatus(); return; }
@@ -691,7 +692,6 @@ function resultRow(result) {
   row.setAttribute("aria-selected", "false");
   row.dataset.messagePk = result.message_pk;
   row.dataset.dateUtc = result.date_utc;
-  row.draggable = true;
   const subjectLine = document.createElement("div");
   subjectLine.className = "result-subject-line";
   const subject = document.createElement("div");
@@ -723,7 +723,6 @@ function resultRow(result) {
     await call(() => window.pywebview.api.open_message_window(result.message_pk, state.highlightTerms));
     row.dataset.openedWindow = "true";
   });
-  installDrag(row, () => result.message_pk);
   return row;
 }
 
@@ -784,7 +783,6 @@ async function selectMessage(messagePk) {
   renderAttachments(view.attachments);
   renderLocations(view);
   await showPart(view.preferred_part_id, false);
-  prepareDrag(messagePk);
 }
 
 function renderLocations(view) {
@@ -993,10 +991,14 @@ function clearAttachmentPreview() {
 }
 
 function installDrag(element, messagePk) {
-  element.addEventListener("pointerenter", () => prepareDrag(messagePk()));
-  element.addEventListener("dragstart", event => {
-    const info = state.dragExports.get(messagePk());
-    if (!info) { event.preventDefault(); showError("Message export is still being prepared; drag again."); return; }
+  element.addEventListener("dragstart", async event => {
+    const message = messagePk();
+    const info = state.dragExports.get(message);
+    if (!info) {
+      event.preventDefault();
+      await prepareDrag(message);
+      return;
+    }
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData("text/uri-list", info.url);
     event.dataTransfer.setData("DownloadURL", `message/rfc822:${info.filename}:${info.url}`);
@@ -1005,8 +1007,10 @@ function installDrag(element, messagePk) {
 }
 
 async function prepareDrag(messagePk) {
-  if (!messagePk || state.dragExports.has(messagePk)) return;
+  if (!messagePk || state.dragExports.has(messagePk) || state.dragPreparing.has(messagePk)) return;
+  state.dragPreparing.add(messagePk);
   const info = await call(() => window.pywebview.api.prepare_drag(messagePk));
+  state.dragPreparing.delete(messagePk);
   if (info) {
     state.dragExports.set(messagePk, info);
     if (state.selected === messagePk) elements["message-file-name"].textContent = info.filename;

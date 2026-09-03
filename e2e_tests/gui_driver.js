@@ -86,6 +86,16 @@
     document.querySelector(".search-chip-remove").click();
     await waitFor(() => !document.querySelector(".search-chip") && rows().length === 0, "subject filter chip can be removed without an empty search");
 
+    await search("from:beth", 1, false);
+    rows()[0].click();
+    await waitFor(
+      () => [...document.querySelectorAll("#message-headers mark.search-highlight")]
+        .some(mark => mark.textContent.toLowerCase() === "beth"),
+      "from selector highlights its matching displayed header value",
+    );
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert(document.getElementById("message-file-name").textContent === "Message.eml", "selecting a message does not prepare a temporary file");
+
     await search("bulk", 203, false);
     await waitFor(
       () => rows().every(row => row.querySelector(".result-preview").textContent.length > 0),
@@ -172,13 +182,25 @@
     window.print = () => { prints += 1; };
     document.getElementById("print-message").click();
     assert(prints === 1, "print control invokes browser printing");
+    const messageFileName = document.getElementById("message-file-name");
+    const beforeHover = messageFileName.textContent;
     document.getElementById("message-file-well").dispatchEvent(new PointerEvent("pointerenter", {bubbles: true}));
-    await waitFor(() => document.getElementById("message-file-name").textContent !== "Message.eml", "drag export is prepared");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert(messageFileName.textContent === beforeHover, "hovering does not prepare a message file");
     const transfer = {values: {}, effectAllowed: "", setData(type, value) { this.values[type] = value; }};
     const drag = new Event("dragstart", {bubbles: true, cancelable: true});
     Object.defineProperty(drag, "dataTransfer", {value: transfer});
     document.getElementById("message-file-well").dispatchEvent(drag);
-    assert(transfer.values.DownloadURL?.startsWith("message/rfc822:"), "drag event publishes an RFC 822 download");
+    if (!transfer.values.DownloadURL) {
+      await waitFor(() => messageFileName.textContent !== beforeHover, "first drag prepares the message file");
+      const preparedTransfer = {values: {}, effectAllowed: "", setData(type, value) { this.values[type] = value; }};
+      const preparedDrag = new Event("dragstart", {bubbles: true, cancelable: true});
+      Object.defineProperty(preparedDrag, "dataTransfer", {value: preparedTransfer});
+      document.getElementById("message-file-well").dispatchEvent(preparedDrag);
+      assert(preparedTransfer.values.DownloadURL?.startsWith("message/rfc822:"), "prepared drag publishes an RFC 822 download");
+    } else {
+      assert(transfer.values.DownloadURL.startsWith("message/rfc822:"), "explicit drag publishes an RFC 822 download");
+    }
 
     await search("", 0, false);
     assert(document.querySelector(".search-help"), "empty search restores search-language help");
