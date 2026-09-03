@@ -97,6 +97,38 @@ def test_large_payload_is_ranked_on_a_sample_before_one_full_fallback_decode() -
     assert body.slices == [slice(None, half), slice(-half, None)]
 
 
+def test_failed_declared_codec_is_not_retried_after_a_clean_sample() -> None:
+    """Requirement: a failed full decode is not retried from a clean bounded sample."""
+
+    class DecodeCountingBytes(bytes):
+        calls: list[str]
+        slices: list[slice]
+
+        def __new__(cls, value: bytes) -> "DecodeCountingBytes":
+            instance = super().__new__(cls, value)
+            instance.calls = []
+            instance.slices = []
+            return instance
+
+        def __getitem__(self, key: int | slice) -> int | bytes:
+            if isinstance(key, slice):
+                self.slices.append(key)
+            return super().__getitem__(key)
+
+        def decode(self, encoding: str = "utf-8", errors: str = "strict") -> str:
+            self.calls.append(encoding)
+            return super().decode(encoding, errors)
+
+    half = DETECTION_SAMPLE_BYTES // 2
+    body = DecodeCountingBytes(b"a" * half + b"\x92" + b"a" * half)
+
+    result = decode_text(body, "utf-8")
+
+    assert result.encoding != "utf-8"
+    assert body.calls.count("utf-8") == 1
+    assert body.slices == [slice(None, half), slice(-half, None)]
+
+
 def test_ftfy_repairs_mojibake_after_valid_utf8_decode() -> None:
     """Requirement: clear UTF-8 mojibake is repaired in derived text only."""
     result = decode_text("cafÃ©".encode("utf-8"), "utf-8")

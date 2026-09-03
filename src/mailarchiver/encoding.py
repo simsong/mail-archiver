@@ -39,7 +39,7 @@ class DecodedText(BaseModel):
 class _EncodingCandidate(BaseModel):
     encoding: str
     quality: float
-    detector_rank: int
+    candidate_rank: int
 
 
 def _encoding_name(value: str | None) -> str | None:
@@ -110,11 +110,13 @@ def decode_text(payload: bytes, declared_encoding: str | None = None) -> Decoded
     """
     declared = _encoding_name(declared_encoding)
     declared_error: str | None = None
+    rejected: set[str] = set()
     if declared is not None:
         try:
             text = payload.decode(declared)
         except UnicodeError as error:
             declared_error = f"{declared_encoding}: {type(error).__name__}: {error}"
+            rejected.add(declared)
         else:
             repaired, changed = _repair(text)
             return DecodedText(value=repaired, encoding=declared, repaired=changed)
@@ -125,21 +127,24 @@ def decode_text(payload: bytes, declared_encoding: str | None = None) -> Decoded
             text = payload.decode("utf-8")
         except UnicodeError as error:
             declared_error = f"utf-8: {type(error).__name__}: {error}"
+            rejected.add("utf-8")
         else:
             repaired, changed = _repair(text)
             return DecodedText(value=repaired, encoding="utf-8", repaired=changed)
 
     sample = _sample(payload)
     candidates: list[_EncodingCandidate] = []
-    for detector_rank, encoding in enumerate(_candidate_encodings(sample)):
+    for candidate_rank, encoding in enumerate(_candidate_encodings(sample)):
+        if encoding in rejected:
+            continue
         try:
             text = sample.decode(encoding)
         except UnicodeError:
             continue
         candidates.append(
-            _EncodingCandidate(encoding=encoding, quality=_quality(text), detector_rank=detector_rank)
+            _EncodingCandidate(encoding=encoding, quality=_quality(text), candidate_rank=candidate_rank)
         )
-    candidates.sort(key=lambda candidate: (candidate.quality, -candidate.detector_rank), reverse=True)
+    candidates.sort(key=lambda candidate: (candidate.quality, -candidate.candidate_rank), reverse=True)
     for candidate in candidates:
         if candidate.quality <= 0.5:
             break
