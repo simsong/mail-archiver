@@ -220,6 +220,8 @@ also shows its canonical archive mailbox and every remembered source location.
 MBOX byte locations appear as `path?offset=N` (with no suffix for offset zero).
 Use the small copy icon beside a local source path to put that pathname, without
 the offset, on the macOS pasteboard as both text and a file URL.
+When there is spare vertical space in the message viewer, **Locations** remains
+at the bottom of the pane.
 Search and viewing do not modify the archive.
 
 Ordinary search words and textual selector values are highlighted with a yellow

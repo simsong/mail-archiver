@@ -86,9 +86,10 @@ button { min-height: 28px; }
 .result-preview { min-height: 1.25em; margin-top: 3px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .result.selected .result-line, .result.selected .result-preview, .result.selected .result-attachment { color: inherit; opacity: 0.76; }
 .message { overflow: auto; min-width: 0; }
+#message-content { display: flex; flex-direction: column; min-height: 100%; }
 .message-actions { position: sticky; top: 0; z-index: 3; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, Canvas 92%, transparent); backdrop-filter: blur(16px); }
 #part-select { min-width: 180px; margin-right: auto; }
-#message-well { padding: 22px 30px 40px; min-height: 100%; }
+#message-well { display: flex; flex: 1; flex-direction: column; min-height: 0; padding: 22px 30px 40px; }
 #message-well.computed-date { background: color-mix(in srgb, #d44 5%, Canvas); }
 .computed-date-banner { margin: -22px -30px 20px; padding: 9px 30px; border-bottom: 1px solid color-mix(in srgb, #b22 35%, transparent); color: color-mix(in srgb, #900 82%, CanvasText); background: color-mix(in srgb, #d44 13%, Canvas); font-weight: 650; }
 .message-summary { display: flex; align-items: flex-start; gap: 24px; }
@@ -107,7 +108,7 @@ button { min-height: 28px; }
 mark.search-highlight { color: inherit; background: var(--search-highlight-background); }
 .html-frame { width: 100%; min-height: 460px; border: 0; background: white; color-scheme: light; }
 
-.provenance { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 15px; }
+.provenance { margin-top: auto; border-top: 1px solid var(--border); padding-top: 15px; }
 .provenance h2 { font-size: 13px; margin: 0 0 10px; }
 #message-locations { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 #message-locations dt { color: var(--muted); text-align: right; }
@@ -148,6 +149,6 @@ body.standalone .message { height: 100%; overflow: auto; }
   .no-print, #error { display: none !important; }
   .workspace { display: block; height: auto; }
   .message { overflow: visible; }
-  #message-well { padding: 0; }
+  #message-well { display: block; padding: 0; }
   .html-frame { min-height: 0; height: auto; }
 }

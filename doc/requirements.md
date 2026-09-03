@@ -549,6 +549,9 @@ was found. A nonzero MBOX byte offset is displayed as `?offset=N`, rather than
 as part of the pathname; an absent or zero offset is omitted. Each local source
 path has a copy control that writes that path, without any offset, to the macOS
 pasteboard both as plain text and as a file URL.
+When a message pane is taller than its displayed content, the source-location
+section remains at the bottom of that pane; it never floats immediately after a
+short message body.
 When `date_source` is `received-median`, the GUI shows a warning banner across
 the message and gives the message well a slight red tint. The original `Date:`
 header remains visible and unchanged. The banner identifies the original

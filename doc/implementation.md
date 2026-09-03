@@ -511,6 +511,9 @@ the macOS pasteboard, as both text and a file URL; provider and forensic paths
 without a local pathname have no copy control. Direct provider observations sort before local evidence; retained
 Apple Gmail observations are labeled as local cache copies rather than as the
 authoritative cloud source.
+The message-content and message-well containers are vertical flex layouts; the
+source-location section uses an automatic top margin so it occupies the bottom
+of any spare viewer height without affecting normal scrolling for long messages.
 
 For a catalog row whose `date_source` is `received-median`, the typed message
 response includes the decoded original `Date:` header, the stored UTC

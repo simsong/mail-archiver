@@ -147,6 +147,13 @@
     assert(document.getElementById("message-locations").textContent.includes("Archive mailbox"), "archive provenance displayed");
     assert(!document.getElementById("message-locations").textContent.includes(".mbox:"), "locations do not present offsets as pathname suffixes");
     assert(document.querySelector(".copy-source-path")?.title === "Copy source path", "local source path has a copy control");
+    const messageContent = document.getElementById("message-content");
+    messageContent.style.minHeight = "1200px";
+    const wellBounds = document.getElementById("message-well").getBoundingClientRect();
+    const locationsBounds = document.getElementById("provenance-section").getBoundingClientRect();
+    assert(wellBounds.bottom - locationsBounds.bottom < 45,
+      "locations anchor to the bottom of spare message-pane height");
+    messageContent.style.minHeight = "";
     document.body.classList.add("standalone");
     const standalonePane = document.getElementById("message-pane");
     assert(getComputedStyle(standalonePane).overflowY === "auto" && standalonePane.scrollHeight > standalonePane.clientHeight, "standalone message window scrolls to its complete message and locations");
