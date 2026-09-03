@@ -116,7 +116,10 @@ async function runNativeSmoke() {
     const status = await window.pywebview.api.status();
     if (!status?.ready) throw new Error("smoke archive is not ready");
     const page = await window.pywebview.api.search('"message viewer"', 0, "date", "descending", false, [], false);
-    passed = Array.isArray(page.results) && page.results.length === 1 && page.highlight_terms.includes("message viewer");
+    const validPage = page && typeof page === "object"
+      && Array.isArray(page.results)
+      && Array.isArray(page.highlight_terms);
+    passed = validPage && page.results.length === 1 && page.highlight_terms.includes("message viewer");
     if (!passed) throw new Error("native bridge search returned an invalid page");
   } catch (failure) {
     error = String(failure?.stack || failure);
