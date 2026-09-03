@@ -429,6 +429,22 @@ lookups. Bounded date-ordered listings must use the date/message index to
 select the requested page before recipient aggregation. Year-scoped reports
 must express their bounds as indexed `date_utc` ranges rather than applying a
 function to every stored date.
+An ordinary body-text GUI search may first test the 10,000 newest catalog
+messages from that date/message index against each message's indexed FTS row
+ID. A partial page is returned immediately with an explicit indication that
+older results have not been checked; it must not be represented as a complete
+result set. In this state **Load more** is relabeled **Find older ones** and
+runs the complete FTS-to-catalog query from the number of results already
+displayed, without skipping or duplicating messages. **Load all** makes the
+same transition and continues through all remaining complete-query pages. The
+command-line search remains exact and performs that fallback automatically
+when the recent search does not fill its requested page.
+Selecting Subject or Sender (author) rather than Date must still select the
+most recent matching messages; the alternate sort applies within each page,
+not globally across older unchecked mail. The **Find older ones** control must
+include the displayed messages' oldest-to-newest date range when results are
+visible. Limiting the unordered FTS hit list is forbidden because it can omit
+newer matches.
 Index extraction and insertion happen after canonical MBOX/catalog publication.
 An indexing failure is recorded as a metadata defect and does not reject mail;
 `refresh-index` repairs missing disposable content.
@@ -463,6 +479,11 @@ the CLI selectors and ordinary ANDed terms; shell-style quotes group spaces,
 so `subject:"annual report"` is one selector while `subject:annual report`
 retains the CLI meaning of a subject selector plus a free-text term.  It loads
 the newest 100 results at a time without changing the CLI's ten-result default.
+When more results exist, **Load more** appends one page and **Load all** appends
+every remaining page without further user action, including the complete-query
+transition for an unchecked recent body-text page. A newer search must
+supersede an in-progress **Load all** operation, and the status must show its
+accumulated result count while it runs.
 After three characters and a 120-millisecond debounce, the GUI suggests at most
 20 matching addresses and 20 matching subjects with deduplicated message
 counts. Stale responses are discarded. Addresses rank by message count, then
@@ -485,6 +506,13 @@ meaning. The control does not extract attachment content on demand.
 The GUI paints each result page from header metadata first, then requests its
 indexed body previews on a background worker and fills a reserved third line
 without blocking the initial result display.
+Literal, case-insensitive occurrences of every ordinary free-text query term
+must be highlighted in the selected message's displayed headers and body.
+Highlighting applies to plain text, sanitized HTML, and raw-source views without
+changing canonical bytes or weakening the HTML sandbox. Its background color
+comes from the strictly validated, versioned packaged `configuration.yaml`;
+the initial value is yellow (`#fff59d`). Structured selector values and date
+filters do not create body highlights.
 
 The bottom of the main GUI contains a clickable ingest-status line. During a
 run it shows live completion, message count, active/configured workers, and ETA;
@@ -502,12 +530,24 @@ HTTP(S) images may load only after an explicit per-message action. Embedded
 CID images may render from the verified message. Attachments appear in a list,
 safe images and PDFs can be previewed inline, and opening any attachment is an
 explicit action with an additional warning for executable or container types.
+For a non-multipart message whose complete raw body, apart from surrounding
+ASCII whitespace, is enclosed by case-insensitive `<x-html>` and `</x-html>`
+tags, the GUI exposes the enclosed content as a preferred **HTML — legacy
+x-html** view. This recovery also applies when a malformed multipart declaration
+has no usable boundaries and therefore parses as non-multipart. An inline
+mention of `<x-html>` does not trigger it, valid MIME parts take precedence, and
+the recovered view passes through the same sanitizer and remote-content policy
+as MIME HTML. **Raw Source** remains selectable and unchanged.
 At the bottom of every message view, the GUI displays the archive mailbox path
 separately from every source volume and source/forensic path where the message
 was found.
 When `date_source` is `received-median`, the GUI shows a warning banner across
 the message and gives the message well a slight red tint. The original `Date:`
-header remains visible and unchanged.
+header remains visible and unchanged. The banner identifies the original
+`Date:` header value, the computed UTC median of the usable `Received:` header
+dates, and the computed UTC date used for archive routing. The latter two values
+are currently equal but are reported separately so the archival decision is
+explicit.
 Command-1 through Command-9 select the MIME part having that numeric part ID;
 Command-0 and Command-Shift-U select the raw RFC 5322 source.
 
@@ -529,6 +569,27 @@ Apple Intelligence is disabled, or the model is not ready.
 All archive commands use `MAIL_ARCHIVE_DIR` as their default archive directory.
 `--archive DIRECTORY` overrides that environment variable. If neither is set,
 the command fails before reading or writing an archive.
+
+The Python GUI identifies itself as **Mail Archiver** and uses the
+source-controlled rainbow-envelope icon in its native application identity.
+The required continuous-integration gate exercises the archive lifecycle and
+complete HTML interface with disposable fixtures. The hosted macOS native smoke
+job is advisory while it runs in an unattended hosted GUI session. It uses a
+purpose-built one-message derived archive, reports JavaScript-to-Python bridge
+completion once, exposes only `status`, `search`, and `native_smoke_complete`,
+and omits the normal application menu. It persists timestamped phases atomically
+and has independent child and parent watchdogs. The first failure remains the
+primary report error even when shutdown records additional failure phases. A required
+native-application gate must instead use a logged-in self-hosted Mac and
+XCUITest/XCUIAutomation.
+The project also publishes a Zola-generated GitHub Pages site at
+`https://simsong.github.io/mail-archiver/`. The site links to the README,
+release notes, GitHub releases, the current stable `v1.2.3`-shaped tag and
+current beta `v1.2.3-beta1`-shaped tag when present, and project discussions.
+It provides a clearly labeled index of digital-email-curation reports and
+related organizations; it does not imply that planned application features
+are implemented. The Pages build pins its Zola release and verifies the
+downloaded archive against a source-controlled SHA-256 digest before execution.
 
 ## Ingest sources
 
@@ -577,7 +638,9 @@ the command fails before reading or writing an archive.
   the source. The adapter records the parser/converter and version, enumerates
   every encountered store item, preserves folder and item identifiers as
   provenance, and reports corrupt, deleted, partial, or unsupported records
-  rather than silently omitting them.
+  rather than silently omitting them. The current backend decision, fixture
+  matrix, and format limitations are maintained in
+  [ON_DISK_MAIL_FORMATS.md](ON_DISK_MAIL_FORMATS.md).
 * Eudora ingest recognizes mailbox files together with their table-of-contents,
   attachment, and embedded-content conventions. It records which companion
   files were present and never treats an absent or stale index as proof that a

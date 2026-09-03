@@ -54,8 +54,15 @@ The [plug-in architecture](doc/PLUGINS.md) documents the implemented
 source-neutral generator, trusted-directory discovery, threading, status, and
 integrity boundaries, plus the work required by real Gmail, O365, IMAP, and
 stream adapters.
+The [on-disk mail format inventory](doc/ON_DISK_MAIL_FORMATS.md) records the
+current and planned source formats, PST/OST fixture sources, open-source parser
+options, and the selected import backend.
 See [release notes](doc/RELEASE_NOTES.md) for changes not yet included in a
 release.
+Visit the [Mail Archiver project site](https://simsong.github.io/mail-archiver/)
+for release links, digital email curation resources, and project discussions.
+Announcements are posted in [Discussion #55](https://github.com/simsong/mail-archiver/discussions/55);
+please direct feature requests to [Discussion #56](https://github.com/simsong/mail-archiver/discussions/56).
 The [data-quality audit](doc/DATA_QUALITY_AUDIT.md) documents the read-only
 diagnostic scripts used to investigate implausible dates, missing senders, and
 previously unsupported Babyl sources. Its generated mail and metadata evidence

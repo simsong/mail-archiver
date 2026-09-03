@@ -7,6 +7,11 @@ const state = {
   sortBy: "date",
   sortDirection: "descending",
   searchAttachments: false,
+  completeSearch: false,
+  olderResultsUnchecked: false,
+  highlightTerms: [],
+  highlightBackground: "transparent",
+  hasMore: false,
   selected: null,
   selectionRequest: null,
   searchRequest: 0,
@@ -31,6 +36,7 @@ const state = {
 const elements = {};
 const byId = id => document.getElementById(id);
 let initialized = false;
+let previewQueue = Promise.resolve();
 const SUGGESTION_MINIMUM = 3;
 const SUGGESTION_DELAY_MS = 120;
 const SUGGESTION_LIMIT = 20;
@@ -45,7 +51,12 @@ window.setTimeout(() => {
 async function initialize() {
   if (initialized) return;
   initialized = true;
-  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "load-more",
+  const parameters = new URLSearchParams(window.location.search);
+  if (parameters.get("native-smoke") === "1") {
+    await runNativeSmoke();
+    return;
+  }
+  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "pagination-controls", "load-more", "load-all",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
     "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
@@ -65,6 +76,7 @@ async function initialize() {
   elements.search.addEventListener("keydown", navigateSuggestions);
   elements.search.addEventListener("blur", () => window.setTimeout(closeSuggestions, 150));
   elements["load-more"].addEventListener("click", () => runSearch(true));
+  elements["load-all"].addEventListener("click", () => runSearch(true, true));
   elements["sort-by"].addEventListener("change", () => runSearch(false));
   elements["sort-direction"].addEventListener("click", toggleSortDirection);
   elements["search-attachments"].addEventListener("change", () => runSearch(false));
@@ -84,10 +96,10 @@ async function initialize() {
   installDrag(elements["message-file-well"], () => state.selected);
   document.addEventListener("keydown", handleCommandShortcut);
 
-  const parameters = new URLSearchParams(window.location.search);
   if (parameters.get("standalone") === "1") document.body.classList.add("standalone");
   const status = await call(() => window.pywebview.api.status());
   if (!status) return;
+  state.highlightTerms = parameters.getAll("highlight");
   await loadFilterSets();
   applyStatus(status);
   await refreshIngestOverview();
@@ -95,6 +107,25 @@ async function initialize() {
   const message = Number(parameters.get("message"));
   if (message) await selectMessage(message);
   else if (status.ready) await runSearch(false);
+}
+
+async function runNativeSmoke() {
+  let passed = false;
+  let error = null;
+  try {
+    const status = await window.pywebview.api.status();
+    if (!status?.ready) throw new Error("smoke archive is not ready");
+    const page = await window.pywebview.api.search('"message viewer"', 0, "date", "descending", false, [], false);
+    const validPage = page && typeof page === "object"
+      && Array.isArray(page.results)
+      && Array.isArray(page.highlight_terms);
+    passed = validPage && page.results.length === 1 && page.highlight_terms.includes("message viewer");
+    if (!passed) throw new Error("native bridge search returned an invalid page");
+  } catch (failure) {
+    error = String(failure?.stack || failure);
+  }
+  await window.pywebview.api.native_smoke_complete(passed, error);
+  window.__mailarchiveNativeSmoke = {passed, error};
 }
 
 function showBridgeFailure() {
@@ -119,17 +150,24 @@ function resetArchiveView() {
   state.selected = null;
   state.selectionRequest = null;
   state.view = null;
+  state.hasMore = false;
   state.mailboxTree = [];
   state.searchFilters = [];
+  state.completeSearch = false;
+  state.olderResultsUnchecked = false;
+  state.highlightTerms = [];
   state.dragExports.clear();
   renderSearchFilters();
   closeSuggestions();
   clearAttachmentPreview();
   elements["result-list"].replaceChildren();
+  updatePagination(false);
   elements["message-content"].hidden = true;
 }
 
 function applyStatus(status) {
+  state.highlightBackground = status.configuration.search_highlight_background;
+  document.documentElement.style.setProperty("--search-highlight-background", state.highlightBackground);
   elements["archive-label"].textContent = status.archive || "No archive selected";
   document.title = status.ready
     ? `Mail Archiver — ${status.archive} (${status.message_count.toLocaleString()} messages)`
@@ -572,33 +610,77 @@ function renderSearchFilters() {
   elements["search-filters"]?.replaceChildren(...chips);
 }
 
-async function runSearch(append) {
+async function runSearch(append, loadAll = false) {
   const query = effectiveQuery();
   const sortBy = elements["sort-by"].value;
   const sortDirection = state.sortDirection;
   const searchAttachments = elements["search-attachments"].checked;
   const sameSearch = query === state.query && sortBy === state.sortBy && sortDirection === state.sortDirection && searchAttachments === state.searchAttachments;
-  const offset = append && sameSearch ? state.offset : 0;
+  let offset = append && sameSearch ? state.offset : 0;
+  let continuing = offset > 0;
+  const findOlder = append && sameSearch && (state.completeSearch || state.olderResultsUnchecked);
   const request = ++state.searchRequest;
-  elements["result-status"].textContent = "Searching…";
+  elements["result-status"].textContent = loadAll ? `Loading all… ${offset.toLocaleString()} messages shown` : "Searching…";
+  updatePagination(state.hasMore, true);
   const mailboxSelections = state.showTree ? [...state.mailboxSelections] : [];
-  const page = await call(() => window.pywebview.api.search(
-    query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections,
-  ));
-  if (!page || request !== state.searchRequest) return;
-  state.query = query;
-  state.sortBy = sortBy;
-  state.sortDirection = sortDirection;
-  state.searchAttachments = searchAttachments;
-  state.offset = offset + page.results.length;
-  if (!append) elements["result-list"].replaceChildren();
-  for (const result of page.results) {
-    const row = resultRow(result);
-    elements["result-list"].append(row);
+  while (true) {
+    const page = await call(() => window.pywebview.api.search(
+      query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections, findOlder,
+    ));
+    if (request !== state.searchRequest) return;
+    if (!page) {
+      updateResultStatus(state.hasMore);
+      updatePagination(state.hasMore);
+      return;
+    }
+    state.query = query;
+    state.sortBy = sortBy;
+    state.sortDirection = sortDirection;
+    state.searchAttachments = searchAttachments;
+    state.completeSearch = findOlder;
+    state.olderResultsUnchecked = page.older_results_unchecked;
+    state.highlightTerms = page.highlight_terms;
+    if (!continuing) elements["result-list"].replaceChildren();
+    for (const result of page.results) elements["result-list"].append(resultRow(result));
+    queuePreviews(page.results.map(result => result.message_pk), request);
+    offset += page.results.length;
+    continuing = true;
+    state.offset = offset;
+    state.hasMore = page.has_more;
+    updateResultStatus(page.has_more, loadAll && page.has_more);
+    if (!loadAll || !page.has_more || !page.results.length) break;
   }
-  requestPreviews(page.results.map(result => result.message_pk));
-  elements["result-status"].textContent = `${state.offset.toLocaleString()} message${state.offset === 1 ? "" : "s"}${page.has_more ? " shown" : ""}`;
-  elements["load-more"].hidden = !page.has_more;
+  updatePagination(state.hasMore);
+}
+
+function updateResultStatus(hasMore, loadingAll = false) {
+  const count = state.offset.toLocaleString();
+  elements["result-status"].textContent = loadingAll
+    ? `Loading all… ${count} messages shown`
+    : `${count} message${state.offset === 1 ? "" : "s"}${hasMore ? " shown" : ""}`;
+}
+
+function updatePagination(hasMore, busy = false) {
+  elements["pagination-controls"].hidden = busy || !hasMore;
+  for (const id of ["load-more", "load-all"]) {
+    elements[id].hidden = busy || !hasMore;
+    elements[id].disabled = busy;
+  }
+  const button = elements["load-more"];
+  if (!state.olderResultsUnchecked) {
+    button.textContent = "Load more";
+    return;
+  }
+  const dates = [...document.querySelectorAll("#result-list .result")]
+    .map(row => new Date(row.dataset.dateUtc))
+    .filter(date => !Number.isNaN(date.valueOf()))
+    .sort((left, right) => left - right);
+  const range = dates.length
+    ? dates[0].valueOf() === dates[dates.length - 1].valueOf()
+      ? formatDate(dates[0].toISOString())
+      : `${formatDate(dates[0].toISOString())}–${formatDate(dates[dates.length - 1].toISOString())}`
+    : "";
+  button.textContent = range ? `Find older ones — shown: ${range}` : "Find older ones";
 }
 
 function toggleSortDirection() {
@@ -617,6 +699,7 @@ function resultRow(result) {
   row.setAttribute("role", "option");
   row.setAttribute("aria-selected", "false");
   row.dataset.messagePk = result.message_pk;
+  row.dataset.dateUtc = result.date_utc;
   row.draggable = true;
   const subjectLine = document.createElement("div");
   subjectLine.className = "result-subject-line";
@@ -646,7 +729,7 @@ function resultRow(result) {
   row.addEventListener("mousedown", () => elements["result-list"].focus({preventScroll: true}));
   row.addEventListener("click", () => selectMessage(result.message_pk));
   row.addEventListener("dblclick", async () => {
-    await call(() => window.pywebview.api.open_message_window(result.message_pk));
+    await call(() => window.pywebview.api.open_message_window(result.message_pk, state.highlightTerms));
     row.dataset.openedWindow = "true";
   });
   installDrag(row, () => result.message_pk);
@@ -670,6 +753,13 @@ async function requestPreviews(messagePks) {
   }
 }
 
+function queuePreviews(messagePks, request) {
+  previewQueue = previewQueue.then(() => {
+    if (request !== state.searchRequest) return undefined;
+    return requestPreviews(messagePks);
+  }).catch(error => showError(`Could not load message previews: ${error?.message || error}`));
+}
+
 async function selectMessage(messagePk) {
   state.selectionRequest = messagePk;
   state.partRequest += 1;
@@ -686,10 +776,16 @@ async function selectMessage(messagePk) {
   selectedRow?.setAttribute("aria-selected", "true");
   elements["result-list"].setAttribute("aria-activedescendant", `message-result-${messagePk}`);
   elements["message-content"].hidden = false;
-  const computedDate = view.date_source === "received-median";
-  elements["computed-date-banner"].hidden = !computedDate;
-  elements["message-well"].classList.toggle("computed-date", computedDate);
-  elements["message-subject"].textContent = view.subject;
+  const adjustment = view.date_adjustment;
+  const banner = elements["computed-date-banner"];
+  banner.hidden = !adjustment;
+  banner.textContent = adjustment
+    ? `Date adjusted: The date in the Date: header (${adjustment.date_header}) is more than two days from ` +
+      `the median date of the Received: headers (${adjustment.received_median_utc}). ` +
+      `Archive routing uses the computed UTC date (${adjustment.archive_routing_utc}).`
+    : "";
+  elements["message-well"].classList.toggle("computed-date", Boolean(adjustment));
+  setHighlightedText(elements["message-subject"], view.subject);
   elements["message-file-name"].textContent = state.dragExports.get(messagePk)?.filename || "Message.eml";
   elements["message-headers"].replaceChildren(...headerNodes(view.headers));
   elements["part-select"].replaceChildren(...view.body_parts.map(partOption));
@@ -746,7 +842,7 @@ function headerNodes(headers) {
   const important = new Set(["from", "to", "cc", "subject", "date"]);
   return headers.filter(header => important.has(header.name.toLowerCase())).flatMap(header => {
     const term = document.createElement("dt"); term.textContent = `${header.name}:`;
-    const value = document.createElement("dd"); value.textContent = header.value;
+    const value = document.createElement("dd"); setHighlightedText(value, header.value);
     return [term, value];
   });
 }
@@ -770,15 +866,81 @@ async function showPart(partId, allowRemote) {
     const frame = document.createElement("iframe");
     frame.className = "html-frame";
     frame.setAttribute("sandbox", "allow-popups");
-    frame.srcdoc = part.content;
+    const highlighted = highlightedHtml(part.content);
+    frame.srcdoc = highlighted.content;
+    frame.dataset.highlightCount = String(highlighted.count);
     frame.addEventListener("load", () => resizeFrame(frame));
     elements["body-view"].append(frame);
   } else {
     const body = document.createElement("div");
     body.className = part.kind === "raw" ? "raw" : "plain";
-    body.textContent = part.content;
+    setHighlightedText(body, part.content);
     elements["body-view"].append(body);
   }
+}
+
+function highlightPattern() {
+  const terms = [...new Map(state.highlightTerms
+    .filter(term => typeof term === "string" && term.length)
+    .map(term => [term.toLowerCase(), term])).values()]
+    .sort((left, right) => right.length - left.length);
+  const key = terms.map(term => term.toLowerCase()).join("\u0000");
+  if (highlightPattern._cacheKey === key) return highlightPattern._cache;
+  if (!terms.length) {
+    highlightPattern._cacheKey = "";
+    highlightPattern._cache = null;
+    return null;
+  }
+  const escaped = terms.map(term => term.replace(/[.*+?^${}()|[\[\]\\]/g, "\\$&"));
+  const regex = new RegExp(escaped.join("|"), "giu");
+  highlightPattern._cacheKey = key;
+  highlightPattern._cache = regex;
+  return regex;
+}
+
+function highlightedFragment(value, owner = document) {
+  const fragment = owner.createDocumentFragment();
+  const pattern = highlightPattern();
+  let cursor = 0;
+  let count = 0;
+  if (pattern) {
+    for (const match of value.matchAll(pattern)) {
+      fragment.append(owner.createTextNode(value.slice(cursor, match.index)));
+      const mark = owner.createElement("mark");
+      mark.className = "search-highlight";
+      mark.textContent = match[0];
+      fragment.append(mark);
+      cursor = match.index + match[0].length;
+      count += 1;
+    }
+  }
+  fragment.append(owner.createTextNode(value.slice(cursor)));
+  return {fragment, count};
+}
+
+function setHighlightedText(element, value) {
+  element.replaceChildren(highlightedFragment(value, element.ownerDocument).fragment);
+}
+
+function highlightedHtml(value) {
+  const parsed = new DOMParser().parseFromString(value, "text/html");
+  const walker = parsed.createTreeWalker(parsed.body, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) {
+    if (!walker.currentNode.parentElement?.closest("style, noscript, template")) {
+      nodes.push(walker.currentNode);
+    }
+  }
+  let count = 0;
+  for (const node of nodes) {
+    const highlighted = highlightedFragment(node.nodeValue, parsed);
+    count += highlighted.count;
+    node.replaceWith(highlighted.fragment);
+  }
+  const style = parsed.createElement("style");
+  style.textContent = `mark.search-highlight { color: inherit; background: ${state.highlightBackground}; }`;
+  parsed.head.append(style);
+  return {content: `<!doctype html>${parsed.documentElement.outerHTML}`, count};
 }
 
 function resizeFrame(frame) {

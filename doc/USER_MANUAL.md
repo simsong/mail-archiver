@@ -219,6 +219,14 @@ list is on the left and the selected message is on the right. The message view
 also shows its canonical archive mailbox and every remembered source location.
 Search and viewing do not modify the archive.
 
+Ordinary search words are highlighted with a yellow background wherever they
+appear in the selected message's displayed headers or body. Matching is
+case-insensitive and works in the HTML, plain-text, and raw-source views.
+Quoted text is highlighted as one phrase. Values used only in structured
+selectors such as `from:`, `subject:`, or `date:` are filters and are not
+highlighted. Highlighting changes only the viewer; it never changes canonical
+message bytes or the search index.
+
 After three characters, the search box suggests matching addresses and
 subjects. Each suggestion shows the number of deduplicated messages in which
 it occurs. Address matching includes display names and email addresses, though
@@ -252,7 +260,11 @@ Useful search forms include:
 | `after:2024-01-01` | message is later than this date |
 
 All supplied terms must match. Use the sort controls above the result list to
-sort by date, subject, or sender.
+sort by date, subject, or sender. Search results initially appear 100 at a
+time. At the bottom of the list, select **Load more** to append the next 100 or
+**Load all** to append every remaining result automatically. While **Load all**
+runs, the result status shows how many messages have been displayed; starting
+a different search stops the earlier load.
 
 Select **Search attachments** to include indexed text attachments. This works
 only after an attachment index has been built:
@@ -262,6 +274,55 @@ make run ARGS='--archive "/path/to/mail-archive" refresh-index --index-attachmen
 ```
 
 PDF and Microsoft Office attachment extraction is not implemented yet.
+
+## Viewing messages
+
+Select a search result to view it beside the result list, or double-click the
+result to open it in an independent window. The pull-down menu above the message
+lists its displayable plain-text and HTML MIME parts and always offers **Raw
+Source**, which shows the complete RFC 5322 message. Command-1 through Command-9
+select the part with that numeric MIME part ID; Command-0 and Command-Shift-U
+select **Raw Source**.
+
+Some early Netscape messages use `<x-html>...</x-html>` around an HTML body even
+though their multipart declaration has no usable MIME boundaries. When the
+wrapper encloses the entire body, the viewer recognizes it automatically,
+offers **HTML — legacy x-html**, and selects that HTML view by default. A message
+that merely mentions `<x-html>` in ordinary text is not reinterpreted. **Raw
+Source** remains available, and this display recovery never changes the archived
+message bytes.
+
+All HTML views are sanitized before display. Scripts, forms, plugins, file URLs,
+event handlers, and unsafe URL schemes are removed. Remote images remain blocked
+unless you choose **Load Remote Content** for that message; embedded CID images
+may render from the verified message.
+
+### Date adjusted
+
+The archive normally routes a message using its `Date:` header. When a usable
+`Date:` value is more than two days from the trimmed median of the usable dates
+in its `Received:` headers, the archive instead uses that median in UTC and
+marks the catalog date source as `received-median`. The message then has a
+red-tinted warning such as:
+
+> **Date adjusted:** The date in the Date: header (Tue, 31 Dec 2024 12:00:00
+> +0000) is more than two days from the median date of the Received: headers
+> (2024-02-02T00:00:00+00:00). **Archive routing uses the computed UTC date
+> (2024-02-02T00:00:00+00:00).**
+
+The first value is the original `Date:` header exactly as decoded for display.
+The second is the computed UTC median of the usable `Received:` header dates.
+The third is the UTC date used to place the message in the archive. The median
+and routing dates are currently the same, but both are shown so an archivist can
+see the source evidence and the resulting routing decision. The original header
+and canonical message remain unchanged.
+
+Attachments and their previews appear below the body. Opening an attachment is
+always explicit, with an additional warning for executable or container types.
+The bottom of the message view separately lists the canonical archive mailbox
+and every source volume and source or forensic path where the message was found.
+**Save Message…** exports an exact, SHA-256-verified `.eml` copy without changing
+the archive.
 
 ## Filter by original mailbox
 
@@ -360,3 +421,32 @@ include supported text attachments.
 * Treat `archive.sqlite3` as private: it records source volumes and paths.
 * `search.sqlite3` is disposable and may be rebuilt from the canonical mail.
 * Preserve the entire archive directory, including hidden and small tag files.
+
+## Configuration
+
+Mail Archiver's current application-level configuration is the versioned YAML
+file `src/mailarchiver/configuration.yaml` in the source checkout. It currently
+controls the search-highlight background used by the graphical message viewer:
+
+```yaml
+version: 1
+gui:
+  search_highlight_background: "#fff59d"
+```
+
+The color must be a six-digit hexadecimal CSS color beginning with `#`. The
+initial value, `#fff59d`, is yellow. Stop and restart the graphical interface
+after changing the file; configuration is validated and loaded once when the
+application starts. Mail Archiver rejects unknown settings, unsupported
+versions, and invalid color values instead of passing them to the viewer.
+
+This YAML file contains packaged application display policy. It does not
+replace:
+
+* `owner-names.txt`, which identifies the archive owner for Sent routing;
+* `MAIL_ARCHIVE_DIR` or `--archive`, which selects an archive;
+* the installed ClamAV configuration; or
+* saved original-mailbox filter sets, which remain per-user preferences.
+
+Changing the highlight color affects only derived display rendering. It does
+not modify the source mail, canonical MBOX files, catalog, or search database.

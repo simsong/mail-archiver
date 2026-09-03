@@ -55,13 +55,12 @@ reserializing canonical files. It is not the ingestion engine. Restricted or
 redacted releases are separate bags; PDF and WARC derivatives remain opt-in
 and sandboxed because rendering message HTML can contact remote resources.
 
-RATOM's [libratom](https://github.com/libratom/libratom) should be evaluated as
-the first PST/OST and entity-extraction backend. Reuse it behind the typed
-source-adapter boundary and contribute missing preservation behavior upstream
-rather than forking or writing another PST parser. Its lower-level
-`PffArchive` exposes folder/message traversal and attachment metadata, but its
-current high-level message formatter selects one body and does not construct a
-complete attachment-bearing MIME message. The adapter must therefore consume
+The [on-disk format inventory](ON_DISK_MAIL_FORMATS.md) is the authoritative
+PST/OST research and selection record. The selected first backend is libpff
+through pypff, wrapped by the typed source-adapter boundary. Libratom remains a
+useful higher-level comparison/entity-extraction layer, but its formatter must
+not define canonical MIME because it reconstructs a selected body rather than
+preserving a source RFC 5322 byte stream. The adapter must consume
 source-native components, account for every item, construct any necessary MIME
 with explicit reconstruction provenance, and remain replaceable by another
 backend. For extreme setup simplicity, supported releases need tested binary
@@ -389,10 +388,20 @@ available when the user needs the source representation.
 
 The `gui/` prototype uses pywebview's Cocoa/WKWebView backend on macOS.  Its
 Python API delegates query parsing, SQLite reads, and direct MBOX retrieval to
-the same typed functions used by `mailsearch`.  Search pages request 101 rows
-to return 100 plus a `has_more` indicator.  The UI is conventional: a search
-toolbar above a result list and message pane. Independent message windows load
-the same static application with a message-number parameter.
+the same typed functions used by `mailsearch`. Search pages request 101 rows
+to return 100 plus a `has_more` indicator. **Load more** requests one such page;
+**Load all** repeats the same bounded request with the next offset until
+`has_more` is false, updating the displayed count after each page. Both paths
+use the search request generation, so a newer query discards a stale page and
+stops the loop. Page preview requests share one promise queue, preventing a
+multi-page load from creating concurrent polling loops; queued work from an
+older search generation is skipped. `older_results_unchecked` separately says
+that a body-text page came from the recent-message search and that older mail
+has not yet been searched. In that state **Load more** is labeled **Find older
+ones** and switches subsequent pages to the complete query; **Load all** makes
+the same switch and continues until the complete query is exhausted. The UI is
+conventional: a search toolbar above a result list and message pane. Independent
+message windows load the same static application with a message-number parameter.
 The main window polls the latest shared `IngestStatus` once per second and
 renders it in a bottom status line. The separate `ingests.html` application
 polls all typed status files and presents run history beside aggregate and
@@ -402,9 +411,35 @@ window is restored and ordered to the front, while a closed one is recreated
 with its own normal close box. A running file whose heartbeat is older than
 five seconds is displayed as stale without rewriting its retained JSON.
 
+The native shell loads the checked-in 192-pixel PNG derived from
+`gui/icons/rainbow-post.svg` before falling back to a system symbol, so the
+Python application and its About/Dock identity use a stable project asset. The
+`website/` directory is a Zola site using the local
+`envelope-rainbow` theme. GitHub Pages builds it from `main`; the workflow
+SHA-256 verifies the pinned Zola archive before extraction, resolves the newest
+exact stable and beta tags into Zola data, then deploys a Pages artifact. The
+release workflow follows the repository's draft-release
+pattern: it requires a version-matching signed annotated tag, builds a source
+distribution, writes `SHA256SUMS`, and creates a draft GitHub Release.
+
 Result ordering is a server-side SQL whitelist over date, case-folded subject,
 or case-folded sender with a stable message-number tie break. The listbox owns
 keyboard focus after a pointer selection and implements Up/Down selection.
+Pure body-text GUI searches first scan at most 10,000 messages through
+`messages_date_message` and test each candidate through the indexed
+`message_metadata.sha256` to FTS-row-ID mapping. The GUI displays all matches
+found for the requested page, including a short page, instead of discarding
+them and immediately starting the complete query. Its **Find older ones**
+button includes the oldest and newest dates among the displayed rows. When
+activated, the GUI requests the complete SHA-256/FTS query starting at the
+number of rows already displayed; the typed response then clears
+`older_results_unchecked` and reports whether another complete-query page
+exists. Subject and Sender (author) modes select page membership newest-first
+by date and then order that page by the requested field and direction, so they
+do not replace recent results with a global alphabetical page. `mailsearch`
+retains exact one-call behavior by performing the complete query itself after
+a short recent page. Structured, attachment, date-ascending, mailbox-filtered,
+and unlimited searches continue to use the complete query directly.
 Result paperclips use attachment counts joined from the disposable search
 metadata without rereading MBOX content. Each row reserves a third line; after
 the header rows are painted, JavaScript queues one page of preview IDs through
@@ -415,6 +450,15 @@ The toolbar's **Search attachments** checkbox passes an explicit boolean to the
 typed search service. Ordinary terms search `message_fts` by default; when the
 box is selected they search the union of `message_fts` and `attachment_fts`.
 Metadata selectors are unchanged.
+
+Each typed GUI search page also returns its deduplicated ordinary free-text
+terms. JavaScript marks literal case-insensitive matches when it renders header,
+plain-text, or raw-source text nodes. For sanitized HTML it parses the already
+inert document, marks body text nodes, injects only the configured mark style,
+and then supplies the result to the existing sandboxed iframe. The versioned
+packaged `configuration.yaml` is loaded into strict Pydantic models and exposes
+the initial `#fff59d` highlight background through the GUI status response;
+the color accepts only six-digit hexadecimal syntax before it reaches CSS.
 
 Search completion starts after three characters, waits 120 milliseconds after
 the latest keystroke, caps each address and subject group at 20 entries, and
@@ -445,7 +489,15 @@ loaded only for the selected part.  HTML parsing removes active elements,
 event handlers, file URLs, and unsafe URL schemes, replaces image CID references
 with message-local data, and injects a restrictive CSP.  The HTML is displayed
 inside a sandboxed iframe. Remote image URLs are omitted unless the user
-explicitly enables them for that view. Individual image and PDF attachments
+explicitly enables them for that view. Reserved part IDs identify raw RFC 5322
+source (`-1`) and a synthesized legacy x-html view (`-2`). Before enumerating
+parts, the viewer tests a non-multipart message's raw body against an anchored,
+case-insensitive `<x-html>...</x-html>` wrapper. This includes a malformed
+multipart declaration that produced no parsed children, but excludes valid
+multipart messages and bodies that merely mention the tag. The enclosed bytes
+are decoded through the archive's best-effort text decoder, sanitized by the
+same HTML path, and derived again from verified raw bytes when selected; the
+canonical message is never rewritten. Individual image and PDF attachments
 are base64-transferred only on an explicit preview action; other attachment
 payloads are written to a private temporary directory before macOS opens them.
 The viewer also reads the archive mailbox location and linked source
@@ -454,6 +506,13 @@ and source or forensic path at the bottom without treating an archive mailbox
 as a source. Direct provider observations sort before local evidence; retained
 Apple Gmail observations are labeled as local cache copies rather than as the
 authoritative cloud source.
+
+For a catalog row whose `date_source` is `received-median`, the typed message
+response includes the decoded original `Date:` header, the stored UTC
+`date_utc` as the Received-header median, and that same UTC value as the archive
+routing date. The UI renders all three values in its warning banner. Keeping the
+median and routing fields distinct makes the current routing decision explicit
+without requiring the viewer to recompute archival date policy from headers.
 
 `search.sqlite3` contains separate `message_fts` and `attachment_fts` virtual
 tables so message text remains searchable without attachment matches.
@@ -478,8 +537,15 @@ print operation. Temporary exports live only for the application process.
 The shell page permits `unsafe-eval` only for local scripts because pywebview
 constructs its typed Python API wrappers with JavaScript `Function`. Message
 HTML remains isolated in a sandboxed frame with its own restrictive CSP. The
-`gui-smoke` Makefile target verifies that Cocoa injects the bridge and that
-JavaScript can call the Python `status()` API.
+`test-native-gui` Makefile target opens a hidden smoke-only page over Cocoa. The
+page calls `status()` and one real `search()` through the injected bridge, then
+reports exactly one result to Python instead of making Python synchronously
+poll WKWebView JavaScript. A dedicated bridge exposes only those three methods,
+and smoke mode supplies no custom application menu. The child atomically
+records timestamped phases and requests shutdown from a watchdog; the pytest
+parent has a separate timeout, captures a macOS process sample, and terminates
+the process group if needed. Later shutdown failures add phases without
+replacing the original bridge error.
 
 `aisummarize.py` implements the `summarize` console entry point. It reads stdin
 before doing any native work and invokes a content-addressed Swift helper built
@@ -914,8 +980,13 @@ exercise real result pagination and rich MIME behavior. `make test-e2e` drives
 the complete interface in headless Chromium while binding every bridge method
 to the real Python service and disposable test archive. It therefore works
 without a visible desktop on macOS and Linux. `make test-native-gui` separately
-drives a hidden Cocoa/WKWebView window on macOS to retain the native bridge
-boundary. `make test-bagit`
+drives a hidden Cocoa/WKWebView window on macOS against a purpose-built
+one-message derived archive to retain the native bridge boundary without
+ClamAV or the full lifecycle fixture. Hosted CI pins the macOS image, uploads
+the phase report and any timeout sample, and reports a failed smoke as an
+explicit advisory warning rather than a merge-blocking job failure. Making
+native behavior a required gate needs a logged-in self-hosted Mac and
+XCUITest/XCUIAutomation. `make test-bagit`
 validates the database-independent three-message fixture and corruption cases.
 The installed `verify_mail_archive.py
 DIRECTORY` performs read-only validation of a supplied bag. The first acceptance run is against a copied

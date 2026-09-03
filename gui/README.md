@@ -2,6 +2,8 @@
 
 This macOS-first pywebview prototype searches an existing mailarchiver archive.
 It does not ingest mail or modify the archive.
+On macOS, the native Dock and About identity use the checked-in 192-pixel PNG
+derived from the shared `icons/rainbow-post.svg` project icon.
 
 Run it from `archiver/`:
 

@@ -1,0 +1,18 @@
+base_url = "https://simsong.github.io/mail-archiver/"
+title = "Mail Archiver"
+description = "Preserve, understand, and search a personal history of email."
+compile_sass = false
+minify_html = true
+theme = "envelope-rainbow"
+
+[markdown]
+render_emoji = true
+external_links_target_blank = true
+
+[extra]
+repository = "https://github.com/simsong/mail-archiver"
+release_notes = "https://github.com/simsong/mail-archiver/blob/main/doc/RELEASE_NOTES.md"
+readme = "https://github.com/simsong/mail-archiver/blob/main/README.md"
+releases = "https://github.com/simsong/mail-archiver/releases"
+announcements = "https://github.com/simsong/mail-archiver/discussions/55"
+feature_requests = "https://github.com/simsong/mail-archiver/discussions/56"
