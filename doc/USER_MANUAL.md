@@ -217,6 +217,9 @@ the front.
 Type ordinary words to search indexed headers and message text. The result
 list is on the left and the selected message is on the right. The message view
 also shows its canonical archive mailbox and every remembered source location.
+MBOX byte locations appear as `path?offset=N` (with no suffix for offset zero).
+Use the small copy icon beside a local source path to put that pathname, without
+the offset, on the macOS pasteboard as both text and a file URL.
 Search and viewing do not modify the archive.
 
 Ordinary search words and textual selector values are highlighted with a yellow

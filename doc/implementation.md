@@ -505,7 +505,10 @@ payloads are written to a private temporary directory before macOS opens them.
 The viewer also reads the archive mailbox location and linked source
 observations from the catalog, then displays archive path, source-volume label,
 and source or forensic path at the bottom without treating an archive mailbox
-as a source. Direct provider observations sort before local evidence; retained
+as a source. It renders nonzero byte offsets as `?offset=N` and omits zero or
+absent offsets. A local source-path control copies only the mounted pathname to
+the macOS pasteboard, as both text and a file URL; provider and forensic paths
+without a local pathname have no copy control. Direct provider observations sort before local evidence; retained
 Apple Gmail observations are labeled as local cache copies rather than as the
 authoritative cloud source.
 

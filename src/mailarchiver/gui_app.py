@@ -30,6 +30,7 @@ from .gui_service import (
     describe_message,
     export_filename,
     is_risky,
+    message_locations,
     message_previews,
     render_part,
     safe_filename,
@@ -435,6 +436,27 @@ class GuiApi:
 
     def message(self, message_pk: int) -> dict[str, object]:
         return describe_message(self._archive(), message_pk).model_dump(mode="json")
+
+    def copy_source_path(self, message_pk: int, source_location_index: int) -> str:
+        """Copy one local source pathname as text and a macOS file URL."""
+        _archive_path, locations = message_locations(self._archive(), message_pk)
+        try:
+            path = locations[source_location_index].copy_path
+        except IndexError as error:
+            raise ValueError("unknown source location") from error
+        if path is None:
+            raise ValueError("source location has no local filesystem path")
+        import AppKit
+        from Foundation import NSURL  # pylint: disable=no-name-in-module
+
+        pasteboard = AppKit.NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(path, AppKit.NSPasteboardTypeString)
+        pasteboard.setString_forType_(
+            NSURL.fileURLWithPath_(path).absoluteString(), AppKit.NSPasteboardTypeFileURL
+        )
+        pasteboard.setPropertyList_forType_([path], AppKit.NSFilenamesPboardType)
+        return path
 
     def part(self, message_pk: int, part_id: int, allow_remote: bool = False) -> dict[str, object]:
         return render_part(self._archive(), message_pk, part_id, allow_remote).model_dump(mode="json")

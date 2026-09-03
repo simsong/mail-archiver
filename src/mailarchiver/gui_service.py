@@ -135,6 +135,7 @@ class SourceLocation(BaseModel):
     volume: str
     path: str
     offset: int | None
+    copy_path: str | None = None
     raw_sha256: str
     semantic_sha256: str | None
     origin: str
@@ -398,7 +399,7 @@ def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[
     database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
     try:
         archive_row = database.execute(
-            "SELECT 'data/mbox/' || mbox_generations.filename || ':' || locations.byte_offset "
+            "SELECT 'data/mbox/' || mbox_generations.filename, locations.byte_offset "
             "FROM locations JOIN mbox_generations USING (generation_pk) WHERE locations.message_pk = ?",
             (message_pk,),
         ).fetchone()
@@ -415,7 +416,8 @@ def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[
             for row in rows
         ]
         locations.sort(key=lambda item: (not item.preferred, item.origin, item.volume, item.path))
-        return None if archive_row is None else str(archive_row[0]), locations
+        archive_path = None if archive_row is None else location_display_path(str(archive_row[0]), archive_row[1])
+        return archive_path, locations
     finally:
         database.close()
 
@@ -436,6 +438,28 @@ def _source_display_path(metadata_json: str, source_path: str, path_kind: str) -
     if not isinstance(metadata, dict):
         return source_path
     return str(metadata.get("display_name") or source_path)
+
+
+def location_display_path(path: str, offset: int | None) -> str:
+    """Present a byte offset as metadata rather than as part of a pathname."""
+    return path if not offset else f"{path}?offset={offset}"
+
+
+def _copy_path(volume_metadata: str, source_path: str, path_kind: str, source_plugin: str) -> str | None:
+    """Return a local source pathname suitable for the macOS pasteboard."""
+    if source_plugin != "file-folder" or path_kind == "provider":
+        return None
+    try:
+        metadata = json.loads(volume_metadata)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    mount_path = metadata.get("current_mount_path")
+    if not isinstance(mount_path, str) or not Path(mount_path).is_absolute():
+        return None
+    source = Path(source_path)
+    return str(source if source.is_absolute() else Path(mount_path) / source)
 
 
 def _source_location(
@@ -467,6 +491,7 @@ def _source_location(
         volume=_volume_label(volume_metadata),
         path=_source_display_path(container_metadata, source_path, path_kind),
         offset=source_offset,
+        copy_path=_copy_path(volume_metadata, source_path, path_kind, source_plugin),
         raw_sha256=raw_sha256,
         semantic_sha256=semantic_sha256,
         origin=origin,

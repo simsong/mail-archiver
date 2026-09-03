@@ -545,7 +545,10 @@ the recovered view passes through the same sanitizer and remote-content policy
 as MIME HTML. **Raw Source** remains selectable and unchanged.
 At the bottom of every message view, the GUI displays the archive mailbox path
 separately from every source volume and source/forensic path where the message
-was found.
+was found. A nonzero MBOX byte offset is displayed as `?offset=N`, rather than
+as part of the pathname; an absent or zero offset is omitted. Each local source
+path has a copy control that writes that path, without any offset, to the macOS
+pasteboard both as plain text and as a file URL.
 When `date_source` is `received-median`, the GUI shows a warning banner across
 the message and gives the message well a slight red tint. The original `Date:`
 header remains visible and unchanged. The banner identifies the original

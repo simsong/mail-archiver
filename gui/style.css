@@ -112,6 +112,8 @@ mark.search-highlight { color: inherit; background: var(--search-highlight-backg
 #message-locations { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 #message-locations dt { color: var(--muted); text-align: right; }
 #message-locations dd { margin: 0; overflow-wrap: anywhere; }
+.copy-source-path { margin-left: 6px; padding: 0 3px; border: 0; border-radius: 3px; color: var(--muted); background: transparent; font: inherit; cursor: pointer; }
+.copy-source-path:hover, .copy-source-path:focus-visible { color: var(--text); background: var(--surface); }
 
 .attachments { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 15px; }
 .attachments h2 { font-size: 13px; margin: 0 0 10px; }

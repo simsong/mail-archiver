@@ -449,12 +449,14 @@ def test_gui_displays_archive_and_source_locations(tmp_path: Path) -> None:
 
     view = describe_message(archive, 1)
 
-    assert view.archive_path == "data/mbox/2024-Archive1.mbox:0"
+    assert view.archive_path == "data/mbox/2024-Archive1.mbox"
     assert [(item.volume, item.path, item.offset) for item in view.source_locations] == [
         ("Fixture Backup", "mail/simple.eml", 0)
     ]
     assert view.source_locations[0].origin == "Local source"
     assert not view.source_locations[0].preferred
+    assert view.source_locations[0].copy_path == "/Volumes/Fixture/mail/simple.eml"
+    assert describe_message(archive, 2).archive_path.startswith("data/mbox/2024-Archive1.mbox?offset=")
 
 
 def test_gui_prefers_direct_cloud_observation_over_local_cache(tmp_path: Path) -> None:

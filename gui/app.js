@@ -786,19 +786,37 @@ async function selectMessage(messagePk) {
 }
 
 function renderLocations(view) {
-  const locations = [];
-  if (view.archive_path) locations.push(["Archive mailbox", view.archive_path]);
-  for (const source of view.source_locations) {
-    const origin = source.preferred ? `Preferred source (${source.origin})` : source.origin;
-    locations.push([origin, source.volume]);
-    locations.push(["Source path", source.offset === null ? source.path : `${source.path}:${source.offset}`]);
-  }
-  elements["provenance-section"].hidden = locations.length === 0;
-  elements["message-locations"].replaceChildren(...locations.flatMap(([label, value]) => {
+  const nodes = [];
+  const addLocation = (label, value, copyIndex = null) => {
     const term = document.createElement("dt"); term.textContent = `${label}:`;
-    const detail = document.createElement("dd"); detail.textContent = value;
-    return [term, detail];
-  }));
+    const detail = document.createElement("dd");
+    const text = document.createElement("span"); text.textContent = value;
+    detail.append(text);
+    if (copyIndex !== null) {
+      const copy = document.createElement("button");
+      copy.className = "copy-source-path";
+      copy.type = "button";
+      copy.textContent = "⧉";
+      copy.title = "Copy source path";
+      copy.setAttribute("aria-label", "Copy source path");
+      copy.addEventListener("click", () => copySourcePath(copyIndex));
+      detail.append(copy);
+    }
+    nodes.push(term, detail);
+  };
+  if (view.archive_path) addLocation("Archive mailbox", view.archive_path);
+  view.source_locations.forEach((source, index) => {
+    const origin = source.preferred ? `Preferred source (${source.origin})` : source.origin;
+    addLocation(origin, source.volume);
+    addLocation("Source path", source.offset ? `${source.path}?offset=${source.offset}` : source.path,
+      source.copy_path ? index : null);
+  });
+  elements["provenance-section"].hidden = nodes.length === 0;
+  elements["message-locations"].replaceChildren(...nodes);
+}
+
+async function copySourcePath(sourceLocationIndex) {
+  await call(() => window.pywebview.api.copy_source_path(state.selected, sourceLocationIndex));
 }
 
 function navigateResults(event) {

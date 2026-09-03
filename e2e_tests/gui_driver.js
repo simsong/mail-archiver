@@ -145,6 +145,8 @@
     assert(document.getElementById("message-headers").textContent.includes("curator@example.net"), "message headers displayed");
     assert(document.getElementById("message-locations").textContent.includes("Source path"), "source provenance displayed");
     assert(document.getElementById("message-locations").textContent.includes("Archive mailbox"), "archive provenance displayed");
+    assert(!document.getElementById("message-locations").textContent.includes(".mbox:"), "locations do not present offsets as pathname suffixes");
+    assert(document.querySelector(".copy-source-path")?.title === "Copy source path", "local source path has a copy control");
     document.body.classList.add("standalone");
     const standalonePane = document.getElementById("message-pane");
     assert(getComputedStyle(standalonePane).overflowY === "auto" && standalonePane.scrollHeight > standalonePane.clientHeight, "standalone message window scrolls to its complete message and locations");
