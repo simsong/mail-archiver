@@ -54,6 +54,9 @@ The [plug-in architecture](doc/PLUGINS.md) documents the implemented
 source-neutral generator, trusted-directory discovery, threading, status, and
 integrity boundaries, plus the work required by real Gmail, O365, IMAP, and
 stream adapters.
+The [on-disk mail format inventory](doc/ON_DISK_MAIL_FORMATS.md) records the
+current and planned source formats, PST/OST fixture sources, open-source parser
+options, and the selected import backend.
 See [release notes](doc/RELEASE_NOTES.md) for changes not yet included in a
 release.
 Visit the [Mail Archiver project site](https://simsong.github.io/mail-archiver/)

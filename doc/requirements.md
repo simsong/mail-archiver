@@ -618,7 +618,9 @@ downloaded archive against a source-controlled SHA-256 digest before execution.
   the source. The adapter records the parser/converter and version, enumerates
   every encountered store item, preserves folder and item identifiers as
   provenance, and reports corrupt, deleted, partial, or unsupported records
-  rather than silently omitting them.
+  rather than silently omitting them. The current backend decision, fixture
+  matrix, and format limitations are maintained in
+  [ON_DISK_MAIL_FORMATS.md](ON_DISK_MAIL_FORMATS.md).
 * Eudora ingest recognizes mailbox files together with their table-of-contents,
   attachment, and embedded-content conventions. It records which companion
   files were present and never treats an absent or stale index as proof that a
