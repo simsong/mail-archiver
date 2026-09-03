@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from mailarchiver.encoding import decode_text
+from mailarchiver.encoding import (
+    DETECTION_SAMPLE_BYTES,
+    _candidate_encodings,
+    _detected_encodings,
+    _encoding_name,
+    decode_text,
+)
 from mailarchiver.search import decoded_part, message_text
 
 
@@ -36,13 +42,91 @@ def test_undeclared_euc_kr_is_recovered_before_replacement() -> None:
     assert "�" not in result.value
 
 
-def test_misdeclared_utf8_uses_cp1252_for_invalid_bytes() -> None:
+def test_misdeclared_utf8_uses_readable_western_encoding() -> None:
     """Requirement: invalid declared UTF-8 falls back to a readable Western encoding."""
     result = decode_text(b"The world\x92s largest", "utf-8")
 
     assert result.value == "The world’s largest"
-    assert result.encoding == "cp1252"
+    assert result.encoding in {"cp1250", "cp1252"}
     assert result.defect is not None
+
+
+def test_detector_candidates_precede_universal_single_byte_fallbacks() -> None:
+    """Requirement: detector evidence precedes codecs that accept nearly every byte."""
+    body = b"The world\x92s largest"
+    detected = [
+        canonical
+        for name in _detected_encodings(body)
+        if (canonical := _encoding_name(name)) is not None
+    ]
+    expected_prefix = list(dict.fromkeys(detected))
+
+    assert expected_prefix
+    assert _candidate_encodings(body)[: len(expected_prefix)] == expected_prefix
+
+
+def test_large_payload_is_ranked_on_a_sample_before_one_full_fallback_decode() -> None:
+    """Requirement: candidate ranking must not repeatedly decode a complete large MIME part."""
+
+    class DecodeCountingBytes(bytes):
+        calls: list[str]
+        slices: list[slice]
+
+        def __new__(cls, value: bytes) -> "DecodeCountingBytes":
+            instance = super().__new__(cls, value)
+            instance.calls = []
+            instance.slices = []
+            return instance
+
+        def __getitem__(self, key: int | slice) -> int | bytes:
+            if isinstance(key, slice):
+                self.slices.append(key)
+            return super().__getitem__(key)
+
+        def decode(self, encoding: str = "utf-8", errors: str = "strict") -> str:
+            self.calls.append(encoding)
+            return super().decode(encoding, errors)
+
+    body = DecodeCountingBytes("한국어메시지".encode("euc-kr") * 50_000)
+
+    result = decode_text(body, "utf-8")
+
+    assert result.value.startswith("한국어메시지")
+    assert body.calls == ["utf-8", result.encoding]
+    half = DETECTION_SAMPLE_BYTES // 2
+    assert body.slices == [slice(None, half), slice(-half, None)]
+
+
+def test_failed_declared_codec_is_not_retried_after_a_clean_sample() -> None:
+    """Requirement: a failed full decode is not retried from a clean bounded sample."""
+
+    class DecodeCountingBytes(bytes):
+        calls: list[str]
+        slices: list[slice]
+
+        def __new__(cls, value: bytes) -> "DecodeCountingBytes":
+            instance = super().__new__(cls, value)
+            instance.calls = []
+            instance.slices = []
+            return instance
+
+        def __getitem__(self, key: int | slice) -> int | bytes:
+            if isinstance(key, slice):
+                self.slices.append(key)
+            return super().__getitem__(key)
+
+        def decode(self, encoding: str = "utf-8", errors: str = "strict") -> str:
+            self.calls.append(encoding)
+            return super().decode(encoding, errors)
+
+    half = DETECTION_SAMPLE_BYTES // 2
+    body = DecodeCountingBytes(b"a" * half + b"\x92" + b"a" * half)
+
+    result = decode_text(body, "utf-8")
+
+    assert result.encoding != "utf-8"
+    assert body.calls.count("utf-8") == 1
+    assert body.slices == [slice(None, half), slice(-half, None)]
 
 
 def test_ftfy_repairs_mojibake_after_valid_utf8_decode() -> None:

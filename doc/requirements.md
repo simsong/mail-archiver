@@ -402,7 +402,10 @@ Text extraction must decode MIME payload bytes before introducing replacement
 characters. A valid declared charset, including legacy labels such as
 `ks_c_5601-1987`, takes precedence. If that declaration is absent, unknown, or
 cannot decode the bytes, extraction may choose a bounded, quality-scored
-candidate from common legacy encodings using `charset-normalizer`; only a final
+candidate from common legacy encodings using `charset-normalizer`, with detector
+ordering retained ahead of universal single-byte fallbacks. Candidate quality
+is scored only on a bounded sample, which is reused for candidate discovery;
+the complete part is strictly decoded only after ranking. Only a final
 unrecoverable fallback may use UTF-8 replacement. `ftfy` encoding repair is
 applied to already-decoded derived text to correct clear mojibake. These
 repairs affect only the disposable index and display; the original RFC 5322

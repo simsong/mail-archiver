@@ -36,6 +36,12 @@ class DecodedText(BaseModel):
     defect: str | None = None
 
 
+class _EncodingCandidate(BaseModel):
+    encoding: str
+    quality: float
+    candidate_rank: int
+
+
 def _encoding_name(value: str | None) -> str | None:
     if not value:
         return None
@@ -79,7 +85,7 @@ def _quality(text: str) -> float:
 
 def _candidate_encodings(payload: bytes) -> list[str]:
     names: list[str] = []
-    for name in (*FALLBACK_ENCODINGS, *_detected_encodings(payload)):
+    for name in (*_detected_encodings(payload), *FALLBACK_ENCODINGS):
         canonical = _encoding_name(name)
         if canonical is not None and canonical not in names:
             names.append(canonical)
@@ -104,11 +110,13 @@ def decode_text(payload: bytes, declared_encoding: str | None = None) -> Decoded
     """
     declared = _encoding_name(declared_encoding)
     declared_error: str | None = None
+    rejected: set[str] = set()
     if declared is not None:
         try:
             text = payload.decode(declared)
         except UnicodeError as error:
             declared_error = f"{declared_encoding}: {type(error).__name__}: {error}"
+            rejected.add(declared)
         else:
             repaired, changed = _repair(text)
             return DecodedText(value=repaired, encoding=declared, repaired=changed)
@@ -119,24 +127,33 @@ def decode_text(payload: bytes, declared_encoding: str | None = None) -> Decoded
             text = payload.decode("utf-8")
         except UnicodeError as error:
             declared_error = f"utf-8: {type(error).__name__}: {error}"
+            rejected.add("utf-8")
         else:
             repaired, changed = _repair(text)
             return DecodedText(value=repaired, encoding="utf-8", repaired=changed)
 
-    best_quality = 0.0
-    best_encoding: str | None = None
-    best_text = ""
-    for encoding in _candidate_encodings(payload):
+    sample = _sample(payload)
+    candidates: list[_EncodingCandidate] = []
+    for candidate_rank, encoding in enumerate(_candidate_encodings(sample)):
+        if encoding in rejected:
+            continue
         try:
-            text = payload.decode(encoding)
+            text = sample.decode(encoding)
         except UnicodeError:
             continue
-        quality = _quality(text)
-        if best_encoding is None or quality > best_quality:
-            best_quality, best_encoding, best_text = quality, encoding, text
-    if best_encoding is not None and best_quality > 0.5:
-        repaired, changed = _repair(best_text)
-        return DecodedText(value=repaired, encoding=best_encoding, repaired=changed, defect=declared_error)
+        candidates.append(
+            _EncodingCandidate(encoding=encoding, quality=_quality(text), candidate_rank=candidate_rank)
+        )
+    candidates.sort(key=lambda candidate: (candidate.quality, -candidate.candidate_rank), reverse=True)
+    for candidate in candidates:
+        if candidate.quality <= 0.5:
+            break
+        try:
+            text = payload.decode(candidate.encoding)
+        except UnicodeError:
+            continue
+        repaired, changed = _repair(text)
+        return DecodedText(value=repaired, encoding=candidate.encoding, repaired=changed, defect=declared_error)
 
     text = payload.decode("utf-8", "replace")
     repaired, changed = _repair(text)
