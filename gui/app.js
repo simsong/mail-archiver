@@ -69,16 +69,16 @@ async function initialize() {
   elements["search-form"].addEventListener("submit", event => {
     event.preventDefault();
     if (state.suggestionIndex >= 0) acceptSuggestion(state.suggestionIndex);
-    else { closeSuggestions(); runSearch(false); }
+    else { closeSuggestions(); runSearch(); }
   });
   elements.search.addEventListener("input", scheduleSuggestions);
   elements.search.addEventListener("keydown", navigateSuggestions);
   elements.search.addEventListener("blur", () => window.setTimeout(() => {
     if (document.activeElement !== elements.search) closeSuggestions();
   }, 150));
-  elements["sort-by"].addEventListener("change", () => runSearch(false));
+  elements["sort-by"].addEventListener("change", () => runSearch());
   elements["sort-direction"].addEventListener("click", toggleSortDirection);
-  elements["search-attachments"].addEventListener("change", () => runSearch(false));
+  elements["search-attachments"].addEventListener("change", () => runSearch());
   elements["show-original-folders"].addEventListener("change", toggleMailboxTree);
   elements["show-source-volumes"].addEventListener("change", toggleSourceVolumes);
   elements["filter-set"].addEventListener("change", selectFilterSet);
@@ -213,7 +213,7 @@ async function toggleMailboxTree() {
   elements["mailbox-browser"].hidden = !state.showTree;
   document.querySelector(".workspace").classList.toggle("tree-visible", state.showTree);
   if (state.showTree && !state.mailboxTree.length) await loadMailboxTree();
-  await runSearch(false);
+  await runSearch();
 }
 
 async function toggleSourceVolumes() {
@@ -231,7 +231,7 @@ async function toggleSourceVolumes() {
   }
   markCurrentSelection();
   renderMailboxTree();
-  await runSearch(false);
+  await runSearch();
 }
 
 async function loadMailboxTree() {
@@ -344,7 +344,7 @@ function updateMailboxSelection(node, checked, parents, index) {
   for (const token of [...state.mailboxSelections]) if (!index.has(token)) state.mailboxSelections.delete(token);
   markCurrentSelection();
   renderMailboxTree();
-  runSearch(false);
+  runSearch();
 }
 
 async function loadFilterSets() {
@@ -384,7 +384,7 @@ async function selectFilterSet() {
     state.mailboxSelections.clear();
     state.activeFilterSet = "";
     renderMailboxTree();
-    await runSearch(false);
+    await runSearch();
     return;
   }
   if (selected === "__current") return;
@@ -396,7 +396,7 @@ async function selectFilterSet() {
   state.activeFilterSet = filterSet.name;
   await loadMailboxTree();
   populateFilterSetMenu();
-  await runSearch(false);
+  await runSearch();
 }
 
 async function saveFilterSet(event) {
@@ -524,7 +524,7 @@ function selectSuggestion(index) {
 
 function navigateSuggestions(event) {
   if (event.key === "Backspace" && !elements.search.value && state.searchFilters.length) {
-    state.searchFilters.pop(); renderSearchFilters(); runSearch(false); return;
+    state.searchFilters.pop(); renderSearchFilters(); runSearch(); return;
   }
   if (elements["search-suggestions"].hidden) return;
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -562,7 +562,7 @@ function addAddressFilter(suggestion) {
   closeSuggestions();
   renderSearchFilters();
   elements.search.focus();
-  runSearch(false);
+  runSearch();
 }
 
 function addSubjectFilter(subject) {
@@ -571,7 +571,7 @@ function addSubjectFilter(subject) {
   closeSuggestions();
   renderSearchFilters();
   elements.search.focus();
-  runSearch(false);
+  runSearch();
 }
 
 function renderSearchFilters() {
@@ -585,7 +585,7 @@ function renderSearchFilters() {
         const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
       }));
       role.value = filter.role;
-      role.addEventListener("change", () => { filter.role = role.value; runSearch(false); });
+      role.addEventListener("change", () => { filter.role = role.value; runSearch(); });
       chip.append(role);
     }
     const label = document.createElement("span");
@@ -596,7 +596,7 @@ function renderSearchFilters() {
     remove.type = "button"; remove.className = "search-chip-remove"; remove.textContent = "×";
     remove.setAttribute("aria-label", `Remove ${filter.label} filter`);
     remove.addEventListener("click", () => {
-      state.searchFilters.splice(index, 1); renderSearchFilters(); runSearch(false); elements.search.focus();
+      state.searchFilters.splice(index, 1); renderSearchFilters(); runSearch(); elements.search.focus();
     });
     chip.append(label, remove);
     return chip;
@@ -681,7 +681,7 @@ function toggleSortDirection() {
   elements["sort-direction"].textContent = descending ? "↓" : "↑";
   elements["sort-direction"].ariaLabel = descending ? "Sort descending" : "Sort ascending";
   elements["sort-direction"].title = elements["sort-direction"].ariaLabel;
-  runSearch(false);
+  runSearch();
 }
 
 function resultRow(result) {

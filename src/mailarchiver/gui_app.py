@@ -446,8 +446,11 @@ class GuiApi:
             raise ValueError("unknown source location") from error
         if path is None:
             raise ValueError("source location has no local filesystem path")
-        import AppKit
-        from Foundation import NSURL  # pylint: disable=no-name-in-module
+        try:
+            import AppKit  # pylint: disable=import-error,import-outside-toplevel
+            from Foundation import NSURL  # pylint: disable=import-error,import-outside-toplevel,no-name-in-module
+        except ImportError as error:
+            raise ValueError("copying source paths requires macOS with PyObjC installed") from error
 
         pasteboard = AppKit.NSPasteboard.generalPasteboard()
         pasteboard.clearContents()

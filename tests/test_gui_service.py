@@ -8,6 +8,7 @@ import hashlib
 import json
 import mailbox
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -258,6 +259,20 @@ def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:
         assert [menu.title for menu in menus] == ["Windows"]
         assert [item.title for item in menus[0].items] == ["Ingest"]
         assert menus[0].items[0].function()
+    finally:
+        api.close()
+
+
+def test_gui_copy_source_path_reports_missing_macos_bridge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement: copying a local source path reports unavailable macOS support."""
+    archive = make_gui_archive(tmp_path)
+    api = GuiApi(archive)
+    monkeypatch.setitem(sys.modules, "AppKit", None)
+    try:
+        with pytest.raises(ValueError, match="requires macOS with PyObjC installed"):
+            api.copy_source_path(1, 0)
     finally:
         api.close()
 
