@@ -6,6 +6,7 @@
   --border: color-mix(in srgb, CanvasText 18%, transparent);
   --muted: color-mix(in srgb, CanvasText 58%, transparent);
   --selection: color-mix(in srgb, AccentColor 25%, Canvas);
+  --search-highlight-background: transparent;
 }
 
 * { box-sizing: border-box; }
@@ -97,6 +98,7 @@ button { min-height: 28px; }
 #message-file-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .plain, .raw { white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.48 -apple-system, BlinkMacSystemFont, sans-serif; }
 .raw { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+mark.search-highlight { color: inherit; background: var(--search-highlight-background); }
 .html-frame { width: 100%; min-height: 460px; border: 0; background: white; color-scheme: light; }
 
 .provenance { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 15px; }

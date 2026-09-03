@@ -12,13 +12,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock, Thread
 from typing import Any
+from urllib.parse import urlencode
 
 import webview
 from pydantic import BaseModel
 from webview.menu import MenuAction
 
+from .configuration import GuiConfiguration, application_configuration
 from .gui_service import (
     MessageView,
     MessagePreview,
@@ -57,6 +59,7 @@ class GuiStatus(BaseModel):
     archive: str | None
     ready: bool
     message_count: int = 0
+    configuration: GuiConfiguration
 
 
 class GuiIngestOverview(BaseModel):
@@ -80,8 +83,130 @@ class GuiE2EClientResult(BaseModel):
     error: str | None = None
 
 
-class GuiE2EReport(GuiE2EClientResult):
-    exports: list[str]
+class NativeSmokePhase(BaseModel):
+    name: str
+    elapsed_seconds: float
+
+
+class NativeSmokeReport(BaseModel):
+    completed: bool = False
+    passed: bool = False
+    error: str | None = None
+    phases: list[NativeSmokePhase]
+
+
+class NativeSmokeController:
+    """Persist smoke-test progress and bound the Cocoa process lifetime."""
+
+    RESULT_TIMEOUT_SECONDS = 15.0
+    SHUTDOWN_TIMEOUT_SECONDS = 10.0
+    HARD_TIMEOUT_SECONDS = 60.0
+
+    def __init__(self, report_path: Path) -> None:
+        self.report_path = report_path
+        self.started = time.monotonic()
+        self.completed = False
+        self.passed = False
+        self.error: str | None = None
+        self.phases: list[NativeSmokePhase] = []
+        self._lock = Lock()
+        self._result = Event()
+        self._window_ready = Event()
+        self._page_loaded = Event()
+        self._event_loop_stopped = Event()
+        self._window: Any = None
+        self.mark("process-started")
+
+    def mark(self, name: str) -> None:
+        with self._lock:
+            self.phases.append(NativeSmokePhase(name=name, elapsed_seconds=time.monotonic() - self.started))
+            self._write_locked()
+        print(f"native-smoke: {name}", file=sys.stderr, flush=True)
+
+    def bind_window(self, window: Any) -> None:
+        self._window = window
+        self._window_ready.set()
+        self.mark("window-created")
+
+    def page_loaded(self) -> None:
+        """Record that Cocoa reported the hidden page as loaded."""
+        self.mark("window-loaded")
+        self._page_loaded.set()
+
+    def complete(self, passed: bool, error: str | None = None) -> None:
+        with self._lock:
+            if self.completed:
+                return
+            self.completed = True
+            self.passed = passed
+            self.error = error
+            self.phases.append(
+                NativeSmokePhase(name="bridge-passed" if passed else "bridge-failed", elapsed_seconds=time.monotonic() - self.started)
+            )
+            self._write_locked()
+            self._result.set()
+
+    def start_watchdog(self) -> None:
+        Thread(target=self._watch, name="native-smoke-watchdog", daemon=True).start()
+        Thread(target=self._hard_stop, name="native-smoke-hard-stop", daemon=True).start()
+
+    def event_loop_returned(self) -> NativeSmokeReport:
+        self.mark("event-loop-returned")
+        self._event_loop_stopped.set()
+        if not self.completed:
+            self.complete(False, "native window closed before the bridge reported a result")
+        return self.report()
+
+    def report(self) -> NativeSmokeReport:
+        with self._lock:
+            return self._report_locked()
+
+    def wait_for_result(self, timeout: float) -> bool:
+        """Wait until JavaScript or the watchdog records a bridge result."""
+        return self._result.wait(timeout)
+
+    def _watch(self) -> None:
+        if not self._result.wait(self.RESULT_TIMEOUT_SECONDS):
+            self.complete(False, f"native bridge did not finish within {self.RESULT_TIMEOUT_SECONDS:g} seconds")
+        self._window_ready.wait(2)
+        self._page_loaded.wait(2)
+        self.mark("destroy-requested")
+        if self._window is not None:
+            try:
+                self._window.destroy()
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                self._abort(f"native window destroy failed: {error}")
+        if not self._event_loop_stopped.wait(self.SHUTDOWN_TIMEOUT_SECONDS):
+            self._abort(f"Cocoa event loop did not stop within {self.SHUTDOWN_TIMEOUT_SECONDS:g} seconds")
+
+    def _hard_stop(self) -> None:
+        if not self._event_loop_stopped.wait(self.HARD_TIMEOUT_SECONDS):
+            self._abort(f"native smoke process exceeded its {self.HARD_TIMEOUT_SECONDS:g}-second hard limit")
+            os._exit(1)  # Smoke-only process; the report is already atomically durable.
+
+    def _abort(self, error: str) -> None:
+        with self._lock:
+            self.completed = True
+            self.passed = False
+            if self.error is None:
+                self.error = error
+            self.phases.append(NativeSmokePhase(name="watchdog-abort", elapsed_seconds=time.monotonic() - self.started))
+            self._write_locked()
+            self._result.set()
+
+    def _report_locked(self) -> NativeSmokeReport:
+        return NativeSmokeReport(
+            completed=self.completed,
+            passed=self.passed,
+            error=self.error,
+            phases=list(self.phases),
+        )
+
+    def _write_locked(self) -> None:
+        self.report_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.report_path.with_suffix(self.report_path.suffix + ".tmp")
+        temporary.write_text(self._report_locked().model_dump_json(indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, self.report_path)
 
 
 def application_icon_path() -> Path:
@@ -149,6 +274,7 @@ class GuiApi:
             archive=str(self.archive) if self.archive else None,
             ready=ready,
             message_count=self._message_count or 0,
+            configuration=application_configuration().gui,
         ).model_dump()
 
     def ingest_overview(self) -> dict[str, object]:
@@ -157,7 +283,7 @@ class GuiApi:
 
     def open_ingest_window(self, status_id: str | None = None) -> bool:
         """Open one ingest browser, or focus and retarget the existing window."""
-        if self.e2e_directory is not None and self.window is None:
+        if self.e2e_directory is not None:
             return True
         with self._ingest_window_lock:
             api = self._ingest_window_api
@@ -361,17 +487,19 @@ class GuiApi:
         subprocess.Popen(["/usr/bin/open", str(destination)], close_fds=True)
         return OpenResult(filename=descriptor.filename, opened=True).model_dump()
 
-    def open_message_window(self, message_pk: int) -> bool:
+    def open_message_window(self, message_pk: int, highlight_terms: list[str] | None = None) -> bool:
         view: MessageView = describe_message(self._archive(), message_pk)
         if self.e2e_directory is not None:
             return True
         base_url = str(self.window.get_current_url()).split("?", 1)[0]
+        parameters = [("message", str(message_pk)), ("standalone", "1")]
+        parameters.extend(("highlight", term) for term in highlight_terms or [])
         child_api = GuiApi(
             self._archive(), self.temporary_directory, self.e2e_directory, self.filter_sets.path
         )
         child = webview.create_window(
             view.subject,
-            f"{base_url}?message={message_pk}&standalone=1",
+            f"{base_url}?{urlencode(parameters)}",
             js_api=child_api,
             width=900,
             height=760,
@@ -409,6 +537,35 @@ class GuiApi:
         if self.archive is None or not _is_archive(self.archive):
             raise ValueError("choose an archive containing archive.sqlite3 and search.sqlite3")
         return self.archive
+
+
+class NativeSmokeApi:
+    """Expose only the three bridge calls required by the hidden smoke page."""
+
+    def __init__(self, api: GuiApi, controller: NativeSmokeController) -> None:
+        self._api = api
+        self._controller = controller
+
+    def status(self) -> dict[str, object]:
+        return self._api.status()
+
+    def search(
+        self,
+        query: str,
+        offset: int = 0,
+        sort_by: str = "date",
+        direction: str = "descending",
+        search_attachments: bool = False,
+        mailbox_selections: list[str] | None = None,
+        find_older: bool = False,
+    ) -> dict[str, object]:
+        return self._api.search(
+            query, offset, sort_by, direction, search_attachments, mailbox_selections, find_older
+        )
+
+    def native_smoke_complete(self, passed: bool, error: str | None = None) -> bool:
+        self._controller.complete(passed, error)
+        return True
 
 
 def _is_archive(path: Path) -> bool:
@@ -462,101 +619,55 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only graphical search of a mailarchiver archive.")
     parser.add_argument("--archive", type=Path, help="directory containing archive.sqlite3 and search.sqlite3")
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--e2e-test", type=Path, metavar="REPORT", help=argparse.SUPPRESS)
+    parser.add_argument("--smoke-report", type=Path, help=argparse.SUPPRESS)
     return parser
-
-
-def verify_bridge(window: Any, result: list[str]) -> None:
-    """Call the exposed Python API from JavaScript, then close the smoke-test window."""
-    try:
-        has_api = window.evaluate_js("typeof window.pywebview?.api?.status === 'function'")
-        if not has_api:
-            raise RuntimeError("pywebview API was not injected")
-        window.run_js(
-            "window.__mailarchiveSmoke = 'waiting';"
-            "window.pywebview.api.status().then(function(value) {"
-            "window.__mailarchiveSmoke = Object.hasOwn(value, 'ready') ? 'passed' : 'invalid';"
-            "}).catch(function(error) { window.__mailarchiveSmoke = 'failed: ' + error; });"
-        )
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            state = window.evaluate_js("window.__mailarchiveSmoke")
-            if state == "passed":
-                result.append("passed")
-                return
-            if isinstance(state, str) and state not in {"waiting", "passed"}:
-                raise RuntimeError(state)
-            time.sleep(0.05)
-        raise RuntimeError("status API call timed out")
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        result.append(str(error))
-    finally:
-        window.destroy()
-
-
-def run_e2e_driver(window: Any, result: list[GuiE2EClientResult]) -> None:
-    """Run the browser-side acceptance driver inside the real native webview."""
-    try:
-        window.run_js(E2E_DRIVER.read_text(encoding="utf-8"))
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            value = window.evaluate_js("window.__mailarchiveE2E || null")
-            if value is not None:
-                result.append(GuiE2EClientResult.model_validate(value))
-                return
-            time.sleep(0.05)
-        raise RuntimeError("browser-side acceptance test timed out")
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        result.append(GuiE2EClientResult(passed=False, checks=[], error=str(error)))
-    finally:
-        window.destroy()
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.smoke_test != (args.smoke_report is not None):
+        raise SystemExit("--smoke-test and --smoke-report must be used together")
+    smoke = NativeSmokeController(args.smoke_report) if args.smoke_report else None
+    if smoke:
+        smoke.start_watchdog()
+        smoke.mark("configuring-application")
     configure_macos_application()
+    if smoke:
+        smoke.mark("application-configured")
     archive_value = os.environ.get("MAIL_ARCHIVE_DIR")
     archive = args.archive or (Path(archive_value) if archive_value else None)
     if archive is not None and not _is_archive(archive):
         raise SystemExit(f"mailsearch-gui: {archive} must contain archive.sqlite3 and search.sqlite3")
-    e2e_directory = args.e2e_test.parent / "gui-e2e-exports" if args.e2e_test else None
-    preferences_file = e2e_directory / "filter-sets.json" if e2e_directory else None
-    api = GuiApi(archive, e2e_directory, e2e_directory, preferences_file)
+    api = GuiApi(archive)
+    bridge = NativeSmokeApi(api, smoke) if smoke else api
     initial_status = api.status()
+    url = str(GUI_DIRECTORY / "index.html")
+    if smoke:
+        url += "?native-smoke=1"
     window = webview.create_window(
         _window_title(archive, int(initial_status["message_count"])),
-        str(GUI_DIRECTORY / "index.html"),
-        js_api=api,
+        url,
+        js_api=bridge,
         width=1400,
         height=900,
         min_size=(900, 560),
-        hidden=bool(args.smoke_test or args.e2e_test),
+        hidden=args.smoke_test,
         text_select=True,
         draggable=True,
     )
     api.set_window(window)
     window.events.closed += api.close
-    smoke_result: list[str] = []
-    e2e_result: list[GuiE2EClientResult] = []
-    if args.smoke_test:
-        window.events.loaded += lambda *_args: verify_bridge(window, smoke_result)
-    elif args.e2e_test:
-        window.events.loaded += lambda *_args: run_e2e_driver(window, e2e_result)
+    if smoke:
+        smoke.bind_window(window)
+        window.events.loaded += lambda *_args: smoke.page_loaded()
     webview.settings["ALLOW_FILE_URLS"] = True
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
-    webview.start(http_server=True, private_mode=True, menu=application_menu(api))
-    if args.smoke_test:
-        passed = smoke_result == ["passed"]
-        print("GUI bridge smoke test passed" if passed else f"GUI bridge smoke test failed: {smoke_result}")
-        return 0 if passed else 1
-    if args.e2e_test:
-        browser = e2e_result[0] if e2e_result else GuiE2EClientResult(
-            passed=False, checks=[], error="native window closed before the browser test completed"
-        )
-        exports = sorted(path.name for path in e2e_directory.iterdir()) if e2e_directory else []
-        report = GuiE2EReport(**browser.model_dump(), exports=exports)
-        args.e2e_test.write_text(json.dumps(report.model_dump(), indent=2) + "\n", encoding="utf-8")
-        print("GUI end-to-end test passed" if report.passed else f"GUI end-to-end test failed: {report.error}")
+    if smoke:
+        smoke.mark("event-loop-starting")
+    webview.start(http_server=True, private_mode=True, menu=[] if smoke else application_menu(api))
+    if smoke:
+        report = smoke.event_loop_returned()
+        print("GUI bridge smoke test passed" if report.passed else f"GUI bridge smoke test failed: {report.error}")
         return 0 if report.passed else 1
     return 0
 

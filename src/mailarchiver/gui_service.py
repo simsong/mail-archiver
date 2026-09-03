@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from .encoding import decode_text
 from .mailsearch import (
     MessageHeader,
+    SearchTerms,
     SortDirection,
     SortField,
     parse_query,
@@ -70,6 +71,7 @@ class SearchPage(BaseModel):
     offset: int
     has_more: bool
     older_results_unchecked: bool = False
+    highlight_terms: list[str] = Field(default_factory=list)
 
 
 class AddressSuggestion(BaseModel):
@@ -185,8 +187,9 @@ def search_page(
     if offset < 0 or limit < 1:
         raise ValueError("search offset and limit must be positive")
     selections = [MailboxSelection.from_token(token) for token in mailbox_selections or []]
+    terms = parse_query(query)
     page = search_header_page(
-        archive, parse_query(query), limit + 1, offset, SortField(sort_by),
+        archive, terms, limit + 1, offset, SortField(sort_by),
         SortDirection(direction), search_attachments, selections, find_older,
     )
     return SearchPage(
@@ -194,7 +197,20 @@ def search_page(
         offset=offset,
         has_more=len(page.results) > limit or page.older_results_unchecked,
         older_results_unchecked=page.older_results_unchecked,
+        highlight_terms=_highlight_terms(terms),
     )
+
+
+def _highlight_terms(terms: SearchTerms) -> list[str]:
+    """Return unique literal free-text values for viewer highlighting."""
+    values: list[str] = []
+    seen: set[str] = set()
+    for value in terms.text:
+        folded = value.casefold()
+        if folded and folded not in seen:
+            seen.add(folded)
+            values.append(value)
+    return values
 
 
 def search_suggestions(archive: Path, query: str, limit: int = 20) -> SearchSuggestions:

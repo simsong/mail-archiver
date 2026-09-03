@@ -503,6 +503,13 @@ meaning. The control does not extract attachment content on demand.
 The GUI paints each result page from header metadata first, then requests its
 indexed body previews on a background worker and fills a reserved third line
 without blocking the initial result display.
+Literal, case-insensitive occurrences of every ordinary free-text query term
+must be highlighted in the selected message's displayed headers and body.
+Highlighting applies to plain text, sanitized HTML, and raw-source views without
+changing canonical bytes or weakening the HTML sandbox. Its background color
+comes from the strictly validated, versioned packaged `configuration.yaml`;
+the initial value is yellow (`#fff59d`). Structured selector values and date
+filters do not create body highlights.
 
 The bottom of the main GUI contains a clickable ingest-status line. During a
 run it shows live completion, message count, active/configured workers, and ETA;
@@ -562,6 +569,16 @@ the command fails before reading or writing an archive.
 
 The Python GUI identifies itself as **Mail Archiver** and uses the
 source-controlled rainbow-envelope icon in its native application identity.
+The required continuous-integration gate exercises the archive lifecycle and
+complete HTML interface with disposable fixtures. The hosted macOS native smoke
+job is advisory while it runs in an unattended hosted GUI session. It uses a
+purpose-built one-message derived archive, reports JavaScript-to-Python bridge
+completion once, exposes only `status`, `search`, and `native_smoke_complete`,
+and omits the normal application menu. It persists timestamped phases atomically
+and has independent child and parent watchdogs. The first failure remains the
+primary report error even when shutdown records additional failure phases. A required
+native-application gate must instead use a logged-in self-hosted Mac and
+XCUITest/XCUIAutomation.
 The project also publishes a Zola-generated GitHub Pages site at
 `https://simsong.github.io/mail-archiver/`. The site links to the README,
 release notes, GitHub releases, the current stable `v1.2.3`-shaped tag and

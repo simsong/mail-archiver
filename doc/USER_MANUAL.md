@@ -219,6 +219,14 @@ list is on the left and the selected message is on the right. The message view
 also shows its canonical archive mailbox and every remembered source location.
 Search and viewing do not modify the archive.
 
+Ordinary search words are highlighted with a yellow background wherever they
+appear in the selected message's displayed headers or body. Matching is
+case-insensitive and works in the HTML, plain-text, and raw-source views.
+Quoted text is highlighted as one phrase. Values used only in structured
+selectors such as `from:`, `subject:`, or `date:` are filters and are not
+highlighted. Highlighting changes only the viewer; it never changes canonical
+message bytes or the search index.
+
 After three characters, the search box suggests matching addresses and
 subjects. Each suggestion shows the number of deduplicated messages in which
 it occurs. Address matching includes display names and email addresses, though
@@ -413,3 +421,32 @@ include supported text attachments.
 * Treat `archive.sqlite3` as private: it records source volumes and paths.
 * `search.sqlite3` is disposable and may be rebuilt from the canonical mail.
 * Preserve the entire archive directory, including hidden and small tag files.
+
+## Configuration
+
+Mail Archiver's current application-level configuration is the versioned YAML
+file `src/mailarchiver/configuration.yaml` in the source checkout. It currently
+controls the search-highlight background used by the graphical message viewer:
+
+```yaml
+version: 1
+gui:
+  search_highlight_background: "#fff59d"
+```
+
+The color must be a six-digit hexadecimal CSS color beginning with `#`. The
+initial value, `#fff59d`, is yellow. Stop and restart the graphical interface
+after changing the file; configuration is validated and loaded once when the
+application starts. Mail Archiver rejects unknown settings, unsupported
+versions, and invalid color values instead of passing them to the viewer.
+
+This YAML file contains packaged application display policy. It does not
+replace:
+
+* `owner-names.txt`, which identifies the archive owner for Sent routing;
+* `MAIL_ARCHIVE_DIR` or `--archive`, which selects an archive;
+* the installed ClamAV configuration; or
+* saved original-mailbox filter sets, which remain per-user preferences.
+
+Changing the highlight color affects only derived display rendering. It does
+not modify the source mail, canonical MBOX files, catalog, or search database.

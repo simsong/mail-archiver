@@ -9,6 +9,8 @@ const state = {
   searchAttachments: false,
   completeSearch: false,
   olderResultsUnchecked: false,
+  highlightTerms: [],
+  highlightBackground: "transparent",
   hasMore: false,
   selected: null,
   selectionRequest: null,
@@ -49,6 +51,11 @@ window.setTimeout(() => {
 async function initialize() {
   if (initialized) return;
   initialized = true;
+  const parameters = new URLSearchParams(window.location.search);
+  if (parameters.get("native-smoke") === "1") {
+    await runNativeSmoke();
+    return;
+  }
   for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "pagination-controls", "load-more", "load-all",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
@@ -89,10 +96,10 @@ async function initialize() {
   installDrag(elements["message-file-well"], () => state.selected);
   document.addEventListener("keydown", handleCommandShortcut);
 
-  const parameters = new URLSearchParams(window.location.search);
   if (parameters.get("standalone") === "1") document.body.classList.add("standalone");
   const status = await call(() => window.pywebview.api.status());
   if (!status) return;
+  state.highlightTerms = parameters.getAll("highlight");
   await loadFilterSets();
   applyStatus(status);
   await refreshIngestOverview();
@@ -100,6 +107,25 @@ async function initialize() {
   const message = Number(parameters.get("message"));
   if (message) await selectMessage(message);
   else if (status.ready) await runSearch(false);
+}
+
+async function runNativeSmoke() {
+  let passed = false;
+  let error = null;
+  try {
+    const status = await window.pywebview.api.status();
+    if (!status?.ready) throw new Error("smoke archive is not ready");
+    const page = await window.pywebview.api.search('"message viewer"', 0, "date", "descending", false, [], false);
+    const validPage = page && typeof page === "object"
+      && Array.isArray(page.results)
+      && Array.isArray(page.highlight_terms);
+    passed = validPage && page.results.length === 1 && page.highlight_terms.includes("message viewer");
+    if (!passed) throw new Error("native bridge search returned an invalid page");
+  } catch (failure) {
+    error = String(failure?.stack || failure);
+  }
+  await window.pywebview.api.native_smoke_complete(passed, error);
+  window.__mailarchiveNativeSmoke = {passed, error};
 }
 
 function showBridgeFailure() {
@@ -129,6 +155,7 @@ function resetArchiveView() {
   state.searchFilters = [];
   state.completeSearch = false;
   state.olderResultsUnchecked = false;
+  state.highlightTerms = [];
   state.dragExports.clear();
   renderSearchFilters();
   closeSuggestions();
@@ -139,6 +166,8 @@ function resetArchiveView() {
 }
 
 function applyStatus(status) {
+  state.highlightBackground = status.configuration.search_highlight_background;
+  document.documentElement.style.setProperty("--search-highlight-background", state.highlightBackground);
   elements["archive-label"].textContent = status.archive || "No archive selected";
   document.title = status.ready
     ? `Mail Archiver — ${status.archive} (${status.message_count.toLocaleString()} messages)`
@@ -610,6 +639,7 @@ async function runSearch(append, loadAll = false) {
     state.searchAttachments = searchAttachments;
     state.completeSearch = findOlder;
     state.olderResultsUnchecked = page.older_results_unchecked;
+    state.highlightTerms = page.highlight_terms;
     if (!continuing) elements["result-list"].replaceChildren();
     for (const result of page.results) elements["result-list"].append(resultRow(result));
     queuePreviews(page.results.map(result => result.message_pk), request);
@@ -699,7 +729,7 @@ function resultRow(result) {
   row.addEventListener("mousedown", () => elements["result-list"].focus({preventScroll: true}));
   row.addEventListener("click", () => selectMessage(result.message_pk));
   row.addEventListener("dblclick", async () => {
-    await call(() => window.pywebview.api.open_message_window(result.message_pk));
+    await call(() => window.pywebview.api.open_message_window(result.message_pk, state.highlightTerms));
     row.dataset.openedWindow = "true";
   });
   installDrag(row, () => result.message_pk);
@@ -755,7 +785,7 @@ async function selectMessage(messagePk) {
       `Archive routing uses the computed UTC date (${adjustment.archive_routing_utc}).`
     : "";
   elements["message-well"].classList.toggle("computed-date", Boolean(adjustment));
-  elements["message-subject"].textContent = view.subject;
+  setHighlightedText(elements["message-subject"], view.subject);
   elements["message-file-name"].textContent = state.dragExports.get(messagePk)?.filename || "Message.eml";
   elements["message-headers"].replaceChildren(...headerNodes(view.headers));
   elements["part-select"].replaceChildren(...view.body_parts.map(partOption));
@@ -812,7 +842,7 @@ function headerNodes(headers) {
   const important = new Set(["from", "to", "cc", "subject", "date"]);
   return headers.filter(header => important.has(header.name.toLowerCase())).flatMap(header => {
     const term = document.createElement("dt"); term.textContent = `${header.name}:`;
-    const value = document.createElement("dd"); value.textContent = header.value;
+    const value = document.createElement("dd"); setHighlightedText(value, header.value);
     return [term, value];
   });
 }
@@ -836,15 +866,81 @@ async function showPart(partId, allowRemote) {
     const frame = document.createElement("iframe");
     frame.className = "html-frame";
     frame.setAttribute("sandbox", "allow-popups");
-    frame.srcdoc = part.content;
+    const highlighted = highlightedHtml(part.content);
+    frame.srcdoc = highlighted.content;
+    frame.dataset.highlightCount = String(highlighted.count);
     frame.addEventListener("load", () => resizeFrame(frame));
     elements["body-view"].append(frame);
   } else {
     const body = document.createElement("div");
     body.className = part.kind === "raw" ? "raw" : "plain";
-    body.textContent = part.content;
+    setHighlightedText(body, part.content);
     elements["body-view"].append(body);
   }
+}
+
+function highlightPattern() {
+  const terms = [...new Map(state.highlightTerms
+    .filter(term => typeof term === "string" && term.length)
+    .map(term => [term.toLowerCase(), term])).values()]
+    .sort((left, right) => right.length - left.length);
+  const key = terms.map(term => term.toLowerCase()).join("\u0000");
+  if (highlightPattern._cacheKey === key) return highlightPattern._cache;
+  if (!terms.length) {
+    highlightPattern._cacheKey = "";
+    highlightPattern._cache = null;
+    return null;
+  }
+  const escaped = terms.map(term => term.replace(/[.*+?^${}()|[\[\]\\]/g, "\\$&"));
+  const regex = new RegExp(escaped.join("|"), "giu");
+  highlightPattern._cacheKey = key;
+  highlightPattern._cache = regex;
+  return regex;
+}
+
+function highlightedFragment(value, owner = document) {
+  const fragment = owner.createDocumentFragment();
+  const pattern = highlightPattern();
+  let cursor = 0;
+  let count = 0;
+  if (pattern) {
+    for (const match of value.matchAll(pattern)) {
+      fragment.append(owner.createTextNode(value.slice(cursor, match.index)));
+      const mark = owner.createElement("mark");
+      mark.className = "search-highlight";
+      mark.textContent = match[0];
+      fragment.append(mark);
+      cursor = match.index + match[0].length;
+      count += 1;
+    }
+  }
+  fragment.append(owner.createTextNode(value.slice(cursor)));
+  return {fragment, count};
+}
+
+function setHighlightedText(element, value) {
+  element.replaceChildren(highlightedFragment(value, element.ownerDocument).fragment);
+}
+
+function highlightedHtml(value) {
+  const parsed = new DOMParser().parseFromString(value, "text/html");
+  const walker = parsed.createTreeWalker(parsed.body, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) {
+    if (!walker.currentNode.parentElement?.closest("style, noscript, template")) {
+      nodes.push(walker.currentNode);
+    }
+  }
+  let count = 0;
+  for (const node of nodes) {
+    const highlighted = highlightedFragment(node.nodeValue, parsed);
+    count += highlighted.count;
+    node.replaceWith(highlighted.fragment);
+  }
+  const style = parsed.createElement("style");
+  style.textContent = `mark.search-highlight { color: inherit; background: ${state.highlightBackground}; }`;
+  parsed.head.append(style);
+  return {content: `<!doctype html>${parsed.documentElement.outerHTML}`, count};
 }
 
 function resizeFrame(frame) {

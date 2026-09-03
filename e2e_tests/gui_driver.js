@@ -149,7 +149,7 @@
       "arrow-key result navigation changes selection",
     );
 
-    await search('subject:"Rich UI message"', 1, false);
+    await search('"message viewer"', 1, false);
     const rich = rows()[0];
     rich.click();
     await waitFor(() => document.getElementById("message-subject").textContent === "Rich UI message", "message viewer opens");
@@ -163,7 +163,10 @@
     assert(document.getElementById("message-locations").textContent.includes("Archive mailbox"), "archive provenance displayed");
     assert(document.querySelectorAll("#attachment-list .attachment").length === 2, "attachment list displayed");
     assert(!document.getElementById("remote-content").hidden, "remote HTML is initially blocked");
-    assert(document.querySelector("#body-view iframe"), "preferred HTML body displayed");
+    const htmlFrame = document.querySelector("#body-view iframe");
+    assert(htmlFrame, "preferred HTML body displayed");
+    assert(htmlFrame.dataset.highlightCount === "1" && htmlFrame.srcdoc.includes('class="search-highlight">message viewer</mark>'), "search phrase is highlighted in HTML body text");
+    assert(htmlFrame.srcdoc.includes("background: #fff59d"), "HTML highlighting uses the configured yellow background");
     document.getElementById("remote-content").click();
     await waitFor(() => document.getElementById("remote-content").hidden, "remote-content opt-in reloads HTML");
 
@@ -171,8 +174,12 @@
     parts.value = [...parts.options].find(option => option.textContent.startsWith("Plain Text")).value;
     parts.dispatchEvent(new Event("change", {bubbles: true}));
     await waitFor(() => document.querySelector("#body-view .plain")?.textContent.includes("Plain E2E body"), "plain MIME alternative displayed");
+    const plainHighlight = document.querySelector("#body-view .plain mark.search-highlight");
+    assert(plainHighlight?.textContent === "message viewer", "search phrase is highlighted in plain text");
+    assert(getComputedStyle(plainHighlight).backgroundColor === "rgb(255, 245, 157)", "plain-text highlighting uses the configured yellow background");
     document.dispatchEvent(new KeyboardEvent("keydown", {key: "0", metaKey: true, bubbles: true}));
     await waitFor(() => document.querySelector("#body-view .raw")?.textContent.includes("Subject: Rich UI message"), "Command-0 displays raw source");
+    assert(document.querySelectorAll("#body-view .raw mark.search-highlight").length === 2, "search phrase is highlighted throughout raw source");
 
     const attachmentRows = [...document.querySelectorAll("#attachment-list .attachment")];
     const imageRow = attachmentRows.find(row => row.textContent.includes("tiny.png"));

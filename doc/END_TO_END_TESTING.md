@@ -98,17 +98,31 @@ The test retains a Playwright trace on failure.
 
 ### Native macOS smoke test
 
-A macOS job still launches the real pywebview application using its
-Cocoa/WKWebView backend. It verifies that the window loads, pywebview injects
-the JavaScript-to-Python bridge, one real search completes, and the application
-closes cleanly. This is the boundary Chromium cannot test.
+A macOS job launches the real pywebview application in an isolated subprocess
+using its Cocoa/WKWebView backend. It verifies that the hidden window loads,
+pywebview injects the JavaScript-to-Python bridge, one real search returns its
+highlight terms, and the application closes cleanly. This is the boundary
+Chromium cannot test.
 
 Run it explicitly with `make test-native-gui`. The native test window is created
-hidden, so it does not flash during local or hosted execution. The driver still
-exercises the interface through the real WKWebView. E2E mode validates the
-message-window action without opening that window, but the ingest-status action
-creates and closes the real independent Ingests window to retain the
-multiwindow lifecycle boundary. Normal application behavior is unchanged.
+hidden against a purpose-built one-message derived archive. It does not run
+ingest or ClamAV. The smoke-only page calls the real `status()` and `search()`
+bridge methods and sends one completion callback to Python. Its dedicated
+bridge exposes only those three calls, and smoke mode omits the custom
+application menu. Python never polls WKWebView with a synchronous JavaScript
+evaluation. Secondary windows, dialogs, attachment openers, and exports are
+therefore inaccessible in smoke mode, so local and hosted execution must not
+disturb the desktop. The comprehensive interaction flow remains in headless
+Chromium; normal application behavior is unchanged.
+
+The child process atomically writes a JSON report after each phase and has a
+watchdog for bridge completion and Cocoa shutdown. Pytest independently bounds
+the process, captures a five-second macOS process sample on an outer timeout,
+and then terminates the whole process group. Hosted CI pins the macOS runner
+image and uploads these diagnostics. Because an unattended hosted GUI session
+can still make AppKit scheduling nondeterministic, this job is advisory rather
+than a required merge gate. A failed smoke emits an explicit workflow warning
+and job-summary outcome while leaving the required checks unblocked.
 
 Testing window contents through Cocoa accessibility, system dialogs, Finder
 drag-out, and native-menu selection requires XCUITest/XCUIAutomation in a
@@ -164,9 +178,11 @@ keyboard equivalents, and dispatch.
 | Complete HTML interaction | No | Yes | Smoke | Optional |
 | Chromium rendering | No | Yes | No | No |
 | Cocoa bridge injection and shutdown | No | No | Yes | Yes |
-| Independent Ingests-window creation and shutdown | No | No | Yes | Yes |
+| Independent Ingests-window content and action routing | No | Yes | No | Yes |
 | Native menu inspection, dialogs, Finder drag | No | No | No | Yes |
 
-The end-to-end gate is successful only when the archive lifecycle passes and
-the required interface layers complete. A browser-only pass must never be
-reported as proof that the macOS application shell works.
+The required end-to-end gate is successful only when the archive lifecycle and
+headless browser interface pass. A browser-only pass is not proof that the
+macOS application shell works; the hosted native result is separate advisory
+evidence. Required native evidence must come from XCUITest/XCUIAutomation in a
+logged-in local or self-hosted macOS session.
