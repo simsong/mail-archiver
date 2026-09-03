@@ -878,12 +878,21 @@ async function showPart(partId, allowRemote) {
 
 function highlightPattern() {
   const terms = [...new Map(state.highlightTerms
-    .filter(term => term.length)
-    .map(term => [term.toLocaleLowerCase(), term])).values()]
+    .filter(term => typeof term === "string" && term.length)
+    .map(term => [term.toLowerCase(), term])).values()]
     .sort((left, right) => right.length - left.length);
-  if (!terms.length) return null;
-  const escaped = terms.map(term => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return new RegExp(escaped.join("|"), "giu");
+  const key = terms.map(term => term.toLowerCase()).join("\u0000");
+  if (highlightPattern._cacheKey === key) return highlightPattern._cache;
+  if (!terms.length) {
+    highlightPattern._cacheKey = "";
+    highlightPattern._cache = null;
+    return null;
+  }
+  const escaped = terms.map(term => term.replace(/[.*+?^${}()|[\[\]\\]/g, "\\$&"));
+  const regex = new RegExp(escaped.join("|"), "giu");
+  highlightPattern._cacheKey = key;
+  highlightPattern._cache = regex;
+  return regex;
 }
 
 function highlightedFragment(value, owner = document) {
