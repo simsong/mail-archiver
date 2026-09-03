@@ -25,6 +25,7 @@ from .mailsearch import (
     parse_query,
     read_message_bytes,
     search_header_page,
+    search_result_count,
 )
 from .mailbox_tree import MailboxSelection
 from .message import decoded_header
@@ -32,6 +33,7 @@ from .plugin_api import SourceContainerMetadata
 from .search import SEARCH_CATEGORIES, decoded_part, is_attachment
 
 PAGE_SIZE = 100
+IMMEDIATE_SEARCH_LIMIT = 10_000
 RAW_PART_ID = -1
 LEGACY_X_HTML_PART_ID = -2
 HEADER_BODY_SEPARATOR = re.compile(br"\r\n\r\n|\n\n|\r\r")
@@ -70,8 +72,12 @@ class SearchPage(BaseModel):
     results: list[MessageHeader]
     offset: int
     has_more: bool
-    older_results_unchecked: bool = False
     highlight_terms: list[str] = Field(default_factory=list)
+
+
+class SearchCount(BaseModel):
+    total: int | None
+    immediate_limit: int = IMMEDIATE_SEARCH_LIMIT
 
 
 class AddressSuggestion(BaseModel):
@@ -181,23 +187,45 @@ def search_page(
     direction: SortDirection | str = SortDirection.DESCENDING,
     search_attachments: bool = False,
     mailbox_selections: list[str] | None = None,
-    find_older: bool = False,
+    ordered_text_prefix: bool = False,
 ) -> SearchPage:
-    """Return one bounded page using exactly the CLI query language."""
-    if offset < 0 or limit < 1:
-        raise ValueError("search offset and limit must be positive")
+    """Return exact GUI results using the CLI query language."""
+    if offset < 0 or limit < 0:
+        raise ValueError("search offset and limit must be nonnegative")
     selections = [MailboxSelection.from_token(token) for token in mailbox_selections or []]
     terms = parse_query(query)
+    fetch_limit = limit + 1 if limit else 0
     page = search_header_page(
-        archive, terms, limit + 1, offset, SortField(sort_by),
-        SortDirection(direction), search_attachments, selections, find_older,
+        archive, terms, fetch_limit, offset, SortField(sort_by),
+        SortDirection(direction), search_attachments, selections, find_older=True,
+        complete_sort=True, ordered_text_prefix=ordered_text_prefix,
     )
     return SearchPage(
-        results=page.results[:limit],
+        results=page.results[:limit] if limit else page.results,
         offset=offset,
-        has_more=len(page.results) > limit or page.older_results_unchecked,
-        older_results_unchecked=page.older_results_unchecked,
         highlight_terms=_highlight_terms(terms),
+        has_more=bool(limit and len(page.results) > limit),
+    )
+
+
+def search_count(
+    archive: Path,
+    query: str,
+    search_attachments: bool = False,
+    mailbox_selections: list[str] | None = None,
+    immediate_limit: int = IMMEDIATE_SEARCH_LIMIT,
+) -> SearchCount:
+    """Count a complete GUI search before materializing and sorting its headers."""
+    if immediate_limit < 1:
+        raise ValueError("immediate search limit must be positive")
+    selections = [MailboxSelection.from_token(token) for token in mailbox_selections or []]
+    observed = search_result_count(
+        archive, parse_query(query), search_attachments, selections,
+        maximum=immediate_limit + 1,
+    )
+    return SearchCount(
+        total=observed if observed <= immediate_limit else None,
+        immediate_limit=immediate_limit,
     )
 
 

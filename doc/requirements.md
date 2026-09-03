@@ -429,22 +429,28 @@ lookups. Bounded date-ordered listings must use the date/message index to
 select the requested page before recipient aggregation. Year-scoped reports
 must express their bounds as indexed `date_utc` ranges rather than applying a
 function to every stored date.
-An ordinary body-text GUI search may first test the 10,000 newest catalog
-messages from that date/message index against each message's indexed FTS row
-ID. A partial page is returned immediately with an explicit indication that
-older results have not been checked; it must not be represented as a complete
-result set. In this state **Load more** is relabeled **Find older ones** and
-runs the complete FTS-to-catalog query from the number of results already
-displayed, without skipping or duplicating messages. **Load all** makes the
-same transition and continues through all remaining complete-query pages. The
-command-line search remains exact and performs that fallback automatically
-when the recent search does not fill its requested page.
-Selecting Subject or Sender (author) rather than Date must still select the
-most recent matching messages; the alternate sort applies within each page,
-not globally across older unchecked mail. The **Find older ones** control must
-include the displayed messages' oldest-to-newest date range when results are
-visible. Limiting the unordered FTS hit list is forbidden because it can omit
-newer matches.
+This is an archive search system, not a mail client. A GUI query must search the
+complete selected collection without favoring recent messages or requiring an
+archivist to request older results. Before materializing headers, the GUI runs
+the same query and mailbox scope without result sorting, recipient aggregation,
+or header materialization, stopping after 10,001 matches. Exhaustion gives an
+exact count of at most 10,000; reaching 10,001 proves that background loading
+is required without waiting for a full count. SQLite FTS5 provides no reliable
+approximate cardinality for an arbitrary combination of full-text terms and
+catalog filters, so the GUI must not display an estimated count.
+When the exact count is at most 10,000, the GUI displays every result. Otherwise
+it displays the first 10,000 results in the selected sort order, automatically
+retrieves the remainder in the background, and then displays the complete
+result set and exact count. During that continuation, the result status is red
+and says **Searching in background** with the displayed count. A newer
+query supersedes the continuation; a failure retains the first 10,000 results
+and reports that the background search failed. The GUI has no **Find older
+ones**, **Load more**, or **Load all** interaction. Limiting an unordered FTS
+hit list is forbidden because it can omit results required by the selected
+ordering. Submitting an empty query displays no results and prompts for a
+search. The empty result pane at application startup and after an empty query
+must show the complete search language, AND and phrase behavior, every
+supported operator, and concrete examples.
 Index extraction and insertion happen after canonical MBOX/catalog publication.
 An indexing failure is recorded as a metadata defect and does not reject mail;
 `refresh-index` repairs missing disposable content.
@@ -477,13 +483,10 @@ including all MIME parts and attachment encodings.
 search and verified-message retrieval functions.  A single search field uses
 the CLI selectors and ordinary ANDed terms; shell-style quotes group spaces,
 so `subject:"annual report"` is one selector while `subject:annual report`
-retains the CLI meaning of a subject selector plus a free-text term.  It loads
-the newest 100 results at a time without changing the CLI's ten-result default.
-When more results exist, **Load more** appends one page and **Load all** appends
-every remaining page without further user action, including the complete-query
-transition for an unchecked recent body-text page. A newer search must
-supersede an in-progress **Load all** operation, and the status must show its
-accumulated result count while it runs.
+retains the CLI meaning of a subject selector plus a free-text term. A nonempty
+query follows the complete-archive count and automatic result-loading contract
+above. A newer request must supersede an in-progress background search, and the
+status must show its accumulated result count while it runs.
 After three characters and a 120-millisecond debounce, the GUI suggests at most
 20 matching addresses and 20 matching subjects with deduplicated message
 counts. Stale responses are discarded. Addresses rank by message count, then

@@ -7,11 +7,8 @@ const state = {
   sortBy: "date",
   sortDirection: "descending",
   searchAttachments: false,
-  completeSearch: false,
-  olderResultsUnchecked: false,
   highlightTerms: [],
   highlightBackground: "transparent",
-  hasMore: false,
   selected: null,
   selectionRequest: null,
   searchRequest: 0,
@@ -56,13 +53,14 @@ async function initialize() {
     await runNativeSmoke();
     return;
   }
-  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "pagination-controls", "load-more", "load-all",
+  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "search-help-template", "archive-label", "result-status", "result-list",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
     "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
     "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "ingest-status-line", "error"]) {
     elements[id] = byId(id);
   }
+  renderSearchHelp();
   elements["choose-archive"].addEventListener("click", async () => {
     await chooseArchive();
     elements["choose-archive"].dataset.completed = String(Number(elements["choose-archive"].dataset.completed || 0) + 1);
@@ -74,9 +72,9 @@ async function initialize() {
   });
   elements.search.addEventListener("input", scheduleSuggestions);
   elements.search.addEventListener("keydown", navigateSuggestions);
-  elements.search.addEventListener("blur", () => window.setTimeout(closeSuggestions, 150));
-  elements["load-more"].addEventListener("click", () => runSearch(true));
-  elements["load-all"].addEventListener("click", () => runSearch(true, true));
+  elements.search.addEventListener("blur", () => window.setTimeout(() => {
+    if (document.activeElement !== elements.search) closeSuggestions();
+  }, 150));
   elements["sort-by"].addEventListener("change", () => runSearch(false));
   elements["sort-direction"].addEventListener("click", toggleSortDirection);
   elements["search-attachments"].addEventListener("change", () => runSearch(false));
@@ -106,7 +104,6 @@ async function initialize() {
   window.setInterval(refreshIngestOverview, INGEST_REFRESH_MS);
   const message = Number(parameters.get("message"));
   if (message) await selectMessage(message);
-  else if (status.ready) await runSearch(false);
 }
 
 async function runNativeSmoke() {
@@ -140,7 +137,6 @@ async function chooseArchive() {
     resetArchiveView();
     applyStatus(status);
     await refreshIngestOverview();
-    if (status.ready) await runSearch(false);
   }
 }
 
@@ -150,18 +146,14 @@ function resetArchiveView() {
   state.selected = null;
   state.selectionRequest = null;
   state.view = null;
-  state.hasMore = false;
   state.mailboxTree = [];
   state.searchFilters = [];
-  state.completeSearch = false;
-  state.olderResultsUnchecked = false;
   state.highlightTerms = [];
   state.dragExports.clear();
   renderSearchFilters();
   closeSuggestions();
   clearAttachmentPreview();
-  elements["result-list"].replaceChildren();
-  updatePagination(false);
+  renderSearchHelp();
   elements["message-content"].hidden = true;
 }
 
@@ -173,7 +165,7 @@ function applyStatus(status) {
     ? `Mail Archiver — ${status.archive} (${status.message_count.toLocaleString()} messages)`
     : "Mail Archiver";
   elements.search.disabled = !status.ready;
-  elements["result-status"].textContent = status.ready ? "Enter a search or press Return for newest mail." : "Choose an archive to begin.";
+  elements["result-status"].textContent = status.ready ? "Enter a search." : "Choose an archive to begin.";
   if (status.ready) elements.search.focus();
 }
 
@@ -610,77 +602,76 @@ function renderSearchFilters() {
   elements["search-filters"]?.replaceChildren(...chips);
 }
 
-async function runSearch(append, loadAll = false) {
+async function runSearch() {
   const query = effectiveQuery();
   const sortBy = elements["sort-by"].value;
   const sortDirection = state.sortDirection;
   const searchAttachments = elements["search-attachments"].checked;
-  const sameSearch = query === state.query && sortBy === state.sortBy && sortDirection === state.sortDirection && searchAttachments === state.searchAttachments;
-  let offset = append && sameSearch ? state.offset : 0;
-  let continuing = offset > 0;
-  const findOlder = append && sameSearch && (state.completeSearch || state.olderResultsUnchecked);
   const request = ++state.searchRequest;
-  elements["result-status"].textContent = loadAll ? `Loading all… ${offset.toLocaleString()} messages shown` : "Searching…";
-  updatePagination(state.hasMore, true);
+  elements["result-status"].classList.remove("background-search");
   const mailboxSelections = state.showTree ? [...state.mailboxSelections] : [];
-  while (true) {
-    const page = await call(() => window.pywebview.api.search(
-      query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections, findOlder,
-    ));
-    if (request !== state.searchRequest) return;
-    if (!page) {
-      updateResultStatus(state.hasMore);
-      updatePagination(state.hasMore);
-      return;
-    }
-    state.query = query;
-    state.sortBy = sortBy;
-    state.sortDirection = sortDirection;
-    state.searchAttachments = searchAttachments;
-    state.completeSearch = findOlder;
-    state.olderResultsUnchecked = page.older_results_unchecked;
-    state.highlightTerms = page.highlight_terms;
-    if (!continuing) elements["result-list"].replaceChildren();
-    for (const result of page.results) elements["result-list"].append(resultRow(result));
-    queuePreviews(page.results.map(result => result.message_pk), request);
-    offset += page.results.length;
-    continuing = true;
-    state.offset = offset;
-    state.hasMore = page.has_more;
-    updateResultStatus(page.has_more, loadAll && page.has_more);
-    if (!loadAll || !page.has_more || !page.results.length) break;
-  }
-  updatePagination(state.hasMore);
-}
-
-function updateResultStatus(hasMore, loadingAll = false) {
-  const count = state.offset.toLocaleString();
-  elements["result-status"].textContent = loadingAll
-    ? `Loading all… ${count} messages shown`
-    : `${count} message${state.offset === 1 ? "" : "s"}${hasMore ? " shown" : ""}`;
-}
-
-function updatePagination(hasMore, busy = false) {
-  elements["pagination-controls"].hidden = busy || !hasMore;
-  for (const id of ["load-more", "load-all"]) {
-    elements[id].hidden = busy || !hasMore;
-    elements[id].disabled = busy;
-  }
-  const button = elements["load-more"];
-  if (!state.olderResultsUnchecked) {
-    button.textContent = "Load more";
+  if (!query.trim() && !mailboxSelections.length) {
+    Object.assign(state, {query, sortBy, sortDirection, searchAttachments, offset: 0});
+    renderSearchHelp();
+    elements["result-status"].textContent = "Enter a search.";
     return;
   }
-  const dates = [...document.querySelectorAll("#result-list .result")]
-    .map(row => new Date(row.dataset.dateUtc))
-    .filter(date => !Number.isNaN(date.valueOf()))
-    .sort((left, right) => left - right);
-  const range = dates.length
-    ? dates[0].valueOf() === dates[dates.length - 1].valueOf()
-      ? formatDate(dates[0].toISOString())
-      : `${formatDate(dates[0].toISOString())}–${formatDate(dates[dates.length - 1].toISOString())}`
-    : "";
-  button.textContent = range ? `Find older ones — shown: ${range}` : "Find older ones";
+  elements["result-status"].textContent = "Searching…";
+  await runCompleteSearch({query, sortBy, sortDirection, searchAttachments, mailboxSelections, request});
+}
+
+async function runCompleteSearch(context) {
+  const {query, sortBy, sortDirection, searchAttachments, mailboxSelections, request} = context;
+  const summary = await call(() => window.pywebview.api.search_count(
+    query, searchAttachments, mailboxSelections,
+  ));
+  if (request !== state.searchRequest) return;
+  if (!summary) return;
+  Object.assign(state, {query, sortBy, sortDirection, searchAttachments, offset: 0});
+  elements["result-list"].replaceChildren();
+  if (summary.total === 0) { updateResultStatus(); return; }
+  const first = await call(() => window.pywebview.api.search(
+    query, 0, sortBy, sortDirection, searchAttachments, mailboxSelections,
+    summary.immediate_limit, summary.total === null,
+  ));
+  if (request !== state.searchRequest) return;
+  if (!first) { updateResultStatus(); return; }
+  state.highlightTerms = first.highlight_terms;
+  appendResults(first.results, request);
+  state.offset = first.results.length;
+  if (summary.total !== null && state.offset >= summary.total) { updateResultStatus(); return; }
+  elements["result-status"].classList.add("background-search");
+  elements["result-status"].textContent = `Searching in background… ${state.offset.toLocaleString()} messages shown`;
+  const remainder = await call(() => window.pywebview.api.search(
+    query, state.offset, sortBy, sortDirection, searchAttachments, mailboxSelections, 0,
+  ));
+  if (request !== state.searchRequest) return;
+  elements["result-status"].classList.remove("background-search");
+  if (!remainder) {
+    elements["result-status"].textContent = `${state.offset.toLocaleString()} messages shown; background search failed`;
+    return;
+  }
+  appendResults(remainder.results, request);
+  state.offset += remainder.results.length;
+  updateResultStatus();
+}
+
+function renderSearchHelp() {
+  elements["result-list"].replaceChildren(elements["search-help-template"].content.cloneNode(true));
+}
+
+function appendResults(results, request) {
+  const fragment = document.createDocumentFragment();
+  for (const result of results) fragment.append(resultRow(result));
+  elements["result-list"].append(fragment);
+  for (let start = 0; start < results.length; start += 100) {
+    queuePreviews(results.slice(start, start + 100).map(result => result.message_pk), request);
+  }
+}
+
+function updateResultStatus() {
+  const count = state.offset.toLocaleString();
+  elements["result-status"].textContent = `${count} message${state.offset === 1 ? "" : "s"}`;
 }
 
 function toggleSortDirection() {

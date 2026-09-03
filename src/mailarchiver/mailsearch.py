@@ -115,15 +115,11 @@ def parse_query(query: str) -> SearchTerms:
         raise
 
 
-def _search_statement(
+def _search_predicate(
     terms: SearchTerms,
-    limit: int,
-    offset: int = 0,
-    sort_by: SortField = SortField.DATE,
-    direction: SortDirection = SortDirection.DESCENDING,
     search_attachments: bool = False,
     mailbox_selections: list[MailboxSelection] | None = None,
-    newest_page: bool = False,
+    include_text: bool = True,
 ) -> SearchStatement:
     clauses = ["m.category IN (?, ?)"]
     parameters: list[str | int] = list(SEARCH_CATEGORIES)
@@ -158,7 +154,7 @@ def _search_statement(
     for selected_date in terms.after:
         clauses.append("m.date_utc >= ?")
         parameters.append((selected_date + timedelta(days=1)).isoformat() + "T00:00:00+00:00")
-    if terms.text:
+    if terms.text and include_text:
         if search_attachments:
             for term in terms.text:
                 clauses.append(
@@ -189,6 +185,33 @@ def _search_statement(
             "JOIN source_files USING (source_file_pk) JOIN source_volumes USING (source_volume_pk) "
             "WHERE observations.message_pk = m.message_pk AND (" + " OR ".join(alternatives) + "))"
         )
+    return SearchStatement(sql=" AND ".join(clauses), parameters=parameters)
+
+
+def _search_statement(
+    terms: SearchTerms,
+    limit: int,
+    offset: int = 0,
+    sort_by: SortField = SortField.DATE,
+    direction: SortDirection = SortDirection.DESCENDING,
+    search_attachments: bool = False,
+    mailbox_selections: list[MailboxSelection] | None = None,
+    newest_page: bool = False,
+    ordered_text_prefix: bool = False,
+) -> SearchStatement:
+    direct_catalog_scan = bool(ordered_text_prefix and terms.text and not search_attachments)
+    predicate = _search_predicate(
+        terms, search_attachments, mailbox_selections, include_text=not direct_catalog_scan
+    )
+    if direct_catalog_scan:
+        predicate.sql += (
+            " AND EXISTS (SELECT 1 FROM search.message_metadata matching_metadata "
+            "JOIN search.message_fts matching_fts "
+            "ON matching_fts.rowid = matching_metadata.message_fts_rowid "
+            "WHERE matching_metadata.sha256 = m.sha256 AND matching_fts.content MATCH ?)"
+        )
+        predicate.parameters.append(fts_query(terms.text))
+    parameters = predicate.parameters.copy()
     candidate_sort = SortField.DATE if newest_page else sort_by
     candidate_direction = SortDirection.DESCENDING if newest_page else direction
     candidate_order = {
@@ -203,14 +226,16 @@ def _search_statement(
     }[sort_by]
     candidate_order_direction = "ASC" if candidate_direction == SortDirection.ASCENDING else "DESC"
     result_order_direction = "ASC" if direction == SortDirection.ASCENDING else "DESC"
-    limit_clause = "" if limit == 0 else "LIMIT ? OFFSET ? "
+    limit_clause = "LIMIT ? OFFSET ? " if limit else ("LIMIT -1 OFFSET ? " if offset else "")
     if limit:
         parameters.extend((limit, offset))
+    elif offset:
+        parameters.append(offset)
     candidate_source = (
         "messages m INDEXED BY messages_sha256 "
         "JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
     )
-    if not terms.text:
+    if not terms.text or direct_catalog_scan:
         if sort_by is SortField.DATE:
             candidate_source = (
                 "messages m INDEXED BY messages_date_message "
@@ -231,7 +256,7 @@ def _search_statement(
         "WITH candidates AS MATERIALIZED ("
         "SELECT m.message_pk, m.sha256, sender.address AS sender, m.subject, m.date_utc "
         f"FROM {candidate_source}"
-        f"WHERE {' AND '.join(clauses)} "
+        f"WHERE {predicate.sql} "
         f"ORDER BY {candidate_order} {candidate_order_direction}, "
         f"m.message_pk {candidate_order_direction} {limit_clause}"
         ") SELECT c.message_pk, COALESCE(group_concat(DISTINCT recipient.address), ''), c.sender, c.subject, c.date_utc, "
@@ -243,6 +268,43 @@ def _search_statement(
         f"ORDER BY {result_order} {result_order_direction}, c.message_pk {result_order_direction}"
     )
     return SearchStatement(sql=sql, parameters=parameters)
+
+
+def _count_statement(
+    terms: SearchTerms,
+    search_attachments: bool = False,
+    mailbox_selections: list[MailboxSelection] | None = None,
+    maximum: int | None = None,
+) -> SearchStatement:
+    """Count matches, optionally stopping after a caller-supplied threshold."""
+    direct_fts = bool(terms.text and not search_attachments)
+    predicate = _search_predicate(
+        terms, search_attachments, mailbox_selections, include_text=not direct_fts
+    )
+    if direct_fts:
+        source = (
+            "search.message_fts matched "
+            "JOIN search.message_metadata metadata ON metadata.message_fts_rowid = matched.rowid "
+            "JOIN messages m INDEXED BY messages_sha256 ON m.sha256 = metadata.sha256"
+        )
+        where = f"matched.content MATCH ? AND {predicate.sql}"
+        parameters = [fts_query(terms.text), *predicate.parameters]
+    else:
+        source = "messages m"
+        where = predicate.sql
+        parameters = predicate.parameters.copy()
+    limit = " LIMIT ?" if maximum is not None else ""
+    if maximum is not None:
+        parameters.append(maximum)
+    return SearchStatement(
+        sql=(
+            "SELECT count(*) FROM (SELECT 1 "
+            f"FROM {source} "
+            "JOIN email_addresses sender ON sender.address_pk = m.sender_address_pk "
+            f"WHERE {where}{limit})"
+        ),
+        parameters=parameters,
+    )
 
 
 def _recent_text_statement(
@@ -287,9 +349,8 @@ def _recent_text_statement(
     )
 
 
-def _is_plain_recent_text_search(
+def _is_plain_text_search(
     terms: SearchTerms,
-    limit: int,
     sort_by: SortField,
     direction: SortDirection,
     search_attachments: bool,
@@ -308,12 +369,24 @@ def _is_plain_recent_text_search(
     )
     return bool(
         terms.text
-        and limit
         and (sort_by is not SortField.DATE or direction is SortDirection.DESCENDING)
         and not search_attachments
         and not mailbox_selections
         and not any(structured)
     )
+
+
+def _is_plain_recent_text_search(
+    terms: SearchTerms,
+    limit: int,
+    sort_by: SortField,
+    direction: SortDirection,
+    search_attachments: bool,
+    mailbox_selections: list[MailboxSelection] | None,
+) -> bool:
+    return bool(limit and _is_plain_text_search(
+        terms, sort_by, direction, search_attachments, mailbox_selections
+    ))
 
 
 def search_header_page(
@@ -326,6 +399,8 @@ def search_header_page(
     search_attachments: bool = False,
     mailbox_selections: list[MailboxSelection] | None = None,
     find_older: bool = False,
+    complete_sort: bool = False,
+    ordered_text_prefix: bool = False,
 ) -> SearchHeaderPage:
     catalog_path, search_path = archive / "archive.sqlite3", archive / "search.sqlite3"
     if not catalog_path.is_file() or not search_path.is_file():
@@ -346,7 +421,10 @@ def search_header_page(
             )
         statement = _search_statement(
             terms, limit, offset, sort_by, direction, search_attachments, mailbox_selections,
-            newest_page=find_older and recent_eligible,
+            newest_page=find_older and not complete_sort and _is_plain_text_search(
+                terms, sort_by, direction, search_attachments, mailbox_selections
+            ),
+            ordered_text_prefix=ordered_text_prefix,
         )
         return SearchHeaderPage(
             results=[
@@ -354,6 +432,26 @@ def search_header_page(
                 for row in database.execute(statement.sql, statement.parameters)
             ]
         )
+    finally:
+        database.close()
+
+
+def search_result_count(
+    archive: Path,
+    terms: SearchTerms,
+    search_attachments: bool = False,
+    mailbox_selections: list[MailboxSelection] | None = None,
+    maximum: int | None = None,
+) -> int:
+    """Count searchable matches, stopping at ``maximum`` when supplied."""
+    catalog_path, search_path = archive / "archive.sqlite3", archive / "search.sqlite3"
+    if not catalog_path.is_file() or not search_path.is_file():
+        raise ValueError(f"{archive} must contain archive.sqlite3 and search.sqlite3")
+    database = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
+    try:
+        database.execute("ATTACH DATABASE ? AS search", (f"file:{search_path}?mode=ro",))
+        statement = _count_statement(terms, search_attachments, mailbox_selections, maximum)
+        return int(database.execute(statement.sql, statement.parameters).fetchone()[0])
     finally:
         database.close()
 

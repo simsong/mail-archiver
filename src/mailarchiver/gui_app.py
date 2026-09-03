@@ -33,6 +33,7 @@ from .gui_service import (
     message_previews,
     render_part,
     safe_filename,
+    search_count,
     searchable_message_count,
     search_page,
     search_suggestions,
@@ -349,11 +350,22 @@ class GuiApi:
         direction: str = "descending",
         search_attachments: bool = False,
         mailbox_selections: list[str] | None = None,
-        find_older: bool = False,
+        limit: int = DEFAULT_PAGE_SIZE,
+        ordered_text_prefix: bool = False,
     ) -> dict[str, object]:
         return search_page(
-            self._archive(), query, offset, DEFAULT_PAGE_SIZE, sort_by, direction,
-            search_attachments, mailbox_selections, find_older,
+            self._archive(), query, offset, limit, sort_by, direction,
+            search_attachments, mailbox_selections, ordered_text_prefix,
+        ).model_dump(mode="json")
+
+    def search_count(
+        self,
+        query: str,
+        search_attachments: bool = False,
+        mailbox_selections: list[str] | None = None,
+    ) -> dict[str, object]:
+        return search_count(
+            self._archive(), query, search_attachments, mailbox_selections
         ).model_dump(mode="json")
 
     def suggestions(self, query: str, limit: int = 20) -> dict[str, object]:

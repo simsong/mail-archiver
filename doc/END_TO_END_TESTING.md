@@ -80,15 +80,15 @@ host.
 
 Playwright exercises the complete HTML interface:
 
-* initial search, sorting, pagination, and attachment search;
+* empty-query suppression, complete-archive query results, sorting, and attachment search;
 * grouped substring completions, suggestion counts, address-role menus,
   subject filters, and the archive/message-count title;
 * message selection, keyboard navigation, and search error display;
 * MIME alternatives, raw source, safe HTML, and remote-content opt-in;
 * attachment previews, risky-file confirmation, exports, and print dispatch;
 * archive source and canonical-mailbox provenance;
-* original-mailbox counts, selection unions, folder selection, and filtering
-  before pagination;
+* original-mailbox counts, selection unions, folder selection, and complete
+  scoped results;
 * hiding and restoring the tree, merged and explicit source volumes; and
 * saving, cloning, selecting, renaming, and deleting filter sets;
 * the main ingest-status line and its window action; and

@@ -388,19 +388,25 @@ available when the user needs the source representation.
 
 The `gui/` prototype uses pywebview's Cocoa/WKWebView backend on macOS.  Its
 Python API delegates query parsing, SQLite reads, and direct MBOX retrieval to
-the same typed functions used by `mailsearch`. Search pages request 101 rows
-to return 100 plus a `has_more` indicator. **Load more** requests one such page;
-**Load all** repeats the same bounded request with the next offset until
-`has_more` is false, updating the displayed count after each page. Both paths
-use the search request generation, so a newer query discards a stale page and
-stops the loop. Page preview requests share one promise queue, preventing a
-multi-page load from creating concurrent polling loops; queued work from an
-older search generation is skipped. `older_results_unchecked` separately says
-that a body-text page came from the recent-message search and that older mail
-has not yet been searched. In that state **Load more** is labeled **Find older
-ones** and switches subsequent pages to the complete query; **Load all** makes
-the same switch and continues until the complete query is exhausted. The UI is
-conventional: a search toolbar above a result list and message pane. Independent
+the same typed functions used by `mailsearch`. A nonempty query first executes
+a capped `count(*)` over at most 10,001 rows from the shared catalog/FTS
+predicate. That threshold probe omits sorting, recipient aggregation, and
+header materialization. A result below the cap is exact; reaching the cap
+returns an intentionally unknown total. The GUI then asks the exact query for
+up to 10,000 headers. A larger result set immediately shows that prefix and
+uses the selected catalog sort index to scan in result order, probing each
+candidate through the indexed SHA-256-to-FTS-row-ID mapping until 10,000
+matches are found. It then requests the unlimited remainder from offset 10,000
+through a second bridge promise. The result status is red and says **Searching in background** until
+the remainder arrives, at which point the materialized length supplies the
+exact count. Search-generation checks discard a stale response when a newer
+query starts. Preview requests are split into
+100-message batches on one promise queue, and queued work from an older search
+generation is skipped. An empty query clears the result list without invoking
+SQLite and clones a static help template containing full-text, phrase, and all
+selector forms into the result pane. The interface contains no manual
+result-pagination controls. The UI is conventional: a search toolbar above a
+result list and message pane. Independent
 message windows load the same static application with a message-number parameter.
 The main window polls the latest shared `IngestStatus` once per second and
 renders it in a bottom status line. The separate `ingests.html` application
@@ -425,21 +431,14 @@ distribution, writes `SHA256SUMS`, and creates a draft GitHub Release.
 Result ordering is a server-side SQL whitelist over date, case-folded subject,
 or case-folded sender with a stable message-number tie break. The listbox owns
 keyboard focus after a pointer selection and implements Up/Down selection.
-Pure body-text GUI searches first scan at most 10,000 messages through
-`messages_date_message` and test each candidate through the indexed
-`message_metadata.sha256` to FTS-row-ID mapping. The GUI displays all matches
-found for the requested page, including a short page, instead of discarding
-them and immediately starting the complete query. Its **Find older ones**
-button includes the oldest and newest dates among the displayed rows. When
-activated, the GUI requests the complete SHA-256/FTS query starting at the
-number of rows already displayed; the typed response then clears
-`older_results_unchecked` and reports whether another complete-query page
-exists. Subject and Sender (author) modes select page membership newest-first
-by date and then order that page by the requested field and direction, so they
-do not replace recent results with a global alphabetical page. `mailsearch`
-retains exact one-call behavior by performing the complete query itself after
-a short recent page. Structured, attachment, date-ascending, mailbox-filtered,
-and unlimited searches continue to use the complete query directly.
+The older bounded-recent optimization remains internal to the command-line
+client, whose automatic exact fallback preserves its one-call behavior. The
+GUI always invokes the complete SHA-256/FTS query because an archivist may be
+looking for any period in the collection. Its capped count statement reuses the
+exact search predicate but does not sort or aggregate result headers. The first and
+background queries use the same stable sort and complementary offsets, so the
+combined set has no skips or duplicates. Subject and Sender modes sort the
+complete matching set rather than using recency to choose page membership.
 Result paperclips use attachment counts joined from the disposable search
 metadata without rereading MBOX content. Each row reserves a third line; after
 the header rows are painted, JavaScript queues one page of preview IDs through
@@ -976,7 +975,8 @@ installed standard-library-only verifier under isolated Python.
 
 `make test` runs the ordinary test tree, while `make check` runs it followed by
 the separate end-to-end suite. The tracked source corpus has enough messages to
-exercise real result pagination and rich MIME behavior. `make test-e2e` drives
+exercise complete scoped searches and rich MIME behavior.
+`make test-e2e` drives
 the complete interface in headless Chromium while binding every bridge method
 to the real Python service and disposable test archive. It therefore works
 without a visible desktop on macOS and Linux. `make test-native-gui` separately

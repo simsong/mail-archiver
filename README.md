@@ -365,7 +365,10 @@ and drag-out, printing, and attachment viewing. Typing three characters offers
 ranked address and subject completions. Selected addresses become removable
 filters with **Any**, **From**, **To**, **Cc**, and **Bcc** role menus. The
 window title identifies the archive and its deduplicated searchable-message
-count. Start it with:
+count. This is an archive interface, not an inbox: every nonempty query searches
+the complete collection without treating recent mail as more important. Up to
+10,000 matches appear together; larger result sets show the first 10,000 while
+the remainder loads automatically in the background. Start it with:
 
 ```console
 make gui ARGS="--archive /path/to/mail-archive"
@@ -407,7 +410,7 @@ separate end-to-end suite copies its tracked, virus-free source corpus, ingests
 110 discoveries, verifies deduplication, autosave exclusion, quarantine,
 newline preservation, attachment indexing, BagIt fixity, and the installed
 standalone verifier. Headless Chromium drives the shipped HTML and JavaScript
-through the real Python service bridge, including pagination, search,
+through the real Python service bridge, including empty-query suppression, complete searches,
 sorting, message and MIME views, provenance, remote-content blocking, previews,
 exports, printing, drag-out, keyboard navigation, and error display:
 

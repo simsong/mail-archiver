@@ -227,6 +227,11 @@ selectors such as `from:`, `subject:`, or `date:` are filters and are not
 highlighted. Highlighting changes only the viewer; it never changes canonical
 message bytes or the search index.
 
+Mail Archiver searches an archival collection; it is not an inbox or mail
+program. A search therefore covers the collection's complete time span. Recent
+messages receive no preference beyond an explicitly selected date sort, and an
+archivist never has to ask the application to check older years.
+
 After three characters, the search box suggests matching addresses and
 subjects. Each suggestion shows the number of deduplicated messages in which
 it occurs. Address matching includes display names and email addresses, though
@@ -260,11 +265,19 @@ Useful search forms include:
 | `after:2024-01-01` | message is later than this date |
 
 All supplied terms must match. Use the sort controls above the result list to
-sort by date, subject, or sender. Search results initially appear 100 at a
-time. At the bottom of the list, select **Load more** to append the next 100 or
-**Load all** to append every remaining result automatically. While **Load all**
-runs, the result status shows how many messages have been displayed; starting
-a different search stops the earlier load.
+sort the complete matching set by date, subject, or sender. The application
+first counts up to 10,001 matches. If that scan ends at 10,000 or fewer, the
+count is exact and every result is displayed. Otherwise it displays the first
+10,000 in the selected sort order and automatically retrieves the rest. During
+that work the result status is red, says **Searching in background**, and shows
+the displayed count. When the background search finishes, the full result set
+and exact count are shown. Starting another search supersedes the earlier
+background work.
+
+Pressing Return with an empty search field displays no results. Enter a term,
+selector, search-box filter, or original-mailbox selection to define an
+archival search. The result pane shows this complete search-language table and
+examples when the program starts and whenever the search is empty.
 
 Select **Search attachments** to include indexed text attachments. This works
 only after an attachment index has been built:

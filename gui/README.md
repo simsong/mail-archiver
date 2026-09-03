@@ -25,13 +25,20 @@ database. Build the index before using the GUI; include
 make run ARGS="--archive /path/to/archive refresh-index --index-attachments"
 ```
 
-The prototype provides one-field CLI-compatible search, an explicit **Search
-attachments** checkbox, 100-result paging,
+The prototype provides one-field CLI-compatible complete-archive search, an
+explicit **Search attachments** checkbox,
 date/subject/sender sorting, keyboard result navigation, MIME-part shortcuts,
 message and MIME-part views, separate message windows, sanitized HTML with
 remote content blocked by default, inline image and PDF previews, attachment
 open/save actions, printing, exact `.eml` export, and experimental Finder
 drag-out from a result or the dedicated message-file well.
+
+The interface is for archivists rather than inbox processing. Nonempty queries
+count and search the complete collection, regardless of message age. It shows
+up to 10,000 matches immediately and loads any remainder automatically in the
+background. An empty query displays no results; there are no manual result-page
+controls. At startup and after an empty query, the result pane shows examples
+for full text, phrases, and every supported selector.
 
 Automated tests verify search parsing, MIME selection, HTML sanitization,
 remote-content blocking, exact message export, decoded attachment export, and

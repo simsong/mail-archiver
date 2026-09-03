@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Make graphical searches complete across the full archival time span instead
+  of favoring the newest 10,000 catalog rows. Probe at most 10,001 matches,
+  display all sets up to 10,000, and automatically load larger remainders with
+  a red background-search status. Remove manual result paging and show the
+  complete search language with examples at startup and after an empty query.
 * Add the rainbow-envelope identity to the Python GUI and create the Zola
   `envelope-rainbow` GitHub Pages site. The site links to project documents,
   curation resources, discussions, and tag-derived stable/beta release data.
