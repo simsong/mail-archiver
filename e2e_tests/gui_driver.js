@@ -145,6 +145,10 @@
     assert(document.getElementById("message-headers").textContent.includes("curator@example.net"), "message headers displayed");
     assert(document.getElementById("message-locations").textContent.includes("Source path"), "source provenance displayed");
     assert(document.getElementById("message-locations").textContent.includes("Archive mailbox"), "archive provenance displayed");
+    document.body.classList.add("standalone");
+    const standalonePane = document.getElementById("message-pane");
+    assert(getComputedStyle(standalonePane).overflowY === "auto" && standalonePane.scrollHeight > standalonePane.clientHeight, "standalone message window scrolls to its complete message and locations");
+    document.body.classList.remove("standalone");
     assert(document.querySelectorAll("#attachment-list .attachment").length === 2, "attachment list displayed");
     assert(!document.getElementById("remote-content").hidden, "remote HTML is initially blocked");
     const htmlFrame = document.querySelector("#body-view iframe");

@@ -139,6 +139,7 @@ dialog h2 { margin: 0 0 16px; font-size: 18px; }
 
 body.standalone .toolbar, body.standalone .results, body.standalone .mailbox-browser, body.standalone .ingest-status-line { display: none; }
 body.standalone .workspace { display: block; height: 100%; }
+body.standalone .message { height: 100%; overflow: auto; }
 
 @media print {
   html, body, #app { overflow: visible; height: auto; }

@@ -291,7 +291,9 @@ PDF and Microsoft Office attachment extraction is not implemented yet.
 ## Viewing messages
 
 Select a search result to view it beside the result list, or double-click the
-result to open it in an independent window. The pull-down menu above the message
+result to open it in an independent window. That window has its own scrollbar,
+so the complete message, attachments, and **Locations** section remain
+reachable. The pull-down menu above the message
 lists its displayable plain-text and HTML MIME parts and always offers **Raw
 Source**, which shows the complete RFC 5322 message. Command-1 through Command-9
 select the part with that numeric MIME part ID; Command-0 and Command-Shift-U

@@ -498,7 +498,8 @@ Selecting a subject creates a removable subject filter. The native window title
 contains the active archive path and total deduplicated searchable-message
 count.
 Selecting a result shows it beside the list; double-clicking opens an
-independent message window. The result list can sort by date, subject, or
+independent message window whose message pane scrolls through the complete
+message, attachments, and source-location evidence. The result list can sort by date, subject, or
 sender in either direction. When it has keyboard focus, Up Arrow and Down
 Arrow move the selection and display the newly selected message. Result rows
 show the indexed attachment count with a paperclip.

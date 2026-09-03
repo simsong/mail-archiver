@@ -407,7 +407,9 @@ SQLite and clones a static help template containing full-text, phrase, and all
 selector forms into the result pane. The interface contains no manual
 result-pagination controls. The UI is conventional: a search toolbar above a
 result list and message pane. Independent
-message windows load the same static application with a message-number parameter.
+message windows load the same static application with a message-number parameter;
+their message pane fills the window and scrolls independently so source-location
+evidence remains reachable.
 The main window polls the latest shared `IngestStatus` once per second and
 renders it in a bottom status line. The separate `ingests.html` application
 polls all typed status files and presents run history beside aggregate and
