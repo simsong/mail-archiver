@@ -757,6 +757,16 @@ validate row identities against `archive.sqlite3`, then atomically replace the
 old search database. Live indexing and `refresh-index` both exclude
 `INFECTED` and the reserved `MALFORMED` quarantine category; rebuild recognizes
 numbered quarantine MBOX filenames.
+`refresh-index` first renders terminal progress for the finite canonical-MBOX
+validation phase weighted by catalogued message counts, then renders
+message-count progress and an elapsed-rate ETA
+while building the replacement database. Its replacement file is never opened
+as the live index; a `KeyboardInterrupt` rolls back catalog subject updates,
+removes the incomplete replacement, and reports that the existing index is
+unchanged. A bounded, ordered worker pool verifies source hashes and parses
+MIME content in parallel (all detected CPU cores by default, or two if the
+count is unavailable, configurable with `refresh-index --workers`); a sole main-thread SQLite writer retains stable
+catalog/update order and never shares a SQLite connection across threads.
 Ordinary `mailsearch` listings and reports select only `Sent` and `Archive`;
 the authoritative catalog still retains every quarantine record.
 Bounded date-sorted listings materialize an indexed, ordered candidate page

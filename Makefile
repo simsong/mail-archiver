@@ -124,7 +124,7 @@ test-provenance:
 	uv run pytest -q tests/test_catalog.py tests/test_sources.py
 
 test-refresh-index:
-	uv run pytest -q tests/test_end_to_end.py::test_refresh_index_excludes_quarantine_mailboxes
+	uv run pytest -q tests/test_end_to_end.py::test_refresh_index_excludes_quarantine_mailboxes tests/test_end_to_end.py::test_refresh_index_interrupt_retains_prior_search_index
 
 test-headers:
 	uv run pytest -q tests/test_message.py tests/test_search.py

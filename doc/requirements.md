@@ -785,7 +785,13 @@ downloaded archive against a source-controlled SHA-256 digest before execution.
 * `refresh-index` rebuilds the disposable FTS database in a temporary file,
   verifies every normal MBOX message against the catalog and the total
   searchable-message count, and replaces the prior index only after those
-  checks succeed. While it reads each verified message, it also refreshes the
+  checks succeed. It visibly reports a progress bar, completion count, and
+  ETA weighted by catalogued message counts for mailbox verification and
+  message indexing. It announces before starting that `Ctrl-C` discards the
+  incomplete replacement and retains the existing search index. Its
+  `--workers` option defaults to the available CPU count (or two if it cannot
+  be determined), and parallelizes bounded verified-MBOX read/hash/MIME work while
+  retaining one ordered SQLite writer. While it reads each verified message, it also refreshes the
   derived catalog subject from canonical header bytes, repairing newly supported
   legacy charset recovery without changing canonical mail. `review` queries the
   committed source-observation log by run, source, and disposition. Derived

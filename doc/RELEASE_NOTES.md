@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+* Make `refresh-index` observable and safe to interrupt: it now reports
+  message-weighted verification/indexing progress bars with ETA, announces its
+  Ctrl-C safety before work begins, and discards an incomplete replacement
+  on **Ctrl-C**, retaining the existing search index. Its bounded all-core
+  default (or two workers if core detection is unavailable) now parallelizes
+  verified MBOX reads, SHA-256 checks, and MIME parsing
+  while one ordered SQLite writer builds the replacement safely.
 * Stop opening message links immediately. The message viewer now shows an
   allowed link destination in the bottom status bar on hover and requires an
   explicit **Open Link**, **Copy Link**, or **Ignore** choice on click.

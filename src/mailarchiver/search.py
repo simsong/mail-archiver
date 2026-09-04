@@ -34,6 +34,18 @@ class SuggestedAddress(BaseModel):
     display_name: str
 
 
+class PreparedSearchMessage(BaseModel):
+    """MIME-derived index data that can cross the refresh worker boundary."""
+
+    sha256: str
+    content: str
+    attachment_content: str
+    attachments: list[IndexedAttachment]
+    suggestions: list[SuggestedAddress]
+    preview: str
+    subject: str
+
+
 def decoded_part(part: Message) -> str:
     payload = part.get_payload(decode=True) or b""
     return decode_text(payload, part.get_content_charset()).value
@@ -170,34 +182,51 @@ def delete_indexed_message(search: sqlite3.Connection, digest: str) -> None:
     search.execute("DELETE FROM message_metadata WHERE sha256 = ?", (digest,))
 
 
-def index_message(
-    search: sqlite3.Connection, raw: bytes, index_attachments: bool, *, date_utc: str = ""
-) -> None:
-    digest = hashlib.sha256(raw).hexdigest()
+def prepare_search_message(
+    raw: bytes, index_attachments: bool, *, sha256: str | None = None
+) -> PreparedSearchMessage:
+    """Read, hash, and MIME-parse one message without touching SQLite."""
+    digest = hashlib.sha256(raw).hexdigest() if sha256 is None else sha256
     message = BytesParser(policy=policy.compat32).parsebytes(raw)
     attachments = indexed_attachments(message)
     body = preferred_body_text(message)
+    return PreparedSearchMessage(
+        sha256=digest,
+        content=parsed_message_text(message, False, body, raw),
+        attachment_content=attachment_text(message) if index_attachments else "",
+        attachments=attachments,
+        suggestions=suggested_addresses(message),
+        preview=body_preview(body),
+        subject=decoded_message_header(raw, message, "Subject"),
+    )
+
+
+def write_prepared_search_message(
+    search: sqlite3.Connection, prepared: PreparedSearchMessage, *, date_utc: str = ""
+) -> None:
+    """Write previously parsed content through the one SQLite writer."""
+    digest = prepared.sha256
     delete_indexed_message(search, digest)
     message_fts_rowid = search.execute(
         "INSERT INTO message_fts(sha256, content) VALUES (?, ?)",
-        (digest, parsed_message_text(message, False, body)),
+        (digest, prepared.content),
     ).lastrowid
     assert message_fts_rowid is not None
     attachment_fts_rowid: int | None = None
-    if index_attachments and (attachments_text := attachment_text(message)):
+    if prepared.attachment_content:
         attachment_fts_rowid = search.execute(
-            "INSERT INTO attachment_fts(sha256, content) VALUES (?, ?)", (digest, attachments_text)
+            "INSERT INTO attachment_fts(sha256, content) VALUES (?, ?)", (digest, prepared.attachment_content)
         ).lastrowid
     search.execute(
         "INSERT INTO message_metadata(sha256, message_fts_rowid, attachment_fts_rowid, attachment_count, preview) "
         "VALUES (?, ?, ?, ?, ?)",
-        (digest, message_fts_rowid, attachment_fts_rowid, len(attachments), body_preview(body)),
+        (digest, message_fts_rowid, attachment_fts_rowid, len(prepared.attachments), prepared.preview),
     )
     search.executemany(
         "INSERT INTO message_attachments(sha256, attachment_ordinal, part_id, filename, mime_type) VALUES (?, ?, ?, ?, ?)",
-        ((digest, item.attachment_ordinal, item.part_id, item.filename, item.mime_type) for item in attachments),
+        ((digest, item.attachment_ordinal, item.part_id, item.filename, item.mime_type) for item in prepared.attachments),
     )
-    for identity in suggested_addresses(message):
+    for identity in prepared.suggestions:
         suggestion = search.execute(
             "INSERT INTO address_suggestions(address, display_name, message_count, last_seen) VALUES (?, ?, 1, ?) "
             "ON CONFLICT(address) DO UPDATE SET message_count = message_count + 1, "
@@ -211,6 +240,13 @@ def index_message(
             "INSERT INTO message_address_suggestions(sha256, suggestion_pk, seen_at) VALUES (?, ?, ?)",
             (digest, suggestion[0], date_utc),
         )
+
+
+def index_message(
+    search: sqlite3.Connection, raw: bytes, index_attachments: bool, *, date_utc: str = ""
+) -> None:
+    """Parse and write one message for ordinary single-writer indexing."""
+    write_prepared_search_message(search, prepare_search_message(raw, index_attachments), date_utc=date_utc)
 
 
 def index_message_safely(

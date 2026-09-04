@@ -19,7 +19,7 @@ from shutil import copy, copytree
 
 import pytest
 
-from mailarchiver.__main__ import nonnegative_integer, positive_integer, report_years
+from mailarchiver.__main__ import REFRESH_INDEX_DEFAULT_WORKERS, nonnegative_integer, positive_integer, report_years
 from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.layout import mbox_directory
 from mailarchiver.gui_service import message_locations
@@ -328,6 +328,7 @@ def test_refresh_index_excludes_quarantine_mailboxes(tmp_path: Path) -> None:
     )
 
     assert_success(refreshed)
+    assert f"Refreshing search index ({REFRESH_INDEX_DEFAULT_WORKERS} workers)" in refreshed.stderr
     search = sqlite3.connect(archive / "search.sqlite3")
     try:
         assert search.execute("SELECT sha256 FROM message_fts").fetchall() == [
@@ -375,6 +376,85 @@ def test_refresh_index_preserves_prior_index_when_mbox_and_catalog_disagree(tmp_
         assert search.execute("SELECT value FROM preserved").fetchone() == ("old index",)
     finally:
         search.close()
+
+
+def test_refresh_index_interrupt_retains_prior_search_index(tmp_path: Path) -> None:
+    """Requirement: Ctrl-C discards an uncommitted refresh-index replacement."""
+    archive = tmp_path / "archive"
+    path = mbox_directory(archive) / "2024-Archive1.mbox"
+    path.parent.mkdir(parents=True)
+    catalog = create_catalog(archive / "archive.sqlite3")
+    try:
+        sender_pk = address_pk(catalog, "sender@example.net")
+        generation_pk = catalog.execute(
+            "INSERT INTO mbox_generations(filename, sha256, message_count, byte_count) VALUES (?, '', 0, 0)",
+            (path.name,),
+        ).lastrowid
+        box = mailbox.mbox(path, create=True)
+        try:
+            for number in range(10):
+                raw = (
+                    f"Message-ID: <interrupt-{number}@example.net>\n"
+                    f"Subject: previous subject {number}\n"
+                    "Content-Type: text/plain; charset=utf-8\n\n"
+                ).encode() + b"x" * (256 * 1024)
+                location = add_message(box, path, raw)
+                message_pk = catalog.execute(
+                    "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, date_source, category) "
+                    "VALUES (?, ?, ?, ?, '2024-01-01T00:00:00+00:00', 'date', 'Archive')",
+                    (str(number), hashlib.sha256(raw).hexdigest(), sender_pk, f"previous subject {number}"),
+                ).lastrowid
+                catalog.execute(
+                    "INSERT INTO locations(message_pk, generation_pk, byte_offset, byte_length) VALUES (?, ?, ?, ?)",
+                    (message_pk, generation_pk, location.byte_offset, location.byte_length),
+                )
+        finally:
+            box.close()
+        catalog.execute(
+            "UPDATE mbox_generations SET message_count = 10, byte_count = ? WHERE generation_pk = ?",
+            (path.stat().st_size, generation_pk),
+        )
+        catalog.commit()
+    finally:
+        catalog.close()
+    old_search = create_search(archive / "search.sqlite3")
+    try:
+        old_search.execute("CREATE TABLE preserved(value TEXT)")
+        old_search.execute("INSERT INTO preserved VALUES ('old index')")
+        old_search.commit()
+    finally:
+        old_search.close()
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "mailarchiver", "--archive", str(archive), "refresh-index"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stderr is not None
+    safety_notice = process.stderr.readline()
+    assert "Ctrl-C discards the incomplete replacement" in safety_notice
+    progress = process.stderr.readline()
+    assert progress.startswith("Checking canonical mailboxes:")
+    assert "0/10 messages" in progress
+    assert "ETA calculating" in progress
+    process.send_signal(signal.SIGINT)
+    stdout, stderr = process.communicate(timeout=20)
+
+    assert process.returncode == 130, stdout + stderr
+    assert "discarded incomplete replacement; the existing search index is unchanged" in stderr
+    assert "Traceback" not in stderr
+    assert not (archive / "search.sqlite3.tmp").exists()
+    search = sqlite3.connect(archive / "search.sqlite3")
+    try:
+        assert search.execute("SELECT value FROM preserved").fetchone() == ("old index",)
+    finally:
+        search.close()
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT COUNT(*) FROM messages WHERE subject LIKE 'previous subject %'").fetchone() == (10,)
+    finally:
+        catalog.close()
 
 
 def test_unchanged_source_files_are_skipped_wholesale(source_mail: tuple[Path, dict[str, bytes]], tmp_path: Path) -> None:
