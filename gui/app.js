@@ -66,6 +66,7 @@ const FRAME_LOAD_TIMEOUT_MS = 10_000;
 const SUGGESTION_LIMIT = 20;
 const INGEST_REFRESH_MS = 1000;
 const RESULT_INITIAL_LIMIT = 2_000;
+const PLAIN_LINK_PATTERN = /(?:https?:\/\/|mailto:)[^\s<>"']+/giu;
 
 window.addEventListener("resize", () => {
   const frame = elements["body-view"]?.querySelector(".html-frame");
@@ -231,42 +232,49 @@ function installFrameFindShortcuts(frame) {
 }
 
 function frameLink(event) {
-  return event.target?.closest?.("a[href]") || null;
+  return typeof event.target?.closest === "function" ? event.target.closest("a[href]") : null;
 }
 
-function approvedFrameLink(link) {
+function approvedLinkDestination(value) {
   try {
-    const destination = new URL(link.href).href;
-    return ["http:", "https:", "mailto:"].includes(new URL(destination).protocol) ? destination : "";
+    const destination = new URL(value).href;
+    const parsed = new URL(destination);
+    if (!["http:", "https:", "mailto:"].includes(parsed.protocol)) return "";
+    return parsed.protocol === "mailto:" ? (parsed.pathname ? destination : "") : (parsed.hostname ? destination : "");
   } catch (_) {
     return "";
   }
 }
 
-function installFrameLinkHandlers(frame) {
-  const document = frame.contentDocument;
-  if (!document) return;
+function trimPlainLink(value) {
+  let end = value.length;
+  while (end && ".,;:!?".includes(value[end - 1])) end -= 1;
+  while (value[end - 1] === ")" && (value.slice(0, end).match(/\(/g)?.length || 0) < (value.slice(0, end).match(/\)/g)?.length || 0)) end -= 1;
+  return [value.slice(0, end), value.slice(end)];
+}
+
+function installLinkHandlers(document) {
   const hover = event => {
     const link = frameLink(event);
-    const destination = link && approvedFrameLink(link);
+    const destination = link && approvedLinkDestination(link.href);
     if (destination) showLinkDestination(destination);
   };
   const leave = event => {
     const link = frameLink(event);
-    if (link && !link.contains(event.relatedTarget)) clearLinkDestination(approvedFrameLink(link));
+    if (link && !link.contains(event.relatedTarget)) clearLinkDestination(approvedLinkDestination(link.href));
   };
-  document.addEventListener("pointerover", hover);
-  document.addEventListener("focusin", hover);
-  document.addEventListener("pointerout", leave);
-  document.addEventListener("focusout", leave);
+  document.addEventListener("pointerover", hover, true);
+  document.addEventListener("focusin", hover, true);
+  document.addEventListener("pointerout", leave, true);
+  document.addEventListener("focusout", leave, true);
   document.addEventListener("click", event => {
     const link = frameLink(event);
-    const destination = link && approvedFrameLink(link);
+    const destination = link && approvedLinkDestination(link.href);
     if (!destination) return;
     event.preventDefault();
     event.stopPropagation();
     presentExternalLink(destination);
-  });
+  }, true);
 }
 
 function presentExternalLink(destination) {
@@ -1209,6 +1217,11 @@ async function selectMessage(messagePk) {
   if (!view || state.selectionRequest !== messagePk) return;
   state.selected = messagePk;
   state.view = view;
+  const result = state.results.find(candidate => candidate.message_pk === messagePk);
+  if (result && result.subject !== view.subject) {
+    result.subject = view.subject;
+    void state.resultTable?.updateData([result]);
+  }
   state.messageFindIndex = -1;
   state.resultTable?.deselectRow();
   state.resultTable?.selectRow(messagePk);
@@ -1654,13 +1667,14 @@ async function showPart(partId, allowRemote) {
     }
     if (request !== state.partRequest || messagePk !== state.selected || !isCurrentHtmlFrame(frame)) return false;
     installFrameFindShortcuts(frame);
-    installFrameLinkHandlers(frame);
+    installLinkHandlers(frame.contentDocument);
     resizeFrame(frame);
     installFrameLayoutUpdates(frame);
   } else {
     const body = document.createElement("div");
     body.className = part.kind === "raw" ? "raw" : "plain";
-    setHighlightedText(body, part.content);
+    setHighlightedText(body, part.content, part.kind === "text");
+    if (part.kind === "text") installLinkHandlers(body);
     elements["body-view"].append(body);
   }
   if (request !== state.partRequest || messagePk !== state.selected) return false;
@@ -1703,7 +1717,7 @@ function highlightPattern() {
   return regex;
 }
 
-function highlightedFragment(value, owner = document, marker = "outer") {
+function highlightedTextFragment(value, owner = document, marker = "outer") {
   const fragment = owner.createDocumentFragment();
   const pattern = highlightPattern();
   let cursor = 0;
@@ -1728,8 +1742,42 @@ function highlightedFragment(value, owner = document, marker = "outer") {
   return {fragment, count};
 }
 
-function setHighlightedText(element, value) {
-  element.replaceChildren(highlightedFragment(value, element.ownerDocument).fragment);
+function highlightedFragment(value, owner = document, marker = "outer", linkify = false) {
+  if (!linkify) return highlightedTextFragment(value, owner, marker);
+  const fragment = owner.createDocumentFragment();
+  let cursor = 0;
+  let count = 0;
+  PLAIN_LINK_PATTERN.lastIndex = 0;
+  for (const match of value.matchAll(PLAIN_LINK_PATTERN)) {
+    const [destination, suffix] = trimPlainLink(match[0]);
+    const preceding = highlightedTextFragment(value.slice(cursor, match.index), owner, marker);
+    fragment.append(preceding.fragment);
+    count += preceding.count;
+    const approved = approvedLinkDestination(destination);
+    if (approved) {
+      const link = owner.createElement("a");
+      link.href = approved;
+      const linked = highlightedTextFragment(destination, owner, marker);
+      link.append(linked.fragment);
+      fragment.append(link);
+      count += linked.count;
+    } else {
+      const text = highlightedTextFragment(destination, owner, marker);
+      fragment.append(text.fragment);
+      count += text.count;
+    }
+    const trailing = highlightedTextFragment(suffix, owner, marker);
+    fragment.append(trailing.fragment);
+    count += trailing.count;
+    cursor = match.index + match[0].length;
+  }
+  const final = highlightedTextFragment(value.slice(cursor), owner, marker);
+  fragment.append(final.fragment);
+  return {fragment, count: count + final.count};
+}
+
+function setHighlightedText(element, value, linkify = false) {
+  element.replaceChildren(highlightedFragment(value, element.ownerDocument, "outer", linkify).fragment);
 }
 
 function highlightedHtml(value) {

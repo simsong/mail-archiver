@@ -18,7 +18,7 @@ Content-Type: multipart/alternative; boundary=alternative
 --alternative
 Content-Type: text/plain; charset=utf-8
 
-Plain E2E body for the message viewer.
+Plain E2E body for the message viewer. https://example.org/plain-link?source=mail
 --alternative
 Content-Type: text/html; charset=utf-8
 

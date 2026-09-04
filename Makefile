@@ -1,6 +1,6 @@
 .PHONY: benchmark-name-resolution check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke website-build-check website-check release-tag-check
 .PHONY: install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality
-.PHONY: test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-native-html-find test-pdf-mail test-plugins test-progress test-provenance test-tika test-website validation-aws-start validation-aws-start-all
+.PHONY: test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-native-html-find test-pdf-mail test-plugins test-progress test-provenance test-refresh-index test-tika test-website validation-aws-start validation-aws-start-all
 .PHONY: validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
 
 
@@ -122,6 +122,9 @@ test-gui:
 
 test-provenance:
 	uv run pytest -q tests/test_catalog.py tests/test_sources.py
+
+test-refresh-index:
+	uv run pytest -q tests/test_end_to_end.py::test_refresh_index_excludes_quarantine_mailboxes
 
 test-headers:
 	uv run pytest -q tests/test_message.py tests/test_search.py

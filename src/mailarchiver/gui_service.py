@@ -30,7 +30,7 @@ from .mailsearch import (
     search_result_count,
 )
 from .mailbox_tree import MailboxSelection
-from .message import decoded_header
+from .message import decoded_message_header
 from .plugin_api import SourceContainerMetadata
 from .search import SEARCH_CATEGORIES, decoded_part, is_attachment
 
@@ -329,7 +329,12 @@ def parsed_message(archive: Path, message_pk: int) -> tuple[bytes, Message]:
 def describe_message(archive: Path, message_pk: int) -> MessageView:
     """Describe selectable body parts and attachments without returning payloads."""
     raw, message = parsed_message(archive, message_pk)
-    headers = [HeaderField(name=name, value=decoded_header(str(value))) for name, value in message.items()]
+    header_names: list[str] = []
+    headers = []
+    for name, _ in message.items():
+        occurrence = sum(previous.casefold() == name.casefold() for previous in header_names)
+        header_names.append(name)
+        headers.append(HeaderField(name=name, value=decoded_message_header(raw, message, name, occurrence)))
     body_parts: list[BodyPart] = []
     attachments: list[AttachmentInfo] = []
     legacy_x_html = legacy_x_html_body(raw, message)
@@ -373,13 +378,13 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
     date_adjustment = None
     if date_source == "received-median":
         date_adjustment = DateAdjustment(
-            date_header=decoded_header(str(message.get("Date", "(missing)"))),
+            date_header=decoded_message_header(raw, message, "Date") or "(missing)",
             received_median_utc=date_utc,
             archive_routing_utc=date_utc,
         )
     return MessageView(
         message_pk=message_pk,
-        subject=decoded_header(str(message.get("Subject", "(no subject)"))),
+        subject=decoded_message_header(raw, message, "Subject") or "(no subject)",
         date_source=date_source,
         date_adjustment=date_adjustment,
         headers=headers,
@@ -440,6 +445,8 @@ def _volume_label(metadata_json: str) -> str:
 
 
 def _source_display_path(metadata_json: str, source_path: str, path_kind: str) -> str:
+    if path_kind == "file" and source_path.startswith("Users/"):
+        return f"/{source_path}"
     if path_kind != "provider":
         return source_path
     metadata = json.loads(metadata_json)
@@ -510,7 +517,12 @@ def _source_location(
 def render_part(archive: Path, message_pk: int, part_id: int, allow_remote: bool = False) -> PartContent:
     raw, message = parsed_message(archive, message_pk)
     if part_id == RAW_PART_ID:
-        return PartContent(part_id=part_id, kind="raw", content_type="message/rfc822", content=raw.decode("utf-8", "replace"))
+        return PartContent(
+            part_id=part_id,
+            kind="raw",
+            content_type="message/rfc822",
+            content=decode_text(raw, message.get_content_charset()).value,
+        )
     if part_id == LEGACY_X_HTML_PART_ID:
         content = legacy_x_html_body(raw, message)
         if content is None:

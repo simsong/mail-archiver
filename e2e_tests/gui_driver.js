@@ -340,6 +340,17 @@
     const plainHighlight = document.querySelector("#body-view .plain mark.search-highlight");
     assert(plainHighlight?.textContent === "message viewer", "search phrase is highlighted in plain text");
     assert(getComputedStyle(plainHighlight).backgroundColor === "rgb(255, 245, 157)", "plain-text highlighting uses the configured yellow background");
+    const plainLink = document.querySelector('#body-view .plain a[href="https://example.org/plain-link?source=mail"]');
+    assert(plainLink, "plain-text URLs render as links");
+    plainLink.dispatchEvent(new MouseEvent("pointerover", {bubbles: true}));
+    assert(document.getElementById("ingest-status-line").textContent === plainLink.href,
+      "hovering a plain-text link shows its destination in the bottom status bar");
+    const plainLinkClick = new MouseEvent("click", {bubbles: true, cancelable: true});
+    plainLink.dispatchEvent(plainLinkClick);
+    await waitFor(() => linkDialog.open && document.getElementById("link-destination").textContent === plainLink.href,
+      "clicking a plain-text link presents the destination instead of navigating");
+    assert(plainLinkClick.defaultPrevented, "plain-text link click prevents automatic external navigation");
+    document.getElementById("link-ignore").click();
     document.querySelector("#body-view .plain").dispatchEvent(new MouseEvent("mousedown", {bubbles: true}));
     document.dispatchEvent(new KeyboardEvent("keydown", {key: "a", metaKey: true, bubbles: true}));
     assert(window.getSelection().toString().includes("Plain E2E body") &&
@@ -347,6 +358,7 @@
     "Command-A in plain text selects only the displayed body");
     document.dispatchEvent(new KeyboardEvent("keydown", {key: "0", metaKey: true, bubbles: true}));
     await waitFor(() => document.querySelector("#body-view .raw")?.textContent.includes("Subject: Rich UI message"), "Command-0 displays raw source");
+    assert(!document.querySelector("#body-view .raw a"), "raw source does not linkify URLs");
     assert(document.querySelectorAll("#body-view .raw mark.search-highlight").length === 2, "search phrase is highlighted throughout raw source");
     document.querySelector("#body-view .raw").dispatchEvent(new MouseEvent("mousedown", {bubbles: true}));
     document.dispatchEvent(new KeyboardEvent("keydown", {key: "a", metaKey: true, bubbles: true}));

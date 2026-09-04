@@ -18,7 +18,7 @@ RICH_MESSAGE = (
     b"Content-Type: multipart/mixed; boundary=outer\n\n"
     b"--outer\nContent-Type: multipart/alternative; boundary=alternative\n\n"
     b"--alternative\nContent-Type: text/plain; charset=utf-8\n\n"
-    b"Plain E2E body for the message viewer.\n"
+    b"Plain E2E body for the message viewer. https://example.org/plain-link?source=mail\n"
     b"--alternative\nContent-Type: text/html; charset=utf-8\n\n"
     b'<html><head><style>mark { background: yellow !important; }</style></head><body>'
     b'<mark class="message-find-match message-find-current" data-mailarchiver-find-target="outer">decoy</mark>'

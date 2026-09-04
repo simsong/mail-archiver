@@ -316,7 +316,10 @@ deliberately supports database replacement while there are no users.
 `mbox_generations` are written as part of each message publication.
 
 Header parsing decodes and unfolds RFC 2047 Subject values before catalog and
-FTS insertion. `mailsearch` displays that catalog value directly.
+FTS insertion. `mailsearch` displays that catalog value directly. The verified
+MBOX traversal in `refresh-index` rederives that catalog field while rebuilding
+FTS, so existing archives acquire newly supported legacy-header decoding without
+rewriting canonical mail.
 Its result formatter determines number width from the returned `message_pk`
 values and emits ANSI bold only for a terminal subject field.
 Email-policy `compat32` header objects, including raw 8-bit `Received:`
@@ -385,6 +388,10 @@ decoder returns encoding and recovery provenance for callers, while current
 search/display callers use its value. There is intentionally no user checkbox:
 these are loss-avoiding derived-text defaults, and the exact MIME view remains
 available when the user needs the source representation.
+Malformed raw 8-bit display headers are recovered from their original header
+bytes with the message's declared body charset before RFC 2047 processing, so
+catalog, search, Raw Source display, and MIME-part displays use the same
+source-preserving recovery path.
 
 The `gui/` prototype uses pywebview's Cocoa/WKWebView backend on macOS.  Its
 Python API delegates query parsing, SQLite reads, and direct MBOX retrieval to
@@ -480,7 +487,9 @@ allowed destination to the bottom status bar on hover, prevents its default
 click, and presents **Open Link**, **Copy Link**, and **Ignore**. The native
 bridge independently validates only `http`, `https`, and `mailto` destinations;
 it writes copied links as both text and a URL, and opens them through NSWorkspace
-only after **Open Link**. Selecting another message resets the finder index to its first
+only after **Open Link**. Plain-text rendering tokenizes only those same allowed
+URL schemes into links and installs the identical capture-phase handler; Raw
+Source remains literal text. Selecting another message resets the finder index to its first
 match without replacing the finder text.
 Command-A uses the most recently clicked pane: it marks all result rows as
 selected in the list, or creates a DOM range over the displayed body for plain
@@ -547,7 +556,8 @@ The viewer also reads the archive mailbox location and linked source
 observations from the catalog, then displays archive path, source-volume label,
 and source or forensic path at the bottom without treating an archive mailbox
 as a source. It renders nonzero byte offsets as `?offset=N` and omits zero or
-absent offsets. A local source-path control copies only the mounted pathname to
+absent offsets. A local file source stored as `Users/...` on the root volume is
+displayed as `/Users/...`. A local source-path control copies only the mounted pathname to
 the macOS pasteboard, as both text and a file URL; provider and forensic paths
 without a local pathname have no copy control. Direct provider observations sort before local evidence; retained
 Apple Gmail observations are labeled as local cache copies rather than as the

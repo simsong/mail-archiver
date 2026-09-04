@@ -96,6 +96,27 @@ def test_subject_is_decoded_and_unfolded() -> None:
     assert parse_message(raw, Path("/input/2024/message.eml"), None).subject == "Re: NYTimes: You Won’t Want to Share This Roasted Cauliflower"
 
 
+def test_unencoded_korean_headers_use_the_declared_body_charset() -> None:
+    """Requirement: legacy 8-bit Korean headers stay searchable without rewriting mail."""
+    subject = "이렇게 하면 부자가 됩니다"
+    raw = b"\n".join(
+        [
+            b"Message-ID: <legacy-korean@example>",
+            b"From: " + "장나나".encode("euc-kr") + b" <jjanana@hanmail.net>",
+            b"Subject: " + subject.encode("euc-kr"),
+            b"Date: Sat, 17 May 2003 15:23:19 +0900",
+            b"Content-Type: text/html; charset=ks_c_5601-1987",
+            b"",
+            b"<p>" + "최고의 기회".encode("euc-kr") + b"</p>",
+        ]
+    )
+
+    parsed = parse_message(raw, Path("/input/2003/message.eml"), None)
+
+    assert parsed.subject == subject
+    assert parsed.sha256 == hashlib.sha256(raw).hexdigest()
+
+
 def test_raw_8bit_received_header_resolves_date_without_altering_identity() -> None:
     """Requirement: malformed header encoding falls back without affecting preservation."""
     raw = b"\n".join(

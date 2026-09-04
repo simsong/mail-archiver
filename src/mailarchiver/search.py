@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from pydantic import BaseModel
 
 from .encoding import decode_text
-from .message import decoded_header
+from .message import decoded_header, decoded_message_header
 
 SEARCH_CATEGORIES = ("Archive", "Sent")
 QUARANTINE_MAILBOX = re.compile(r"^(?:INFECTED|MALFORMED)\d+\.mbox$")
@@ -66,8 +66,17 @@ def preferred_body_text(message: Message) -> str:
     return body
 
 
-def parsed_message_text(message: Message, index_attachments: bool, body: str | None = None) -> str:
-    headers = "\n".join(decoded_header(str(message.get(name) or "")) for name in ("From", "To", "Cc", "Subject", "Date"))
+def parsed_message_text(
+    message: Message,
+    index_attachments: bool,
+    body: str | None = None,
+    raw: bytes | None = None,
+) -> str:
+    names = ("From", "To", "Cc", "Subject", "Date")
+    headers = "\n".join(
+        decoded_message_header(raw, message, name) if raw is not None else decoded_header(str(message.get(name) or ""))
+        for name in names
+    )
     parts = list(message.walk()) if message.is_multipart() else [message]
     body = preferred_body_text(message) if body is None else body
     if index_attachments:
@@ -93,7 +102,7 @@ def body_preview(body: str, word_limit: int = PREVIEW_WORDS) -> str:
 def message_text(raw: bytes, index_attachments: bool) -> str:
     """Return headers plus preferred body text; omit attachments unless requested."""
     message = BytesParser(policy=policy.compat32).parsebytes(raw)
-    return parsed_message_text(message, index_attachments)
+    return parsed_message_text(message, index_attachments, raw=raw)
 
 
 def indexed_attachments(message: Message) -> list[IndexedAttachment]:

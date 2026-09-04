@@ -282,7 +282,9 @@ def test_refresh_index_excludes_quarantine_mailboxes(tmp_path: Path) -> None:
     mbox_directory(archive).mkdir(parents=True)
     messages = {
         "2024-Archive1.mbox": (
-            b"Message-ID: <normal@example>\nSubject: normal\n\nnormal body\nFrom ordinary\n>From literal\n"
+            b"Message-ID: <normal@example>\nSubject: " + "이렇게 하면 부자가 됩니다".encode("euc-kr")
+            + b"\nContent-Type: text/plain; charset=euc-kr\n\n"
+            + "정상 본문".encode("euc-kr") + b"\nFrom ordinary\n>From literal\n"
         ),
         "INFECTED1.mbox": b"Message-ID: <infected@example>\nSubject: infected\n\ninfected body\n",
         "MALFORMED1.mbox": b"Message-ID: <malformed@example>\nSubject: malformed\n\nmalformed body\n",
@@ -333,6 +335,13 @@ def test_refresh_index_excludes_quarantine_mailboxes(tmp_path: Path) -> None:
         ]
     finally:
         search.close()
+    catalog = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        assert catalog.execute("SELECT subject FROM messages WHERE message_id_normalized = ?", ("2024-Archive1.mbox",)).fetchone() == (
+            "이렇게 하면 부자가 됩니다",
+        )
+    finally:
+        catalog.close()
 
 
 def test_refresh_index_preserves_prior_index_when_mbox_and_catalog_disagree(tmp_path: Path) -> None:

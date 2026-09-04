@@ -412,6 +412,9 @@ repairs affect only the disposable index and display; the original RFC 5322
 bytes, MIME headers, and raw-message hash remain unchanged. Recovery is
 per-part and automatic; a count threshold for `U+FFFD` is not a safe trigger
 because replacement has already discarded the evidence needed for recovery.
+Malformed legacy headers that contain raw 8-bit bytes instead of RFC 2047
+encoded words use the declared body charset through that same recovery path for
+derived catalog, search, and viewer text; canonical header bytes remain exact.
 For every indexed message, the disposable database records an attachment count
 and one ordered metadata row per MIME attachment containing its MIME-walk part
 ID, decoded filename, and normalized MIME type. This metadata is derived during
@@ -517,11 +520,14 @@ single-message display with an explicit selected-message count and an explicit d
 exports those selected messages as one ZIP whose entries preserve their RFC
 5322 bytes. A pointer gesture that starts and ends on
 the same result row is a normal message click, not a range drag.
-Message HTML links are never opened directly. Hovering an allowed `http`,
-`https`, or `mailto` destination shows its complete destination in the bottom
-status bar. Clicking it presents that destination with **Open Link**, **Copy
-Link**, and **Ignore** choices; only **Open Link** invokes the system handler,
-and **Copy Link** writes the destination as text and a URL to the pasteboard.
+Message HTML links and recognized `http`, `https`, or `mailto` links in rendered
+plain-text parts are never opened directly. Hovering an allowed destination
+shows its complete destination in the bottom status bar. Clicking it presents
+that destination with **Open Link**, **Copy Link**, and **Ignore** choices;
+only **Open Link** invokes the system handler, and **Copy Link** writes the
+destination as text and a URL to the pasteboard. Raw Source remains literal.
+For a local file source whose stored volume-relative path begins `Users/`, the
+viewer displays `/Users/...` so it remains an absolute filesystem path.
 Literal, case-insensitive occurrences of every ordinary free-text query term
 and every textual selector value (`any:`, `from:`, `to:`, `cc:`, `bcc:`, and
 `subject:`) must be highlighted in the selected message's displayed headers and
@@ -779,7 +785,9 @@ downloaded archive against a source-controlled SHA-256 digest before execution.
 * `refresh-index` rebuilds the disposable FTS database in a temporary file,
   verifies every normal MBOX message against the catalog and the total
   searchable-message count, and replaces the prior index only after those
-  checks succeed. `review` queries the
+  checks succeed. While it reads each verified message, it also refreshes the
+  derived catalog subject from canonical header bytes, repairing newly supported
+  legacy charset recovery without changing canonical mail. `review` queries the
   committed source-observation log by run, source, and disposition. Derived
   catalog fields and canonical locations are created correctly during ingest.
 

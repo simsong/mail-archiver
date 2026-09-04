@@ -18,6 +18,8 @@ from collections import Counter, deque
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 from types import TracebackType
 from typing import Literal, TypeVar
@@ -46,7 +48,7 @@ from .ingest_status import (
     new_status_id,
 )
 from .layout import mbox_directory, mbox_path
-from .message import ParsedMessage, parse_message
+from .message import ParsedMessage, decoded_message_header, parse_message
 from .mbox import (
     DiskFullError,
     MboxLocation,
@@ -1796,7 +1798,7 @@ def rebuild_search_index(archive: Path, index_attachments: bool) -> None:
     """Build and validate a replacement search database before publishing it."""
     temporary = archive / "search.sqlite3.tmp"
     temporary.unlink(missing_ok=True)
-    catalog = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
+    catalog = create_catalog(archive / "archive.sqlite3")
     try:
         search = create_search(temporary)
         try:
@@ -1827,7 +1829,7 @@ def rebuild_search_index(archive: Path, index_attachments: bool) -> None:
                         f"canonical MBOX/catalog count mismatch for {path.name}: {actual} records, {expected} catalogued"
                     )
             rows = catalog.execute(
-                "SELECT messages.sha256, messages.date_utc, mbox_generations.filename, "
+                "SELECT messages.message_pk, messages.sha256, messages.date_utc, mbox_generations.filename, "
                 "locations.byte_offset, locations.byte_length "
                 "FROM mbox_generations "
                 "CROSS JOIN locations ON locations.generation_pk = mbox_generations.generation_pk "
@@ -1835,8 +1837,9 @@ def rebuild_search_index(archive: Path, index_attachments: bool) -> None:
                 "WHERE messages.category IN (?, ?) ORDER BY mbox_generations.filename, locations.byte_offset",
                 SEARCH_CATEGORIES,
             )
+            catalog.execute("BEGIN")
             indexed = 0
-            for digest, date_utc, filename, offset, length in rows:
+            for message_pk, digest, date_utc, filename, offset, length in rows:
                 if QUARANTINE_MAILBOX.fullmatch(filename):
                     raise RuntimeError(f"searchable catalog message is stored in quarantine MBOX: {filename}")
                 raw = read_verified_location(
@@ -1845,12 +1848,19 @@ def rebuild_search_index(archive: Path, index_attachments: bool) -> None:
                     digest,
                 )
                 index_message(search, raw, index_attachments, date_utc=date_utc)
+                message = BytesParser(policy=policy.compat32).parsebytes(raw)
+                subject = decoded_message_header(raw, message, "Subject")
+                catalog.execute(
+                    "UPDATE messages SET subject = ? WHERE message_pk = ? AND subject <> ?",
+                    (subject, message_pk, subject),
+                )
                 indexed += 1
             if indexed != int(expected_row[0]):
                 raise RuntimeError(
                     f"catalog has {expected_row[0]} searchable messages but only {indexed} have canonical locations"
                 )
             search.commit()
+            catalog.commit()
         finally:
             search.close()
         os.replace(temporary, archive / "search.sqlite3")

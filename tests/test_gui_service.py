@@ -86,6 +86,15 @@ X_HTML_MENTION_MESSAGE = (
     b"Subject: x-html mention\nDate: Sat, 06 Jan 2024 10:00:00 +0000\n\n"
     b"This plain text mentions <x-html> without wrapping the whole body.\n"
 )
+KOREAN_MESSAGE = (
+    b"Message-ID: <legacy-korean@example>\n"
+    + b"From: " + "장나나".encode("euc-kr") + b" <jjanana@hanmail.net>\n"
+    + b"To: simsong@example.net\n"
+    + b"Subject: " + "이렇게 하면 부자가 됩니다".encode("euc-kr") + b"\n"
+    + b"Date: Sat, 17 May 2003 15:23:19 +0900\n"
+    + b"Content-Type: text/html; charset=euc-kr\n\n"
+    + b"<html><body><p>" + "최고의 기회".encode("euc-kr") + b"</p></body></html>\n"
+)
 MULTI_HTML_MESSAGE = (
     b"Message-ID: <multi-html@example>\nFrom: sender@example.net\nTo: recipient@example.net\n"
     b"Subject: multi HTML message\nDate: Sun, 07 Jan 2024 10:00:00 +0000\n"
@@ -437,6 +446,23 @@ def test_gui_selects_multipart_views_and_sanitizes_html(tmp_path: Path) -> None:
     assert "Subject: multipart message" in render_part(archive, 2, RAW_PART_ID).content
 
 
+def test_gui_recovers_declared_korean_headers_and_raw_display(tmp_path: Path) -> None:
+    """Requirement: GUI recovery uses declared Korean charsets for derived headers and source text."""
+    archive = make_gui_archive(
+        tmp_path,
+        ((KOREAN_MESSAGE, "legacy-korean@example", "placeholder", "2003-05-17T06:23:19+00:00"),),
+    )
+
+    view = describe_message(archive, 3)
+    raw = render_part(archive, 3, RAW_PART_ID).content
+    html = render_part(archive, 3, view.preferred_part_id).content
+
+    assert view.subject == "이렇게 하면 부자가 됩니다"
+    assert next(header.value for header in view.headers if header.name == "From").startswith("장나나")
+    assert "장나나" in raw and "최고의 기회" in raw and "�" not in raw
+    assert "최고의 기회" in html and "�" not in html
+
+
 def test_gui_prefers_the_most_substantive_html_part(tmp_path: Path) -> None:
     """Requirement: a message with multiple HTML parts opens its substantive HTML view."""
     archive = make_gui_archive(
@@ -499,6 +525,20 @@ def test_gui_displays_archive_and_source_locations(tmp_path: Path) -> None:
     assert not view.source_locations[0].preferred
     assert view.source_locations[0].copy_path == "/Volumes/Fixture/mail/simple.eml"
     assert describe_message(archive, 2).archive_path.startswith("data/mbox/2024-Archive1.mbox?offset=")
+
+    database = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        database.execute("UPDATE source_files SET source_path = 'Users/arch/simple.eml'")
+        database.execute(
+            "UPDATE source_volumes SET metadata_json = ?",
+            (json.dumps({"volume_label": "Local source", "current_mount_path": "/"}),),
+        )
+        database.commit()
+    finally:
+        database.close()
+    local_root = describe_message(archive, 1).source_locations[0]
+    assert local_root.path == "/Users/arch/simple.eml"
+    assert local_root.copy_path == "/Users/arch/simple.eml"
 
 
 def test_gui_prefers_direct_cloud_observation_over_local_cache(tmp_path: Path) -> None:
