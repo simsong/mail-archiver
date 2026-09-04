@@ -64,8 +64,16 @@ button { min-height: 28px; }
 .result-controls label { color: var(--muted); }
 .result-controls select { max-width: 90px; }
 .status { flex: 1; color: var(--muted); }
+.status.background-search { color: #c22; font-weight: 650; }
 #sort-direction { min-width: 30px; font-size: 16px; }
 #result-list:focus { outline: 2px solid AccentColor; outline-offset: -2px; }
+.search-help { max-width: 620px; padding: 22px 24px 32px; color: var(--muted); }
+.search-help h2 { margin: 0 0 8px; color: CanvasText; font-size: 18px; }
+.search-help p { line-height: 1.45; }
+.search-help table { width: 100%; margin: 16px 0; border-collapse: collapse; }
+.search-help th, .search-help td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.search-help th { color: CanvasText; }
+.search-help code { color: CanvasText; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .result { padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: default; user-select: none; }
 .result:hover { background: color-mix(in srgb, AccentColor 10%, transparent); }
 .result.selected { background: var(--selection); }
@@ -77,8 +85,6 @@ button { min-height: 28px; }
 .result-date { white-space: nowrap; }
 .result-preview { min-height: 1.25em; margin-top: 3px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .result.selected .result-line, .result.selected .result-preview, .result.selected .result-attachment { color: inherit; opacity: 0.76; }
-.pagination-controls { display: flex; justify-content: center; gap: 8px; margin: 12px; }
-
 .message { overflow: auto; min-width: 0; }
 .message-actions { position: sticky; top: 0; z-index: 3; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, Canvas 92%, transparent); backdrop-filter: blur(16px); }
 #part-select { min-width: 180px; margin-right: auto; }
@@ -106,6 +112,8 @@ mark.search-highlight { color: inherit; background: var(--search-highlight-backg
 #message-locations { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 #message-locations dt { color: var(--muted); text-align: right; }
 #message-locations dd { margin: 0; overflow-wrap: anywhere; }
+.copy-source-path { margin-left: 6px; padding: 0 3px; border: 0; border-radius: 3px; color: var(--muted); background: transparent; font: inherit; cursor: pointer; }
+.copy-source-path:hover, .copy-source-path:focus-visible { color: var(--text); background: var(--surface); }
 
 .attachments { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 15px; }
 .attachments h2 { font-size: 13px; margin: 0 0 10px; }
@@ -133,6 +141,7 @@ dialog h2 { margin: 0 0 16px; font-size: 18px; }
 
 body.standalone .toolbar, body.standalone .results, body.standalone .mailbox-browser, body.standalone .ingest-status-line { display: none; }
 body.standalone .workspace { display: block; height: 100%; }
+body.standalone .message { height: 100%; overflow: auto; }
 
 @media print {
   html, body, #app { overflow: visible; height: auto; }

@@ -30,9 +30,11 @@ from .gui_service import (
     describe_message,
     export_filename,
     is_risky,
+    message_locations,
     message_previews,
     render_part,
     safe_filename,
+    search_count,
     searchable_message_count,
     search_page,
     search_suggestions,
@@ -349,11 +351,21 @@ class GuiApi:
         direction: str = "descending",
         search_attachments: bool = False,
         mailbox_selections: list[str] | None = None,
-        find_older: bool = False,
+        limit: int = DEFAULT_PAGE_SIZE,
     ) -> dict[str, object]:
         return search_page(
-            self._archive(), query, offset, DEFAULT_PAGE_SIZE, sort_by, direction,
-            search_attachments, mailbox_selections, find_older,
+            self._archive(), query, offset, limit, sort_by, direction,
+            search_attachments, mailbox_selections,
+        ).model_dump(mode="json")
+
+    def search_count(
+        self,
+        query: str,
+        search_attachments: bool = False,
+        mailbox_selections: list[str] | None = None,
+    ) -> dict[str, object]:
+        return search_count(
+            self._archive(), query, search_attachments, mailbox_selections
         ).model_dump(mode="json")
 
     def suggestions(self, query: str, limit: int = 20) -> dict[str, object]:
@@ -424,6 +436,30 @@ class GuiApi:
 
     def message(self, message_pk: int) -> dict[str, object]:
         return describe_message(self._archive(), message_pk).model_dump(mode="json")
+
+    def copy_source_path(self, message_pk: int, source_location_index: int) -> str:
+        """Copy one local source pathname as text and a macOS file URL."""
+        _archive_path, locations = message_locations(self._archive(), message_pk)
+        try:
+            path = locations[source_location_index].copy_path
+        except IndexError as error:
+            raise ValueError("unknown source location") from error
+        if path is None:
+            raise ValueError("source location has no local filesystem path")
+        try:
+            import AppKit  # pylint: disable=import-error,import-outside-toplevel
+            from Foundation import NSURL  # pylint: disable=import-error,import-outside-toplevel,no-name-in-module
+        except ImportError as error:
+            raise ValueError("copying source paths requires macOS with PyObjC installed") from error
+
+        pasteboard = AppKit.NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(path, AppKit.NSPasteboardTypeString)
+        pasteboard.setString_forType_(
+            NSURL.fileURLWithPath_(path).absoluteString(), AppKit.NSPasteboardTypeFileURL
+        )
+        pasteboard.setPropertyList_forType_([path], AppKit.NSFilenamesPboardType)
+        return path
 
     def part(self, message_pk: int, part_id: int, allow_remote: bool = False) -> dict[str, object]:
         return render_part(self._archive(), message_pk, part_id, allow_remote).model_dump(mode="json")

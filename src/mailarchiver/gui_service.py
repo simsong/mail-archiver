@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
@@ -25,6 +26,7 @@ from .mailsearch import (
     parse_query,
     read_message_bytes,
     search_header_page,
+    search_result_count,
 )
 from .mailbox_tree import MailboxSelection
 from .message import decoded_header
@@ -32,6 +34,7 @@ from .plugin_api import SourceContainerMetadata
 from .search import SEARCH_CATEGORIES, decoded_part, is_attachment
 
 PAGE_SIZE = 100
+IMMEDIATE_SEARCH_LIMIT = 2_000
 RAW_PART_ID = -1
 LEGACY_X_HTML_PART_ID = -2
 HEADER_BODY_SEPARATOR = re.compile(br"\r\n\r\n|\n\n|\r\r")
@@ -70,8 +73,12 @@ class SearchPage(BaseModel):
     results: list[MessageHeader]
     offset: int
     has_more: bool
-    older_results_unchecked: bool = False
     highlight_terms: list[str] = Field(default_factory=list)
+
+
+class SearchCount(BaseModel):
+    total: int | None
+    immediate_limit: int = IMMEDIATE_SEARCH_LIMIT
 
 
 class AddressSuggestion(BaseModel):
@@ -128,6 +135,7 @@ class SourceLocation(BaseModel):
     volume: str
     path: str
     offset: int | None
+    copy_path: str | None = None
     raw_sha256: str
     semantic_sha256: str | None
     origin: str
@@ -181,31 +189,52 @@ def search_page(
     direction: SortDirection | str = SortDirection.DESCENDING,
     search_attachments: bool = False,
     mailbox_selections: list[str] | None = None,
-    find_older: bool = False,
 ) -> SearchPage:
-    """Return one bounded page using exactly the CLI query language."""
-    if offset < 0 or limit < 1:
-        raise ValueError("search offset and limit must be positive")
+    """Return exact GUI results using the CLI query language."""
+    if offset < 0 or limit < 0:
+        raise ValueError("search offset and limit must be nonnegative")
     selections = [MailboxSelection.from_token(token) for token in mailbox_selections or []]
     terms = parse_query(query)
+    fetch_limit = limit + 1 if limit else 0
     page = search_header_page(
-        archive, terms, limit + 1, offset, SortField(sort_by),
-        SortDirection(direction), search_attachments, selections, find_older,
+        archive, terms, fetch_limit, offset, SortField(sort_by),
+        SortDirection(direction), search_attachments, selections, find_older=True,
+        complete_sort=True,
     )
     return SearchPage(
-        results=page.results[:limit],
+        results=page.results[:limit] if limit else page.results,
         offset=offset,
-        has_more=len(page.results) > limit or page.older_results_unchecked,
-        older_results_unchecked=page.older_results_unchecked,
         highlight_terms=_highlight_terms(terms),
+        has_more=bool(limit and len(page.results) > limit),
+    )
+
+
+def search_count(
+    archive: Path,
+    query: str,
+    search_attachments: bool = False,
+    mailbox_selections: list[str] | None = None,
+    immediate_limit: int = IMMEDIATE_SEARCH_LIMIT,
+) -> SearchCount:
+    """Count a complete GUI search before materializing and sorting its headers."""
+    if immediate_limit < 1:
+        raise ValueError("immediate search limit must be positive")
+    selections = [MailboxSelection.from_token(token) for token in mailbox_selections or []]
+    observed = search_result_count(
+        archive, parse_query(query), search_attachments, selections,
+        maximum=immediate_limit + 1,
+    )
+    return SearchCount(
+        total=observed if observed <= immediate_limit else None,
+        immediate_limit=immediate_limit,
     )
 
 
 def _highlight_terms(terms: SearchTerms) -> list[str]:
-    """Return unique literal free-text values for viewer highlighting."""
+    """Return unique literal text and textual-selector values for viewer highlighting."""
     values: list[str] = []
     seen: set[str] = set()
-    for value in terms.text:
+    for value in (*terms.text, *terms.any_address, *terms.from_, *terms.to, *terms.cc, *terms.bcc, *terms.subject):
         folded = value.casefold()
         if folded and folded not in seen:
             seen.add(folded)
@@ -370,7 +399,7 @@ def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[
     database = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
     try:
         archive_row = database.execute(
-            "SELECT 'data/mbox/' || mbox_generations.filename || ':' || locations.byte_offset "
+            "SELECT 'data/mbox/' || mbox_generations.filename, locations.byte_offset "
             "FROM locations JOIN mbox_generations USING (generation_pk) WHERE locations.message_pk = ?",
             (message_pk,),
         ).fetchone()
@@ -387,7 +416,8 @@ def message_locations(archive: Path, message_pk: int) -> tuple[str | None, list[
             for row in rows
         ]
         locations.sort(key=lambda item: (not item.preferred, item.origin, item.volume, item.path))
-        return None if archive_row is None else str(archive_row[0]), locations
+        archive_path = None if archive_row is None else location_display_path(str(archive_row[0]), archive_row[1])
+        return archive_path, locations
     finally:
         database.close()
 
@@ -408,6 +438,28 @@ def _source_display_path(metadata_json: str, source_path: str, path_kind: str) -
     if not isinstance(metadata, dict):
         return source_path
     return str(metadata.get("display_name") or source_path)
+
+
+def location_display_path(path: str, offset: int | None) -> str:
+    """Present a byte offset as metadata rather than as part of a pathname."""
+    return path if not offset else f"{path}?offset={offset}"
+
+
+def _copy_path(volume_metadata: str, source_path: str, path_kind: str, source_plugin: str) -> str | None:
+    """Return a local source pathname suitable for the macOS pasteboard."""
+    if source_plugin != "file-folder" or path_kind == "provider":
+        return None
+    try:
+        metadata = json.loads(volume_metadata)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    mount_path = metadata.get("current_mount_path")
+    if not isinstance(mount_path, str) or not Path(mount_path).is_absolute():
+        return None
+    source = Path(source_path)
+    return str(source if source.is_absolute() else Path(mount_path) / source)
 
 
 def _source_location(
@@ -439,6 +491,7 @@ def _source_location(
         volume=_volume_label(volume_metadata),
         path=_source_display_path(container_metadata, source_path, path_kind),
         offset=source_offset,
+        copy_path=_copy_path(volume_metadata, source_path, path_kind, source_plugin),
         raw_sha256=raw_sha256,
         semantic_sha256=semantic_sha256,
         origin=origin,
@@ -634,9 +687,10 @@ def _cid_images(message: Message) -> dict[str, str]:
 
 def _write_bytes(destination: Path, value: bytes) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
+    temporary = Path(temporary_name)
     try:
-        with temporary.open("wb") as output:
+        with os.fdopen(descriptor, "wb") as output:
             output.write(value)
             output.flush()
             os.fsync(output.fileno())

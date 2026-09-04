@@ -217,15 +217,23 @@ the front.
 Type ordinary words to search indexed headers and message text. The result
 list is on the left and the selected message is on the right. The message view
 also shows its canonical archive mailbox and every remembered source location.
+MBOX byte locations appear as `path?offset=N` (with no suffix for offset zero).
+Use the small copy icon beside a local source path to put that pathname, without
+the offset, on the macOS pasteboard as both text and a file URL.
 Search and viewing do not modify the archive.
 
-Ordinary search words are highlighted with a yellow background wherever they
-appear in the selected message's displayed headers or body. Matching is
-case-insensitive and works in the HTML, plain-text, and raw-source views.
-Quoted text is highlighted as one phrase. Values used only in structured
-selectors such as `from:`, `subject:`, or `date:` are filters and are not
-highlighted. Highlighting changes only the viewer; it never changes canonical
-message bytes or the search index.
+Ordinary search words and textual selector values are highlighted with a yellow
+background wherever they appear in the selected message's displayed headers or
+body. Matching is case-insensitive and works in the HTML, plain-text, and
+raw-source views. Thus `from:beth` highlights `beth` in the displayed From
+header. Quoted text is highlighted as one phrase; date selectors remain filters
+and do not create highlights. Highlighting changes only the viewer; it never
+changes canonical message bytes or the search index.
+
+Mail Archiver searches an archival collection; it is not an inbox or mail
+program. A search therefore covers the collection's complete time span. Recent
+messages receive no preference beyond an explicitly selected date sort, and an
+archivist never has to ask the application to check older years.
 
 After three characters, the search box suggests matching addresses and
 subjects. Each suggestion shows the number of deduplicated messages in which
@@ -260,11 +268,19 @@ Useful search forms include:
 | `after:2024-01-01` | message is later than this date |
 
 All supplied terms must match. Use the sort controls above the result list to
-sort by date, subject, or sender. Search results initially appear 100 at a
-time. At the bottom of the list, select **Load more** to append the next 100 or
-**Load all** to append every remaining result automatically. While **Load all**
-runs, the result status shows how many messages have been displayed; starting
-a different search stops the earlier load.
+sort the complete matching set by date, subject, or sender. The application
+first counts up to 2,001 matches. If that scan ends at 2,000 or fewer, the
+count is exact and every result is displayed. Otherwise it displays the first
+2,000 in the selected sort order and automatically retrieves the rest. During
+that work the result status is red, says **Searching in background**, and shows
+the displayed count. When the background search finishes, the full result set
+and exact count are shown. Starting another search supersedes the earlier
+background work.
+
+Pressing Return with an empty search field displays no results. Enter a term,
+selector, search-box filter, or original-mailbox selection to define an
+archival search. The result pane shows this complete search-language table and
+examples when the program starts and whenever the search is empty.
 
 Select **Search attachments** to include indexed text attachments. This works
 only after an attachment index has been built:
@@ -278,7 +294,9 @@ PDF and Microsoft Office attachment extraction is not implemented yet.
 ## Viewing messages
 
 Select a search result to view it beside the result list, or double-click the
-result to open it in an independent window. The pull-down menu above the message
+result to open it in an independent window. That window has its own scrollbar,
+so the complete message, attachments, and **Locations** section remain
+reachable. The pull-down menu above the message
 lists its displayable plain-text and HTML MIME parts and always offers **Raw
 Source**, which shows the complete RFC 5322 message. Command-1 through Command-9
 select the part with that numeric MIME part ID; Command-0 and Command-Shift-U
@@ -322,7 +340,10 @@ always explicit, with an additional warning for executable or container types.
 The bottom of the message view separately lists the canonical archive mailbox
 and every source volume and source or forensic path where the message was found.
 **Save Message…** exports an exact, SHA-256-verified `.eml` copy without changing
-the archive.
+the archive. To drag a message to Finder, use the message-file icon beside its
+headers. The application creates no temporary mail files while you browse or
+hover over results. The first drag prepares the verified disposable `.eml` file;
+drag it again to transfer the ready file.
 
 ## Filter by original mailbox
 

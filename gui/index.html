@@ -49,10 +49,30 @@
             <button id="sort-direction" type="button" aria-label="Sort descending" title="Sort descending">↓</button>
           </div>
           <div id="result-list" role="listbox" aria-label="Search results" tabindex="0"></div>
-          <div id="pagination-controls" class="pagination-controls" hidden>
-            <button id="load-more" type="button" hidden>Load more</button>
-            <button id="load-all" type="button" hidden>Load all</button>
-          </div>
+          <template id="search-help-template">
+            <section class="search-help" aria-label="Search language help">
+              <h2>Search the archive</h2>
+              <p>Every search covers the complete archive. Separate terms are combined with AND; use quotes for a phrase.</p>
+              <table>
+                <thead><tr><th>Search form</th><th>Example</th></tr></thead>
+                <tbody>
+                  <tr><td>Full text</td><td><code>mit-charon</code></td></tr>
+                  <tr><td>Phrase</td><td><code>"annual report"</code></td></tr>
+                  <tr><td><code>any:</code> sender or recipient</td><td><code>any:alice@example.org</code></td></tr>
+                  <tr><td><code>from:</code> sender</td><td><code>from:alice@example.org budget</code></td></tr>
+                  <tr><td><code>to:</code> To recipient</td><td><code>to:bob@example.org</code></td></tr>
+                  <tr><td><code>cc:</code> Cc recipient</td><td><code>cc:bob@example.org</code></td></tr>
+                  <tr><td><code>bcc:</code> Bcc recipient</td><td><code>bcc:bob@example.org</code></td></tr>
+                  <tr><td><code>subject:</code> subject text</td><td><code>subject:"annual report"</code></td></tr>
+                  <tr><td><code>date:</code> UTC date</td><td><code>date:1985-10-07</code></td></tr>
+                  <tr><td><code>before:</code> excludes date</td><td><code>before:1990-01-01</code></td></tr>
+                  <tr><td><code>after:</code> excludes date</td><td><code>after:1980-12-31</code></td></tr>
+                </tbody>
+              </table>
+              <p>Combine operators and text: <code>from:alice@example.org after:1984-01-01 preservation</code></p>
+              <p>Select <strong>Search attachments</strong> to include indexed text attachments.</p>
+            </section>
+          </template>
         </aside>
 
         <article class="message" id="message-pane">
@@ -70,7 +90,7 @@
                   <h1 id="message-subject"></h1>
                   <dl id="message-headers"></dl>
                 </div>
-                <div id="message-file-well" class="message-file-well no-print" draggable="true" title="Drag this message to Finder" role="img" aria-label="Drag message file to Finder">
+                <div id="message-file-well" class="message-file-well no-print" draggable="true" title="Drag this message to Finder; the first drag prepares its temporary file" role="img" aria-label="Drag message file to Finder">
                   <span class="message-file-icon" aria-hidden="true">✉︎</span>
                   <span id="message-file-name">Message.eml</span>
                 </div>

@@ -7,17 +7,15 @@ const state = {
   sortBy: "date",
   sortDirection: "descending",
   searchAttachments: false,
-  completeSearch: false,
-  olderResultsUnchecked: false,
   highlightTerms: [],
   highlightBackground: "transparent",
-  hasMore: false,
   selected: null,
   selectionRequest: null,
   searchRequest: 0,
   partRequest: 0,
   view: null,
   dragExports: new Map(),
+  dragPreparing: new Set(),
   previewUrl: null,
   showTree: false,
   showVolumes: false,
@@ -56,13 +54,14 @@ async function initialize() {
     await runNativeSmoke();
     return;
   }
-  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "archive-label", "result-status", "result-list", "pagination-controls", "load-more", "load-all",
+  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "search-help-template", "archive-label", "result-status", "result-list",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
     "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
     "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "ingest-status-line", "error"]) {
     elements[id] = byId(id);
   }
+  renderSearchHelp();
   elements["choose-archive"].addEventListener("click", async () => {
     await chooseArchive();
     elements["choose-archive"].dataset.completed = String(Number(elements["choose-archive"].dataset.completed || 0) + 1);
@@ -70,16 +69,16 @@ async function initialize() {
   elements["search-form"].addEventListener("submit", event => {
     event.preventDefault();
     if (state.suggestionIndex >= 0) acceptSuggestion(state.suggestionIndex);
-    else { closeSuggestions(); runSearch(false); }
+    else { closeSuggestions(); runSearch(); }
   });
   elements.search.addEventListener("input", scheduleSuggestions);
   elements.search.addEventListener("keydown", navigateSuggestions);
-  elements.search.addEventListener("blur", () => window.setTimeout(closeSuggestions, 150));
-  elements["load-more"].addEventListener("click", () => runSearch(true));
-  elements["load-all"].addEventListener("click", () => runSearch(true, true));
-  elements["sort-by"].addEventListener("change", () => runSearch(false));
+  elements.search.addEventListener("blur", () => window.setTimeout(() => {
+    if (document.activeElement !== elements.search) closeSuggestions();
+  }, 150));
+  elements["sort-by"].addEventListener("change", () => runSearch());
   elements["sort-direction"].addEventListener("click", toggleSortDirection);
-  elements["search-attachments"].addEventListener("change", () => runSearch(false));
+  elements["search-attachments"].addEventListener("change", () => runSearch());
   elements["show-original-folders"].addEventListener("change", toggleMailboxTree);
   elements["show-source-volumes"].addEventListener("change", toggleSourceVolumes);
   elements["filter-set"].addEventListener("change", selectFilterSet);
@@ -106,7 +105,6 @@ async function initialize() {
   window.setInterval(refreshIngestOverview, INGEST_REFRESH_MS);
   const message = Number(parameters.get("message"));
   if (message) await selectMessage(message);
-  else if (status.ready) await runSearch(false);
 }
 
 async function runNativeSmoke() {
@@ -140,7 +138,6 @@ async function chooseArchive() {
     resetArchiveView();
     applyStatus(status);
     await refreshIngestOverview();
-    if (status.ready) await runSearch(false);
   }
 }
 
@@ -150,18 +147,15 @@ function resetArchiveView() {
   state.selected = null;
   state.selectionRequest = null;
   state.view = null;
-  state.hasMore = false;
   state.mailboxTree = [];
   state.searchFilters = [];
-  state.completeSearch = false;
-  state.olderResultsUnchecked = false;
   state.highlightTerms = [];
   state.dragExports.clear();
+  state.dragPreparing.clear();
   renderSearchFilters();
   closeSuggestions();
   clearAttachmentPreview();
-  elements["result-list"].replaceChildren();
-  updatePagination(false);
+  renderSearchHelp();
   elements["message-content"].hidden = true;
 }
 
@@ -173,7 +167,7 @@ function applyStatus(status) {
     ? `Mail Archiver — ${status.archive} (${status.message_count.toLocaleString()} messages)`
     : "Mail Archiver";
   elements.search.disabled = !status.ready;
-  elements["result-status"].textContent = status.ready ? "Enter a search or press Return for newest mail." : "Choose an archive to begin.";
+  elements["result-status"].textContent = status.ready ? "Enter a search." : "Choose an archive to begin.";
   if (status.ready) elements.search.focus();
 }
 
@@ -219,7 +213,7 @@ async function toggleMailboxTree() {
   elements["mailbox-browser"].hidden = !state.showTree;
   document.querySelector(".workspace").classList.toggle("tree-visible", state.showTree);
   if (state.showTree && !state.mailboxTree.length) await loadMailboxTree();
-  await runSearch(false);
+  await runSearch();
 }
 
 async function toggleSourceVolumes() {
@@ -237,7 +231,7 @@ async function toggleSourceVolumes() {
   }
   markCurrentSelection();
   renderMailboxTree();
-  await runSearch(false);
+  await runSearch();
 }
 
 async function loadMailboxTree() {
@@ -350,7 +344,7 @@ function updateMailboxSelection(node, checked, parents, index) {
   for (const token of [...state.mailboxSelections]) if (!index.has(token)) state.mailboxSelections.delete(token);
   markCurrentSelection();
   renderMailboxTree();
-  runSearch(false);
+  runSearch();
 }
 
 async function loadFilterSets() {
@@ -390,7 +384,7 @@ async function selectFilterSet() {
     state.mailboxSelections.clear();
     state.activeFilterSet = "";
     renderMailboxTree();
-    await runSearch(false);
+    await runSearch();
     return;
   }
   if (selected === "__current") return;
@@ -402,7 +396,7 @@ async function selectFilterSet() {
   state.activeFilterSet = filterSet.name;
   await loadMailboxTree();
   populateFilterSetMenu();
-  await runSearch(false);
+  await runSearch();
 }
 
 async function saveFilterSet(event) {
@@ -530,7 +524,7 @@ function selectSuggestion(index) {
 
 function navigateSuggestions(event) {
   if (event.key === "Backspace" && !elements.search.value && state.searchFilters.length) {
-    state.searchFilters.pop(); renderSearchFilters(); runSearch(false); return;
+    state.searchFilters.pop(); renderSearchFilters(); runSearch(); return;
   }
   if (elements["search-suggestions"].hidden) return;
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -568,7 +562,7 @@ function addAddressFilter(suggestion) {
   closeSuggestions();
   renderSearchFilters();
   elements.search.focus();
-  runSearch(false);
+  runSearch();
 }
 
 function addSubjectFilter(subject) {
@@ -577,7 +571,7 @@ function addSubjectFilter(subject) {
   closeSuggestions();
   renderSearchFilters();
   elements.search.focus();
-  runSearch(false);
+  runSearch();
 }
 
 function renderSearchFilters() {
@@ -591,7 +585,7 @@ function renderSearchFilters() {
         const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
       }));
       role.value = filter.role;
-      role.addEventListener("change", () => { filter.role = role.value; runSearch(false); });
+      role.addEventListener("change", () => { filter.role = role.value; runSearch(); });
       chip.append(role);
     }
     const label = document.createElement("span");
@@ -602,7 +596,7 @@ function renderSearchFilters() {
     remove.type = "button"; remove.className = "search-chip-remove"; remove.textContent = "×";
     remove.setAttribute("aria-label", `Remove ${filter.label} filter`);
     remove.addEventListener("click", () => {
-      state.searchFilters.splice(index, 1); renderSearchFilters(); runSearch(false); elements.search.focus();
+      state.searchFilters.splice(index, 1); renderSearchFilters(); runSearch(); elements.search.focus();
     });
     chip.append(label, remove);
     return chip;
@@ -610,77 +604,75 @@ function renderSearchFilters() {
   elements["search-filters"]?.replaceChildren(...chips);
 }
 
-async function runSearch(append, loadAll = false) {
+async function runSearch() {
   const query = effectiveQuery();
   const sortBy = elements["sort-by"].value;
   const sortDirection = state.sortDirection;
   const searchAttachments = elements["search-attachments"].checked;
-  const sameSearch = query === state.query && sortBy === state.sortBy && sortDirection === state.sortDirection && searchAttachments === state.searchAttachments;
-  let offset = append && sameSearch ? state.offset : 0;
-  let continuing = offset > 0;
-  const findOlder = append && sameSearch && (state.completeSearch || state.olderResultsUnchecked);
   const request = ++state.searchRequest;
-  elements["result-status"].textContent = loadAll ? `Loading all… ${offset.toLocaleString()} messages shown` : "Searching…";
-  updatePagination(state.hasMore, true);
+  elements["result-status"].classList.remove("background-search");
   const mailboxSelections = state.showTree ? [...state.mailboxSelections] : [];
-  while (true) {
-    const page = await call(() => window.pywebview.api.search(
-      query, offset, sortBy, sortDirection, searchAttachments, mailboxSelections, findOlder,
-    ));
-    if (request !== state.searchRequest) return;
-    if (!page) {
-      updateResultStatus(state.hasMore);
-      updatePagination(state.hasMore);
-      return;
-    }
-    state.query = query;
-    state.sortBy = sortBy;
-    state.sortDirection = sortDirection;
-    state.searchAttachments = searchAttachments;
-    state.completeSearch = findOlder;
-    state.olderResultsUnchecked = page.older_results_unchecked;
-    state.highlightTerms = page.highlight_terms;
-    if (!continuing) elements["result-list"].replaceChildren();
-    for (const result of page.results) elements["result-list"].append(resultRow(result));
-    queuePreviews(page.results.map(result => result.message_pk), request);
-    offset += page.results.length;
-    continuing = true;
-    state.offset = offset;
-    state.hasMore = page.has_more;
-    updateResultStatus(page.has_more, loadAll && page.has_more);
-    if (!loadAll || !page.has_more || !page.results.length) break;
-  }
-  updatePagination(state.hasMore);
-}
-
-function updateResultStatus(hasMore, loadingAll = false) {
-  const count = state.offset.toLocaleString();
-  elements["result-status"].textContent = loadingAll
-    ? `Loading all… ${count} messages shown`
-    : `${count} message${state.offset === 1 ? "" : "s"}${hasMore ? " shown" : ""}`;
-}
-
-function updatePagination(hasMore, busy = false) {
-  elements["pagination-controls"].hidden = busy || !hasMore;
-  for (const id of ["load-more", "load-all"]) {
-    elements[id].hidden = busy || !hasMore;
-    elements[id].disabled = busy;
-  }
-  const button = elements["load-more"];
-  if (!state.olderResultsUnchecked) {
-    button.textContent = "Load more";
+  if (!query.trim() && !mailboxSelections.length) {
+    Object.assign(state, {query, sortBy, sortDirection, searchAttachments, offset: 0});
+    renderSearchHelp();
+    elements["result-status"].textContent = "Enter a search.";
     return;
   }
-  const dates = [...document.querySelectorAll("#result-list .result")]
-    .map(row => new Date(row.dataset.dateUtc))
-    .filter(date => !Number.isNaN(date.valueOf()))
-    .sort((left, right) => left - right);
-  const range = dates.length
-    ? dates[0].valueOf() === dates[dates.length - 1].valueOf()
-      ? formatDate(dates[0].toISOString())
-      : `${formatDate(dates[0].toISOString())}–${formatDate(dates[dates.length - 1].toISOString())}`
-    : "";
-  button.textContent = range ? `Find older ones — shown: ${range}` : "Find older ones";
+  elements["result-status"].textContent = "Searching…";
+  await runCompleteSearch({query, sortBy, sortDirection, searchAttachments, mailboxSelections, request});
+}
+
+async function runCompleteSearch(context) {
+  const {query, sortBy, sortDirection, searchAttachments, mailboxSelections, request} = context;
+  const summary = await call(() => window.pywebview.api.search_count(
+    query, searchAttachments, mailboxSelections,
+  ));
+  if (request !== state.searchRequest) return;
+  if (!summary) return;
+  Object.assign(state, {query, sortBy, sortDirection, searchAttachments, offset: 0});
+  elements["result-list"].replaceChildren();
+  if (summary.total === 0) { updateResultStatus(); return; }
+  const first = await call(() => window.pywebview.api.search(
+    query, 0, sortBy, sortDirection, searchAttachments, mailboxSelections, summary.immediate_limit,
+  ));
+  if (request !== state.searchRequest) return;
+  if (!first) { updateResultStatus(); return; }
+  state.highlightTerms = first.highlight_terms;
+  appendResults(first.results, request);
+  state.offset = first.results.length;
+  if (summary.total !== null && state.offset >= summary.total) { updateResultStatus(); return; }
+  elements["result-status"].classList.add("background-search");
+  elements["result-status"].textContent = `Searching in background… ${state.offset.toLocaleString()} messages shown`;
+  const remainder = await call(() => window.pywebview.api.search(
+    query, state.offset, sortBy, sortDirection, searchAttachments, mailboxSelections, 0,
+  ));
+  if (request !== state.searchRequest) return;
+  elements["result-status"].classList.remove("background-search");
+  if (!remainder) {
+    elements["result-status"].textContent = `${state.offset.toLocaleString()} messages shown; background search failed`;
+    return;
+  }
+  appendResults(remainder.results, request);
+  state.offset += remainder.results.length;
+  updateResultStatus();
+}
+
+function renderSearchHelp() {
+  elements["result-list"].replaceChildren(elements["search-help-template"].content.cloneNode(true));
+}
+
+function appendResults(results, request) {
+  const fragment = document.createDocumentFragment();
+  for (const result of results) fragment.append(resultRow(result));
+  elements["result-list"].append(fragment);
+  for (let start = 0; start < results.length; start += 100) {
+    queuePreviews(results.slice(start, start + 100).map(result => result.message_pk), request);
+  }
+}
+
+function updateResultStatus() {
+  const count = state.offset.toLocaleString();
+  elements["result-status"].textContent = `${count} message${state.offset === 1 ? "" : "s"}`;
 }
 
 function toggleSortDirection() {
@@ -689,7 +681,7 @@ function toggleSortDirection() {
   elements["sort-direction"].textContent = descending ? "↓" : "↑";
   elements["sort-direction"].ariaLabel = descending ? "Sort descending" : "Sort ascending";
   elements["sort-direction"].title = elements["sort-direction"].ariaLabel;
-  runSearch(false);
+  runSearch();
 }
 
 function resultRow(result) {
@@ -700,7 +692,6 @@ function resultRow(result) {
   row.setAttribute("aria-selected", "false");
   row.dataset.messagePk = result.message_pk;
   row.dataset.dateUtc = result.date_utc;
-  row.draggable = true;
   const subjectLine = document.createElement("div");
   subjectLine.className = "result-subject-line";
   const subject = document.createElement("div");
@@ -732,7 +723,6 @@ function resultRow(result) {
     await call(() => window.pywebview.api.open_message_window(result.message_pk, state.highlightTerms));
     row.dataset.openedWindow = "true";
   });
-  installDrag(row, () => result.message_pk);
   return row;
 }
 
@@ -793,23 +783,40 @@ async function selectMessage(messagePk) {
   renderAttachments(view.attachments);
   renderLocations(view);
   await showPart(view.preferred_part_id, false);
-  prepareDrag(messagePk);
 }
 
 function renderLocations(view) {
-  const locations = [];
-  if (view.archive_path) locations.push(["Archive mailbox", view.archive_path]);
-  for (const source of view.source_locations) {
-    const origin = source.preferred ? `Preferred source (${source.origin})` : source.origin;
-    locations.push([origin, source.volume]);
-    locations.push(["Source path", source.offset === null ? source.path : `${source.path}:${source.offset}`]);
-  }
-  elements["provenance-section"].hidden = locations.length === 0;
-  elements["message-locations"].replaceChildren(...locations.flatMap(([label, value]) => {
+  const nodes = [];
+  const addLocation = (label, value, copyIndex = null) => {
     const term = document.createElement("dt"); term.textContent = `${label}:`;
-    const detail = document.createElement("dd"); detail.textContent = value;
-    return [term, detail];
-  }));
+    const detail = document.createElement("dd");
+    const text = document.createElement("span"); text.textContent = value;
+    detail.append(text);
+    if (copyIndex !== null) {
+      const copy = document.createElement("button");
+      copy.className = "copy-source-path";
+      copy.type = "button";
+      copy.textContent = "⧉";
+      copy.title = "Copy source path";
+      copy.setAttribute("aria-label", "Copy source path");
+      copy.addEventListener("click", () => copySourcePath(copyIndex));
+      detail.append(copy);
+    }
+    nodes.push(term, detail);
+  };
+  if (view.archive_path) addLocation("Archive mailbox", view.archive_path);
+  view.source_locations.forEach((source, index) => {
+    const origin = source.preferred ? `Preferred source (${source.origin})` : source.origin;
+    addLocation(origin, source.volume);
+    addLocation("Source path", source.offset ? `${source.path}?offset=${source.offset}` : source.path,
+      source.copy_path ? index : null);
+  });
+  elements["provenance-section"].hidden = nodes.length === 0;
+  elements["message-locations"].replaceChildren(...nodes);
+}
+
+async function copySourcePath(sourceLocationIndex) {
+  await call(() => window.pywebview.api.copy_source_path(state.selected, sourceLocationIndex));
 }
 
 function navigateResults(event) {
@@ -1002,10 +1009,14 @@ function clearAttachmentPreview() {
 }
 
 function installDrag(element, messagePk) {
-  element.addEventListener("pointerenter", () => prepareDrag(messagePk()));
-  element.addEventListener("dragstart", event => {
-    const info = state.dragExports.get(messagePk());
-    if (!info) { event.preventDefault(); showError("Message export is still being prepared; drag again."); return; }
+  element.addEventListener("dragstart", async event => {
+    const message = messagePk();
+    const info = state.dragExports.get(message);
+    if (!info) {
+      event.preventDefault();
+      await prepareDrag(message);
+      return;
+    }
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData("text/uri-list", info.url);
     event.dataTransfer.setData("DownloadURL", `message/rfc822:${info.filename}:${info.url}`);
@@ -1014,8 +1025,10 @@ function installDrag(element, messagePk) {
 }
 
 async function prepareDrag(messagePk) {
-  if (!messagePk || state.dragExports.has(messagePk)) return;
+  if (!messagePk || state.dragExports.has(messagePk) || state.dragPreparing.has(messagePk)) return;
+  state.dragPreparing.add(messagePk);
   const info = await call(() => window.pywebview.api.prepare_drag(messagePk));
+  state.dragPreparing.delete(messagePk);
   if (info) {
     state.dragExports.set(messagePk, info);
     if (state.selected === messagePk) elements["message-file-name"].textContent = info.filename;

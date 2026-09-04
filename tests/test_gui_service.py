@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import mailbox
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -26,6 +28,7 @@ from mailarchiver.gui_service import (
     message_previews,
     render_part,
     searchable_message_count,
+    search_count,
     search_page,
     search_suggestions,
     write_attachment,
@@ -37,7 +40,7 @@ from mailarchiver.gui_app import (
     application_menu,
     application_metadata,
 )
-from mailarchiver.mailsearch import _search_statement, parse_query
+from mailarchiver.mailsearch import RECENT_FTS_SCAN_LIMIT, _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
 from mailarchiver.mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, MailboxTreeNode, mailbox_tree
 from mailarchiver.plugin_api import SourceContainerMetadata, SourceRelationship
@@ -167,9 +170,9 @@ def test_gui_search_field_preserves_selector_and_quote_semantics(tmp_path: Path)
 
     assert [result.subject for result in search_page(archive, "subject:annual report").results] == ["annual plan"]
     assert search_page(archive, 'subject:"annual report"').results == []
-    page = search_page(archive, 'subject:"annual plan" report REPORT')
+    page = search_page(archive, 'from:sender subject:"annual plan" report REPORT')
     assert [result.subject for result in page.results] == ["annual plan"]
-    assert page.highlight_terms == ["report"]
+    assert page.highlight_terms == ["report", "sender", "annual plan"]
 
 
 def test_gui_highlight_configuration_is_packaged_and_rejects_css_injection(tmp_path: Path) -> None:
@@ -184,19 +187,51 @@ def test_gui_highlight_configuration_is_packaged_and_rejects_css_injection(tmp_p
         load_configuration(invalid)
 
 
-def test_gui_partial_recent_search_defers_complete_older_search(tmp_path: Path) -> None:
-    """Requirement: partial recent FTS results display before an explicit older-message search."""
+def test_gui_count_and_search_cover_the_complete_archive_time_span(tmp_path: Path) -> None:
+    """Requirement: an archive query counts and returns matches older than the recent catalog window."""
+    archive = make_gui_archive(tmp_path)
+    catalog = create_catalog(archive / "archive.sqlite3")
+    try:
+        sender = address_pk(catalog, "recent@example.net")
+        catalog.executemany(
+            "INSERT INTO messages(message_id_normalized, sha256, sender_address_pk, subject, date_utc, "
+            "date_source, category) VALUES (?, ?, ?, '', '2025-01-01T00:00:00+00:00', 'date', 'Archive')",
+            (
+                (f"recent-{number}@example", hashlib.sha256(f"recent-{number}".encode()).hexdigest(), sender)
+                for number in range(RECENT_FTS_SCAN_LIMIT)
+            ),
+        )
+        catalog.commit()
+    finally:
+        catalog.close()
+
+    summary = search_count(archive, "report")
+    results = search_page(archive, "report")
+
+    assert summary.total == 1
+    assert summary.immediate_limit == 2_000
+    assert [result.message_pk for result in results.results] == [1]
+    assert not results.has_more
+
+
+def test_gui_unlimited_remainder_continues_the_same_sorted_result_set(tmp_path: Path) -> None:
+    """Requirement: a background continuation starts after the immediate result prefix without duplicates."""
     archive = make_gui_archive(tmp_path)
 
-    recent = search_page(archive, "report")
-    assert [result.message_pk for result in recent.results] == [1]
-    assert recent.older_results_unchecked
-    assert recent.has_more
+    summary = search_count(archive, "sender", immediate_limit=1)
+    first = search_page(
+        archive, "sender", limit=1, sort_by="subject", direction="ascending",
+    )
+    remainder = search_page(
+        archive, "sender", offset=1, limit=0, sort_by="subject", direction="ascending"
+    )
 
-    older = search_page(archive, "report", offset=1, find_older=True)
-    assert older.results == []
-    assert not older.older_results_unchecked
-    assert not older.has_more
+    assert summary.total is None
+    assert summary.immediate_limit == 1
+    assert [result.message_pk for result in first.results] == [1]
+    assert first.has_more
+    assert [result.message_pk for result in remainder.results] == [2]
+    assert not remainder.has_more
 
 
 def test_gui_application_metadata_names_the_product() -> None:
@@ -224,6 +259,20 @@ def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:
         assert [menu.title for menu in menus] == ["Windows"]
         assert [item.title for item in menus[0].items] == ["Ingest"]
         assert menus[0].items[0].function()
+    finally:
+        api.close()
+
+
+def test_gui_copy_source_path_reports_missing_macos_bridge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement: copying a local source path reports unavailable macOS support."""
+    archive = make_gui_archive(tmp_path)
+    api = GuiApi(archive)
+    monkeypatch.setitem(sys.modules, "AppKit", None)
+    try:
+        with pytest.raises(ValueError, match="requires macOS with PyObjC installed"):
+            api.copy_source_path(1, 0)
     finally:
         api.close()
 
@@ -415,12 +464,14 @@ def test_gui_displays_archive_and_source_locations(tmp_path: Path) -> None:
 
     view = describe_message(archive, 1)
 
-    assert view.archive_path == "data/mbox/2024-Archive1.mbox:0"
+    assert view.archive_path == "data/mbox/2024-Archive1.mbox"
     assert [(item.volume, item.path, item.offset) for item in view.source_locations] == [
         ("Fixture Backup", "mail/simple.eml", 0)
     ]
     assert view.source_locations[0].origin == "Local source"
     assert not view.source_locations[0].preferred
+    assert view.source_locations[0].copy_path == "/Volumes/Fixture/mail/simple.eml"
+    assert describe_message(archive, 2).archive_path.startswith("data/mbox/2024-Archive1.mbox?offset=")
 
 
 def test_gui_prefers_direct_cloud_observation_over_local_cache(tmp_path: Path) -> None:
@@ -519,6 +570,17 @@ def test_gui_exports_exact_eml_and_decoded_attachment(tmp_path: Path) -> None:
     content = attachment_content(archive, 2, pdf.part_id)
     assert base64.b64decode(content.content_base64) == pdf_path.read_bytes()
     assert content.filename == "report.pdf"
+
+
+def test_gui_concurrent_drag_exports_have_distinct_temporary_paths(tmp_path: Path) -> None:
+    """Requirement: concurrent drag preparation cannot share a temporary export file."""
+    archive = make_gui_archive(tmp_path)
+    destination = tmp_path / "drag" / "message.eml"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda _: write_message(archive, 2, destination), range(16)))
+
+    assert destination.read_bytes() == MULTIPART_MESSAGE
 
 
 def test_gui_flags_executable_attachment_types() -> None:

@@ -1,4 +1,4 @@
-/* Requirement: the real GUI can load one page or every remaining search-result page. */
+/* Requirement: archive searches automatically return matches across the collection's full time span. */
 (() => {
   "use strict";
   const checks = [];
@@ -36,16 +36,17 @@
 
   (async () => {
     await waitFor(() => typeof window.pywebview?.api?.search === "function", "native bridge injected");
-    await waitFor(() => rows().length === 100, "initial search displays first 100 results", 20000);
+    await waitFor(() => rows().length === 0 && document.getElementById("result-status").textContent === "Enter a search.", "archive opens without an implicit search");
+    const help = document.querySelector(".search-help");
+    assert(help?.textContent.includes("Every search covers the complete archive"), "startup displays archival search guidance");
+    for (const operator of ["any:", "from:", "to:", "cc:", "bcc:", "subject:", "date:", "before:", "after:"]) {
+      assert(help.textContent.includes(operator), `search help documents ${operator}`);
+    }
     assert(document.getElementById("archive-label").textContent.includes("archive"), "archive status displayed");
     assert(document.title.includes("archive") && document.title.includes("(207 messages)"), "window title identifies archive and total message count");
     await waitFor(() => document.getElementById("ingest-status-line").textContent.includes("Last ingest completed"), "completed ingest status appears in the main status line");
     document.getElementById("ingest-status-line").click();
     await waitFor(() => document.getElementById("ingest-status-line").dataset.openedWindow === "true", "ingest status line invokes the independent ingest window");
-    assert(!document.getElementById("load-more").hidden, "pagination control displayed");
-    assert(!document.getElementById("load-all").hidden, "load-all control displayed");
-    assert(document.getElementById("load-more").textContent === "Load more", "ordinary pagination is labeled Load more");
-    await waitFor(() => document.querySelector(".result-preview")?.textContent.length > 0, "background preview displayed");
 
     const searchInput = document.getElementById("search");
     searchInput.value = "beth";
@@ -73,7 +74,7 @@
     role.value = "any"; role.dispatchEvent(new Event("change", {bubbles: true}));
     await waitFor(() => rows().length === 2, "Any menu restores sender-or-recipient matching");
     document.querySelector(".search-chip-remove").click();
-    await waitFor(() => !document.querySelector(".search-chip") && rows().length === 100, "address filter chip can be removed");
+    await waitFor(() => !document.querySelector(".search-chip") && rows().length === 0, "address filter chip can be removed without an empty search");
 
     searchInput.value = "beth";
     searchInput.dispatchEvent(new Event("input", {bubbles: true}));
@@ -83,44 +84,33 @@
     bethSubject.dispatchEvent(new MouseEvent("mousedown", {bubbles: true, cancelable: true}));
     await waitFor(() => document.querySelector(".search-chip")?.textContent.includes("Subject:") && rows().length === 1, "subject completion creates a subject filter chip");
     document.querySelector(".search-chip-remove").click();
-    await waitFor(() => !document.querySelector(".search-chip") && rows().length === 100, "subject filter chip can be removed");
+    await waitFor(() => !document.querySelector(".search-chip") && rows().length === 0, "subject filter chip can be removed without an empty search");
 
-    await search("bulk", 100, false);
-    assert(
-      document.getElementById("load-more").textContent.startsWith("Find older ones — shown:"),
-      "deferred pagination names older results and the displayed date range",
+    await search("from:beth", 1, false);
+    rows()[0].click();
+    await waitFor(
+      () => [...document.querySelectorAll("#message-headers mark.search-highlight")]
+        .some(mark => mark.textContent.toLowerCase() === "beth"),
+      "from selector highlights its matching displayed header value",
     );
-    document.getElementById("load-more").click();
-    await waitFor(() => rows().length === 200, "Find older ones appends a complete-query page");
-    assert(document.getElementById("load-more").textContent === "Load more", "complete-query continuation returns to Load more");
-    document.getElementById("load-more").click();
-    await waitFor(() => rows().length === 203, "Load more appends the final complete-query page");
-    assert(document.getElementById("load-more").hidden, "Load more hides on the final page");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert(document.getElementById("message-file-name").textContent === "Message.eml", "selecting a message does not prepare a temporary file");
 
-    await search("", 100, false);
-    document.getElementById("load-all").click();
-    document.getElementById("search").value = 'subject:"Rich UI message"';
-    document.getElementById("search-form").dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
-    await waitFor(() => rows().length === 1 && subjects()[0] === "Rich UI message", "a newer search stops an in-progress Load all");
-    await search("", 100, false);
-    document.getElementById("load-all").click();
-    assert(document.getElementById("result-status").textContent.startsWith("Loading all…"), "Load all reports running progress");
-    await waitFor(() => rows().length === 207, "Load all appends every remaining page", 20000);
-    assert(document.getElementById("load-more").hidden, "Load More hides on the final page");
-    assert(document.getElementById("load-all").hidden, "Load all hides on the final page");
+    await search("bulk", 203, false);
     await waitFor(
       () => rows().every(row => row.querySelector(".result-preview").textContent.length > 0),
-      "serialized preview queue fills every loaded result",
+      "serialized preview queue fills every complete-search result",
       20000,
     );
     const chooseArchive = document.getElementById("choose-archive");
     const completedChoices = chooseArchive.dataset.completed || "0";
     chooseArchive.click();
     await waitFor(
-      () => chooseArchive.dataset.completed !== completedChoices && rows().length === 100 && document.getElementById("result-status").textContent !== "Searching…",
-      "choose-archive control refreshes the active archive",
+      () => chooseArchive.dataset.completed !== completedChoices && rows().length === 0,
+      "choose-archive control refreshes the active archive without searching",
     );
 
+    await search("bulk", 203, false);
     const sort = document.getElementById("sort-by");
     sort.value = "subject";
     sort.dispatchEvent(new Event("change", {bubbles: true}));
@@ -129,16 +119,10 @@
     assert(document.getElementById("sort-direction").textContent === "↑", "sort direction control updates");
 
     await search("Appendixquartz", 0, false);
-    assert(
-      !document.getElementById("load-more").hidden && document.getElementById("load-more").textContent === "Find older ones",
-      "partial recent search offers an explicit complete older-message search",
-    );
-    document.getElementById("load-more").click();
-    await waitFor(() => document.getElementById("load-more").hidden, "complete older-message search confirms no body match");
     await search("Appendixquartz", 1, true);
     assert(subjects()[0] === "Rich UI message", "attachment-only match identifies its message");
 
-    await search("subject:Bulk", 100, false);
+    await search("subject:Bulk", 203, false);
     const firstBulk = rows()[0];
     firstBulk.click();
     await waitFor(() => firstBulk.classList.contains("selected"), "result click selects a message");
@@ -161,6 +145,12 @@
     assert(document.getElementById("message-headers").textContent.includes("curator@example.net"), "message headers displayed");
     assert(document.getElementById("message-locations").textContent.includes("Source path"), "source provenance displayed");
     assert(document.getElementById("message-locations").textContent.includes("Archive mailbox"), "archive provenance displayed");
+    assert(!document.getElementById("message-locations").textContent.includes(".mbox:"), "locations do not present offsets as pathname suffixes");
+    assert(document.querySelector(".copy-source-path")?.title === "Copy source path", "local source path has a copy control");
+    document.body.classList.add("standalone");
+    const standalonePane = document.getElementById("message-pane");
+    assert(getComputedStyle(standalonePane).overflowY === "auto" && standalonePane.scrollHeight > standalonePane.clientHeight, "standalone message window scrolls to its complete message and locations");
+    document.body.classList.remove("standalone");
     assert(document.querySelectorAll("#attachment-list .attachment").length === 2, "attachment list displayed");
     assert(!document.getElementById("remote-content").hidden, "remote HTML is initially blocked");
     const htmlFrame = document.querySelector("#body-view iframe");
@@ -198,15 +188,28 @@
     window.print = () => { prints += 1; };
     document.getElementById("print-message").click();
     assert(prints === 1, "print control invokes browser printing");
+    const messageFileName = document.getElementById("message-file-name");
+    const beforeHover = messageFileName.textContent;
     document.getElementById("message-file-well").dispatchEvent(new PointerEvent("pointerenter", {bubbles: true}));
-    await waitFor(() => document.getElementById("message-file-name").textContent !== "Message.eml", "drag export is prepared");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert(messageFileName.textContent === beforeHover, "hovering does not prepare a message file");
     const transfer = {values: {}, effectAllowed: "", setData(type, value) { this.values[type] = value; }};
     const drag = new Event("dragstart", {bubbles: true, cancelable: true});
     Object.defineProperty(drag, "dataTransfer", {value: transfer});
     document.getElementById("message-file-well").dispatchEvent(drag);
-    assert(transfer.values.DownloadURL?.startsWith("message/rfc822:"), "drag event publishes an RFC 822 download");
+    if (!transfer.values.DownloadURL) {
+      await waitFor(() => messageFileName.textContent !== beforeHover, "first drag prepares the message file");
+      const preparedTransfer = {values: {}, effectAllowed: "", setData(type, value) { this.values[type] = value; }};
+      const preparedDrag = new Event("dragstart", {bubbles: true, cancelable: true});
+      Object.defineProperty(preparedDrag, "dataTransfer", {value: preparedTransfer});
+      document.getElementById("message-file-well").dispatchEvent(preparedDrag);
+      assert(preparedTransfer.values.DownloadURL?.startsWith("message/rfc822:"), "prepared drag publishes an RFC 822 download");
+    } else {
+      assert(transfer.values.DownloadURL.startsWith("message/rfc822:"), "explicit drag publishes an RFC 822 download");
+    }
 
-    await search("", 100, false);
+    await search("", 0, false);
+    assert(document.querySelector(".search-help"), "empty search restores search-language help");
     const showTree = document.getElementById("show-original-folders");
     assert(document.getElementById("mailbox-browser").hidden, "original-mailbox tree starts hidden");
     showTree.checked = true;
@@ -219,17 +222,14 @@
       `single-message files collapse into their containing folder; labels=${mailboxLabels.join(",")}`,
     );
     treeNode("Inbox").querySelector("input[type=checkbox]").click();
-    await waitFor(() => rows().length === 100 && !document.getElementById("load-more").hidden, "mailbox selection filters before pagination");
-    document.getElementById("load-more").click();
-    await waitFor(() => rows().length === 200, "Load more appends one mailbox-filtered page");
-    assert(!document.getElementById("load-more").hidden, "Load more remains available before the final mailbox-filtered page");
+    await waitFor(() => rows().length === 204, "mailbox selection returns its complete archive result set");
 
     showTree.checked = false;
     showTree.dispatchEvent(new Event("change", {bubbles: true}));
-    await waitFor(() => document.getElementById("mailbox-browser").hidden && rows().length === 100, "hiding tree disables its filter");
+    await waitFor(() => document.getElementById("mailbox-browser").hidden && rows().length === 0, "hiding tree disables its filter without running an empty search");
     showTree.checked = true;
     showTree.dispatchEvent(new Event("change", {bubbles: true}));
-    await waitFor(() => !document.getElementById("mailbox-browser").hidden && rows().length === 100, "showing tree restores its filter selection");
+    await waitFor(() => !document.getElementById("mailbox-browser").hidden && rows().length === 204, "showing tree restores its complete filter result set");
 
     const showVolumes = document.getElementById("show-source-volumes");
     showVolumes.checked = true;
@@ -248,13 +248,11 @@
     await waitFor(() => [...filterSets.options].some(option => option.textContent === "Work"), "named filter set is saved");
     filterSets.value = "";
     filterSets.dispatchEvent(new Event("change", {bubbles: true}));
-    await waitFor(() => rows().length === 100 && !document.getElementById("load-more").hidden, "None disables the saved mailbox filter");
+    await waitFor(() => rows().length === 0, "None disables the saved mailbox filter without running an empty search");
     filterSets.value = "Work";
     filterSets.dispatchEvent(new Event("change", {bubbles: true}));
     await sleep(300);
-    await waitFor(() => rows().length === 100 && !document.getElementById("load-more").hidden, "named filter set restores its selection");
-    document.getElementById("load-more").click();
-    await waitFor(() => rows().length === 200, "restored filter set appends one page from the saved mailbox union");
+    await waitFor(() => rows().length === 204, "named filter set restores its complete selection");
     filterSets.value = "__save__";
     filterSets.dispatchEvent(new Event("change", {bubbles: true}));
     await waitFor(() => document.getElementById("save-filter-dialog").open, "Save can clone the active filter set");
