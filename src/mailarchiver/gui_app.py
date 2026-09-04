@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -40,6 +41,7 @@ from .gui_service import (
     search_suggestions,
     write_attachment,
     write_message,
+    write_messages_zip,
 )
 from .ingest_status import IngestHistory, IngestStatus, latest_ingest_status, read_ingest_history
 from .mailbox_tree import FilterSet, FilterSetStore, MailboxSelection, mailbox_tree
@@ -71,6 +73,7 @@ class GuiIngestOverview(BaseModel):
 class DragExport(BaseModel):
     filename: str
     url: str
+    content_type: str
 
 
 class OpenResult(BaseModel):
@@ -461,6 +464,15 @@ class GuiApi:
         pasteboard.setPropertyList_forType_([path], AppKit.NSFilenamesPboardType)
         return path
 
+    def copy_visible_text(self, text: str) -> str:
+        """Copy the user-visible message text to the macOS pasteboard."""
+        import AppKit
+
+        pasteboard = AppKit.NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(text, AppKit.NSPasteboardTypeString)
+        return text
+
     def part(self, message_pk: int, part_id: int, allow_remote: bool = False) -> dict[str, object]:
         return render_part(self._archive(), message_pk, part_id, allow_remote).model_dump(mode="json")
 
@@ -505,11 +517,25 @@ class GuiApi:
         write_attachment(self._archive(), message_pk, part_id, destination)
         return str(destination)
 
-    def prepare_drag(self, message_pk: int) -> dict[str, str]:
-        view = describe_message(self._archive(), message_pk)
-        destination = self.temporary_directory / export_filename(view)
-        write_message(self._archive(), message_pk, destination)
-        return DragExport(filename=destination.name, url=destination.as_uri()).model_dump()
+    def prepare_drag(self, message_pks: list[int]) -> dict[str, str]:
+        """Prepare one explicit Finder drag without proactively exporting mail."""
+        unique = list(dict.fromkeys(message_pks))
+        if not unique:
+            raise ValueError("select at least one message to drag")
+        archive = self._archive()
+        if len(unique) == 1:
+            view = describe_message(archive, unique[0])
+            destination = self.temporary_directory / export_filename(view)
+            write_message(archive, unique[0], destination)
+            return DragExport(
+                filename=destination.name, url=destination.as_uri(), content_type="message/rfc822"
+            ).model_dump()
+        digest = hashlib.sha256(",".join(map(str, sorted(unique))).encode()).hexdigest()[:12]
+        destination = self.temporary_directory / f"messages-{digest}" / f"Mail Archiver Messages ({len(unique)}).zip"
+        write_messages_zip(archive, unique, destination)
+        return DragExport(
+            filename=destination.name, url=destination.as_uri(), content_type="application/zip"
+        ).model_dump()
 
     def open_attachment(self, message_pk: int, part_id: int, confirmed: bool = False) -> dict[str, object]:
         descriptor = attachment_descriptor(self._archive(), message_pk, part_id)
@@ -655,6 +681,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only graphical search of a mailarchiver archive.")
     parser.add_argument("--archive", type=Path, help="directory containing archive.sqlite3 and search.sqlite3")
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--smoke-html-find", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--smoke-report", type=Path, help=argparse.SUPPRESS)
     return parser
 
@@ -663,6 +690,8 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.smoke_test != (args.smoke_report is not None):
         raise SystemExit("--smoke-test and --smoke-report must be used together")
+    if args.smoke_html_find and not args.smoke_test:
+        raise SystemExit("--smoke-html-find requires --smoke-test")
     smoke = NativeSmokeController(args.smoke_report) if args.smoke_report else None
     if smoke:
         smoke.start_watchdog()
@@ -680,6 +709,8 @@ def main() -> int:
     url = str(GUI_DIRECTORY / "index.html")
     if smoke:
         url += "?native-smoke=1"
+        if args.smoke_html_find:
+            url += "&native-html-find-smoke=1"
     window = webview.create_window(
         _window_title(archive, int(initial_status["message_count"])),
         url,
@@ -687,7 +718,7 @@ def main() -> int:
         width=1400,
         height=900,
         min_size=(900, 560),
-        hidden=args.smoke_test,
+        hidden=args.smoke_test and not args.smoke_html_find,
         text_select=True,
         draggable=True,
     )

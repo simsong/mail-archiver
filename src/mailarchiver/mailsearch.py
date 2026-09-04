@@ -242,6 +242,12 @@ def _search_statement(
                 "CROSS JOIN messages m INDEXED BY messages_sender_address_pk "
                 "ON m.sender_address_pk = sender.address_pk "
             )
+        if terms.from_:
+            candidate_source = (
+                "email_addresses sender INDEXED BY email_addresses_lower_address "
+                "CROSS JOIN messages m INDEXED BY messages_sender_address_pk "
+                "ON m.sender_address_pk = sender.address_pk "
+            )
     sql = (
         "WITH candidates AS MATERIALIZED ("
         "SELECT m.message_pk, m.sha256, sender.address AS sender, m.subject, m.date_utc "

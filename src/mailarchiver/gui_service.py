@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import zipfile
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
@@ -358,7 +359,14 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
     if legacy_x_html is not None:
         body_parts.append(BodyPart(part_id=LEGACY_X_HTML_PART_ID, content_type="text/html", label="HTML — legacy x-html"))
     body_parts.append(BodyPart(part_id=RAW_PART_ID, content_type="message/rfc822", label="Raw Source"))
-    html_part = next((part.part_id for part in body_parts if part.content_type == "text/html"), None)
+    html_candidates = [
+        (part.part_id, len(decoded_part(_part(message, part.part_id)).strip()))
+        for part in body_parts
+        if part.content_type == "text/html" and part.part_id >= 0
+    ]
+    html_part = max(html_candidates, key=lambda candidate: candidate[1])[0] if html_candidates else None
+    if legacy_x_html is not None:
+        html_part = LEGACY_X_HTML_PART_ID
     text_part = next((part.part_id for part in body_parts if part.content_type == "text/plain"), RAW_PART_ID)
     archive_path, source_locations = message_locations(archive, message_pk)
     date_utc, date_source = message_catalog_date(archive, message_pk)
@@ -549,6 +557,24 @@ def attachment_descriptor(archive: Path, message_pk: int, part_id: int) -> Attac
 def write_message(archive: Path, message_pk: int, destination: Path) -> None:
     """Write an exact, verified RFC 5322 export outside the canonical archive."""
     _write_bytes(destination, read_message_bytes(archive, message_pk))
+
+
+def write_messages_zip(archive: Path, message_pks: list[int], destination: Path) -> None:
+    """Atomically write exact RFC 5322 exports as a ZIP created for an explicit drag."""
+    unique = list(dict.fromkeys(message_pks))
+    if len(unique) < 2:
+        raise ValueError("a ZIP export requires at least two messages")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
+    temporary = Path(temporary_name)
+    os.close(descriptor)
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as output:
+            for message_pk in unique:
+                output.writestr(export_filename(describe_message(archive, message_pk)), read_message_bytes(archive, message_pk))
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def write_attachment(archive: Path, message_pk: int, part_id: int, destination: Path) -> None:

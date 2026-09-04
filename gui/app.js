@@ -7,12 +7,33 @@ const state = {
   sortBy: "date",
   sortDirection: "descending",
   searchAttachments: false,
+  results: [],
+  resultPreviews: new Map(),
+  resultPreviewPending: new Set(),
+  resultPreviewBatch: new Set(),
+  resultPreviewTimer: null,
+  resultSelection: new Set(),
+  resultTable: null,
+  resultRangeAnchor: null,
+  resultRangeSelection: [],
+  resultRangeActive: false,
+  suppressResultClick: false,
   highlightTerms: [],
+  messageFindQuery: "",
+  messageFindTargets: [],
+  messageFindIndex: -1,
+  messageFindRender: Promise.resolve(false),
+  messageFindRenderRequest: 0,
+  messageFindTimer: null,
+  messageFindMarker: 0,
+  commandAContext: "",
   highlightBackground: "transparent",
   selected: null,
   selectionRequest: null,
   searchRequest: 0,
   partRequest: 0,
+  remoteContentAuthorizedMessage: null,
+  remoteContentAuthorizedPart: null,
   view: null,
   dragExports: new Map(),
   dragPreparing: new Set(),
@@ -37,9 +58,16 @@ let initialized = false;
 let previewQueue = Promise.resolve();
 const SUGGESTION_MINIMUM = 3;
 const SUGGESTION_DELAY_MS = 120;
+const MESSAGE_FIND_DELAY_MS = 120;
+const FRAME_LOAD_TIMEOUT_MS = 10_000;
 const SUGGESTION_LIMIT = 20;
 const INGEST_REFRESH_MS = 1000;
+const RESULT_INITIAL_LIMIT = 2_000;
 
+window.addEventListener("resize", () => {
+  const frame = elements["body-view"]?.querySelector(".html-frame");
+  if (frame) window.setTimeout(() => refreshHtmlFrameLayout(frame), 0);
+});
 window.addEventListener("pywebviewready", initialize);
 window.setTimeout(() => {
   if (window.pywebview?.api?.status) initialize();
@@ -54,13 +82,15 @@ async function initialize() {
     await runNativeSmoke();
     return;
   }
-  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "search-help-template", "archive-label", "result-status", "result-list",
+  for (const id of ["choose-archive", "search-form", "search", "search-filters", "search-suggestions", "search-help-template", "archive-label", "result-status", "results-pane", "result-list",
+    "result-help",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
-    "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "remote-content",
-    "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "ingest-status-line", "error"]) {
+    "message-pane", "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "message-find", "message-find-query", "message-find-status", "message-find-previous", "message-find-next", "message-find-close", "remote-content",
+    "copy-message-text", "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "ingest-status-line", "error"]) {
     elements[id] = byId(id);
   }
+  initializeResultTable();
   renderSearchHelp();
   elements["choose-archive"].addEventListener("click", async () => {
     await chooseArchive();
@@ -87,12 +117,21 @@ async function initialize() {
   elements["cancel-save-filter"].addEventListener("click", () => elements["save-filter-dialog"].close());
   elements["close-filter-manager"].addEventListener("click", () => elements["manage-filter-dialog"].close());
   elements["result-list"].addEventListener("keydown", navigateResults);
-  elements["part-select"].addEventListener("change", () => showPart(Number(elements["part-select"].value), false));
-  elements["remote-content"].addEventListener("click", () => showPart(Number(elements["part-select"].value), true));
+  elements["result-list"].addEventListener("mousedown", () => { state.commandAContext = "results"; });
+  elements["result-list"].addEventListener("focusin", () => { state.commandAContext = "results"; });
+  document.addEventListener("mouseup", finishResultRange);
+  elements["message-pane"].addEventListener("mousedown", () => { state.commandAContext = "message"; });
+  elements["part-select"].addEventListener("change", () => void selectMessagePart(Number(elements["part-select"].value), false));
+  elements["message-find"].addEventListener("submit", event => { event.preventDefault(); void moveMessageFind(1); });
+  elements["message-find-query"].addEventListener("input", scheduleMessageFindUpdate);
+  elements["message-find-previous"].addEventListener("click", () => void moveMessageFind(-1));
+  elements["message-find-close"].addEventListener("click", () => void closeMessageFind());
+  elements["remote-content"].addEventListener("click", () => void selectMessagePart(Number(elements["part-select"].value), true));
+  elements["copy-message-text"].addEventListener("click", () => copyVisibleMessageText());
   elements["save-message"].addEventListener("click", () => call(() => window.pywebview.api.save_message(state.selected)));
   elements["print-message"].addEventListener("click", () => window.print());
   elements["ingest-status-line"].addEventListener("click", openIngestWindow);
-  installDrag(elements["message-file-well"], () => state.selected);
+  installDrag(elements["message-file-well"], selectedDragMessagePks);
   document.addEventListener("keydown", handleCommandShortcut);
 
   if (parameters.get("standalone") === "1") document.body.classList.add("standalone");
@@ -117,13 +156,160 @@ async function runNativeSmoke() {
     const validPage = page && typeof page === "object"
       && Array.isArray(page.results)
       && Array.isArray(page.highlight_terms);
-    passed = validPage && page.results.length === 1 && page.highlight_terms.includes("message viewer");
-    if (!passed) throw new Error("native bridge search returned an invalid page");
+    if (!validPage || page.results.length !== 1 || !page.highlight_terms.includes("message viewer")) {
+      throw new Error("native bridge search returned an invalid page");
+    }
+    if (new URLSearchParams(window.location.search).get("native-html-find-smoke") === "1") {
+      await verifyNativeHtmlFindHighlight();
+    }
+    passed = true;
   } catch (failure) {
-    error = String(failure?.stack || failure);
+    const message = String(failure?.message || failure);
+    error = failure?.stack && !String(failure.stack).includes(message) ? `${message}\n${failure.stack}` : message;
   }
   await window.pywebview.api.native_smoke_complete(passed, error);
   window.__mailarchiveNativeSmoke = {passed, error};
+}
+
+function frameDocumentIsReady(frame) {
+  const document = frame.contentDocument;
+  return Boolean(document?.body && frame.dataset.messageFindToken &&
+    document.documentElement?.dataset.mailarchiverFrameToken === frame.dataset.messageFindToken);
+}
+
+function waitForFrameDocument(frame) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = null;
+    const deadline = Date.now() + FRAME_LOAD_TIMEOUT_MS;
+    const complete = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      frame.removeEventListener("load", check);
+      callback(value);
+    };
+    const schedule = () => {
+      if (timer === null) timer = window.setTimeout(() => { timer = null; check(); }, 10);
+    };
+    const check = () => {
+      if (frameDocumentIsReady(frame)) { complete(resolve); return; }
+      if (!frame.isConnected) { complete(reject, new Error("message HTML iframe was removed before it initialized")); return; }
+      if (Date.now() >= deadline) { complete(reject, new Error("message HTML iframe did not initialize")); return; }
+      schedule();
+    };
+    frame.addEventListener("load", check, {once: true});
+    check();
+  });
+}
+
+function waitForFrameLayout() {
+  return new Promise(resolve => window.setTimeout(resolve, 75));
+}
+
+function installFrameFindShortcuts(frame) {
+  const frameDocument = frame.contentDocument;
+  if (!frameDocument) return false;
+  frameDocument.addEventListener("keydown", event => {
+    if (!event.metaKey || event.altKey || !state.view) return;
+    if (event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      void openMessageFind();
+    } else if (event.key.toLowerCase() === "g") {
+      event.preventDefault();
+      void moveMessageFind(event.shiftKey ? -1 : 1);
+    }
+  });
+  return true;
+}
+
+async function verifyNativeHtmlFindHighlight() {
+  const pane = byId("message-pane");
+  const content = byId("message-content");
+  const well = byId("message-well");
+  const headers = byId("message-headers");
+  const body = byId("body-view");
+  const status = byId("message-find-status");
+  const query = byId("message-find-query");
+  if (!pane || !content || !well || !headers || !body || !status || !query) throw new Error("native HTML find fixture is incomplete");
+  Object.assign(elements, {"message-pane": pane, "message-well": well, "message-headers": headers,
+    "body-view": body, "message-find-status": status, "message-find-query": query});
+  const wasHidden = content.hidden;
+  content.hidden = false;
+  pane.scrollTop = 0;
+  body.replaceChildren();
+  headers.replaceChildren();
+  state.highlightTerms = [];
+  const previousView = state.view;
+  state.view = {};
+  state.messageFindQuery = "arden";
+  query.value = state.messageFindQuery;
+  state.messageFindTargets = [];
+  state.messageFindIndex = -1;
+  const header = document.createElement("dd");
+  setHighlightedText(header, "Arden <arden@example.test>");
+  headers.append(header);
+  const frame = document.createElement("iframe");
+  frame.className = "html-frame";
+  frame.setAttribute("sandbox", "allow-popups allow-same-origin");
+  let loads = 0;
+  frame.addEventListener("load", () => { loads += 1; });
+  const highlighted = highlightedHtml(
+    '<style>mark { background: yellow !important; }</style>'
+    + '<mark class="message-find-match message-find-current" data-mailarchiver-find-target="outer">decoy</mark>'
+    + '<span id="message-find-0">decoy</span>'
+    + `<p>Hi Arden.</p>${"<br>".repeat(180)}<p>Arden at the end.</p>`,
+  );
+  frame.srcdoc = highlighted.content;
+  frame.dataset.messageFindToken = highlighted.marker;
+  body.append(frame);
+  try {
+    await waitForFrameDocument(frame);
+    const shortcutInstalled = installFrameFindShortcuts(frame);
+    resizeFrame(frame);
+    installFrameLayoutUpdates(frame);
+    updateMessageFindTargets();
+    await moveMessageFind(1);
+    await moveMessageFind(1);
+    await moveMessageFind(1);
+    await waitForFrameLayout();
+    const firstBody = frame.contentDocument?.querySelector('mark.message-find-current[data-message-find-index="0"]');
+    const firstBodyStyle = firstBody && frame.contentWindow?.getComputedStyle(firstBody);
+    const inactive = frame.contentDocument?.querySelector('mark.message-find-match[data-message-find-index="1"]');
+    const inactiveStyle = inactive && frame.contentWindow?.getComputedStyle(inactive);
+    const inactiveBackground = inactiveStyle?.backgroundColor;
+    if (!firstBody || status.textContent !== "3/4" || firstBodyStyle?.backgroundColor !== "rgb(255, 159, 10)"
+      || inactiveBackground !== "rgb(255, 255, 0)") {
+      throw new Error("native HTML finder did not activate the first body target after headers");
+    }
+    await moveMessageFind(1);
+    await waitForFrameLayout();
+    const active = frame.contentDocument?.querySelector('mark.message-find-current[data-message-find-index="1"]');
+    const style = active && frame.contentWindow?.getComputedStyle(active);
+    const frameBounds = frame.getBoundingClientRect();
+    const paneBounds = pane.getBoundingClientRect();
+    const activeBounds = active?.getBoundingClientRect();
+    const activeTop = activeBounds && frameBounds.top + activeBounds.top;
+    const details = {
+      active: Boolean(active), shortcut_installed: shortcutInstalled, status: status.textContent, loads, background: style?.backgroundColor, color: style?.color,
+      active_top: activeTop, pane_top: paneBounds.top, pane_bottom: paneBounds.bottom, pane_scroll_top: pane.scrollTop,
+      frame_top: frameBounds.top, frame_height: frameBounds.height, mark_top: activeBounds?.top,
+      mark_offset_top: active?.offsetTop, inactive_background: inactiveBackground,
+      document_height: frame.contentDocument?.documentElement.scrollHeight, frame_scroll_y: frame.contentWindow?.scrollY,
+    };
+    if (!active || !shortcutInstalled || status.textContent !== "4/4" || loads !== 1 || inactiveBackground !== "rgb(255, 255, 0)"
+      || style?.backgroundColor !== "rgb(255, 159, 10)" || style.color !== "rgb(0, 0, 0)"
+      || activeTop == null || activeTop < paneBounds.top || activeTop > paneBounds.bottom || pane.scrollTop <= 0) {
+      throw new Error(`native HTML find did not retain a visible orange body target: ${JSON.stringify(details)}`);
+    }
+  } finally {
+    frame.remove();
+    content.hidden = wasHidden;
+    state.messageFindQuery = "";
+    state.messageFindTargets = [];
+    state.messageFindIndex = -1;
+    state.view = previousView;
+  }
 }
 
 function showBridgeFailure() {
@@ -150,13 +336,24 @@ function resetArchiveView() {
   state.mailboxTree = [];
   state.searchFilters = [];
   state.highlightTerms = [];
+  state.messageFindQuery = "";
+  state.messageFindTargets = [];
+  state.messageFindIndex = -1;
+  state.messageFindRenderRequest += 1;
+  state.messageFindRender = Promise.resolve(false);
+  clearMessageFindUpdate();
+  state.remoteContentAuthorizedMessage = null;
+  state.remoteContentAuthorizedPart = null;
   state.dragExports.clear();
   state.dragPreparing.clear();
+  clearResultViewport();
   renderSearchFilters();
   closeSuggestions();
   clearAttachmentPreview();
   renderSearchHelp();
   elements["message-content"].hidden = true;
+  elements["message-find"].hidden = true;
+  elements["message-find-query"].value = "";
 }
 
 function applyStatus(status) {
@@ -610,6 +807,22 @@ async function runSearch() {
   const sortDirection = state.sortDirection;
   const searchAttachments = elements["search-attachments"].checked;
   const request = ++state.searchRequest;
+  clearCurrentMessageFind();
+  state.partRequest += 1;
+  state.selectionRequest = null;
+  state.selected = null;
+  state.view = null;
+  state.remoteContentAuthorizedMessage = null;
+  state.remoteContentAuthorizedPart = null;
+  state.highlightTerms = [];
+  state.messageFindQuery = "";
+  invalidateMessageFindTargets();
+  clearMessageFindUpdate();
+  state.commandAContext = "";
+  clearResultViewport();
+  elements["message-find"].hidden = true;
+  elements["message-find-query"].value = "";
+  elements["message-content"].hidden = true;
   elements["result-status"].classList.remove("background-search");
   const mailboxSelections = state.showTree ? [...state.mailboxSelections] : [];
   if (!query.trim() && !mailboxSelections.length) {
@@ -624,23 +837,17 @@ async function runSearch() {
 
 async function runCompleteSearch(context) {
   const {query, sortBy, sortDirection, searchAttachments, mailboxSelections, request} = context;
-  const summary = await call(() => window.pywebview.api.search_count(
-    query, searchAttachments, mailboxSelections,
-  ));
-  if (request !== state.searchRequest) return;
-  if (!summary) return;
   Object.assign(state, {query, sortBy, sortDirection, searchAttachments, offset: 0});
-  elements["result-list"].replaceChildren();
-  if (summary.total === 0) { updateResultStatus(); return; }
+  clearResultViewport();
   const first = await call(() => window.pywebview.api.search(
-    query, 0, sortBy, sortDirection, searchAttachments, mailboxSelections, summary.immediate_limit,
+    query, 0, sortBy, sortDirection, searchAttachments, mailboxSelections, RESULT_INITIAL_LIMIT,
   ));
   if (request !== state.searchRequest) return;
   if (!first) { updateResultStatus(); return; }
   state.highlightTerms = first.highlight_terms;
   appendResults(first.results, request);
   state.offset = first.results.length;
-  if (summary.total !== null && state.offset >= summary.total) { updateResultStatus(); return; }
+  if (!first.has_more) { updateResultStatus(); return; }
   elements["result-status"].classList.add("background-search");
   elements["result-status"].textContent = `Searching in background… ${state.offset.toLocaleString()} messages shown`;
   const remainder = await call(() => window.pywebview.api.search(
@@ -658,21 +865,32 @@ async function runCompleteSearch(context) {
 }
 
 function renderSearchHelp() {
-  elements["result-list"].replaceChildren(elements["search-help-template"].content.cloneNode(true));
+  clearResultViewport();
+  elements["result-list"].hidden = true;
+  elements["result-help"].hidden = false;
+  elements["result-help"].replaceChildren(elements["search-help-template"].content.cloneNode(true));
 }
 
 function appendResults(results, request) {
-  const fragment = document.createDocumentFragment();
-  for (const result of results) fragment.append(resultRow(result));
-  elements["result-list"].append(fragment);
-  for (let start = 0; start < results.length; start += 100) {
-    queuePreviews(results.slice(start, start + 100).map(result => result.message_pk), request);
-  }
+  if (request !== state.searchRequest) return;
+  state.results.push(...results);
+  showResultTable();
+  void state.resultTable.replaceData(state.results);
 }
 
-function updateResultStatus() {
-  const count = state.offset.toLocaleString();
-  elements["result-status"].textContent = `${count} message${state.offset === 1 ? "" : "s"}`;
+function clearResultViewport() {
+  state.results = [];
+  state.resultPreviews.clear();
+  state.resultPreviewPending.clear();
+  state.resultPreviewBatch.clear();
+  if (state.resultPreviewTimer !== null) window.clearTimeout(state.resultPreviewTimer);
+  state.resultPreviewTimer = null;
+  state.resultSelection.clear();
+  state.resultRangeAnchor = null;
+  state.resultRangeSelection = [];
+  state.resultRangeActive = false;
+  state.suppressResultClick = false;
+  state.resultTable?.clearData();
 }
 
 function toggleSortDirection() {
@@ -684,14 +902,49 @@ function toggleSortDirection() {
   runSearch();
 }
 
-function resultRow(result) {
-  const row = document.createElement("div");
-  row.className = "result";
-  row.id = `message-result-${result.message_pk}`;
-  row.setAttribute("role", "option");
-  row.setAttribute("aria-selected", "false");
-  row.dataset.messagePk = result.message_pk;
-  row.dataset.dateUtc = result.date_utc;
+function showResultTable() {
+  elements["result-help"].hidden = true;
+  elements["result-help"].replaceChildren();
+  elements["result-list"].hidden = false;
+}
+
+function initializeResultTable() {
+  if (!window.Tabulator) throw new Error("The bundled Tabulator result table did not load.");
+  state.resultTable = new window.Tabulator(elements["result-list"], {
+    data: [],
+    index: "message_pk",
+    height: "100%",
+    layout: "fitColumns",
+    headerVisible: false,
+    renderVertical: "virtual",
+    selectableRows: true,
+    selectableRowsRangeMode: "click",
+    placeholder: "No messages.",
+    columns: [{
+      field: "subject",
+      formatter: resultCardFormatter,
+      headerSort: false,
+      widthGrow: 1,
+    }],
+  });
+  state.resultTable.on("rowClick", selectResultRow);
+  state.resultTable.on("rowDblClick", openResultWindow);
+  state.resultTable.on("rowMouseDown", beginResultRange);
+  state.resultTable.on("rowMouseEnter", extendResultRange);
+  state.resultTable.on("rowSelectionChanged", selected => {
+    state.resultSelection = new Set(selected.map(result => result.message_pk));
+    updateMessageFileWell();
+  });
+}
+
+function resultCardFormatter(cell) {
+  const result = cell.getRow().getData();
+  queueResultPreview(result.message_pk, state.searchRequest);
+  const card = document.createElement("div");
+  card.className = "result";
+  card.id = `message-result-${result.message_pk}`;
+  card.dataset.messagePk = result.message_pk;
+  card.dataset.dateUtc = result.date_utc;
   const subjectLine = document.createElement("div");
   subjectLine.className = "result-subject-line";
   const subject = document.createElement("div");
@@ -716,29 +969,118 @@ function resultRow(result) {
   const preview = document.createElement("div");
   preview.className = "result-preview";
   preview.setAttribute("aria-label", "Message preview");
-  row.append(subjectLine, line, preview);
-  row.addEventListener("mousedown", () => elements["result-list"].focus({preventScroll: true}));
-  row.addEventListener("click", () => selectMessage(result.message_pk));
-  row.addEventListener("dblclick", async () => {
-    await call(() => window.pywebview.api.open_message_window(result.message_pk, state.highlightTerms));
-    row.dataset.openedWindow = "true";
-  });
-  return row;
+  preview.textContent = state.resultPreviews.get(result.message_pk) || "";
+  card.append(subjectLine, line, preview);
+  return card;
 }
 
-async function requestPreviews(messagePks) {
+function queueResultPreview(messagePk, request) {
+  if (state.resultPreviews.has(messagePk) || state.resultPreviewPending.has(messagePk)) return;
+  state.resultPreviewPending.add(messagePk);
+  state.resultPreviewBatch.add(messagePk);
+  if (state.resultPreviewTimer !== null) return;
+  state.resultPreviewTimer = window.setTimeout(() => {
+    state.resultPreviewTimer = null;
+    const messagePks = [...state.resultPreviewBatch];
+    state.resultPreviewBatch.clear();
+    queuePreviews(messagePks, request);
+  }, 0);
+}
+
+function updateResultStatus() {
+  const count = state.offset.toLocaleString();
+  elements["result-status"].textContent = `${count} message${state.offset === 1 ? "" : "s"}`;
+}
+
+function toggleSortDirection() {
+  state.sortDirection = state.sortDirection === "descending" ? "ascending" : "descending";
+  const descending = state.sortDirection === "descending";
+  elements["sort-direction"].textContent = descending ? "↓" : "↑";
+  elements["sort-direction"].ariaLabel = descending ? "Sort descending" : "Sort ascending";
+  elements["sort-direction"].title = elements["sort-direction"].ariaLabel;
+  runSearch(false);
+}
+
+function beginResultRange(event, row) {
+  if (event.button !== 0) return;
+  state.resultRangeAnchor = row.getData().message_pk;
+  state.resultRangeSelection = [];
+  state.resultRangeActive = false;
+}
+
+function extendResultRange(event, row) {
+  if (state.resultRangeAnchor === null || event.buttons !== 1) return;
+  const messagePk = row.getData().message_pk;
+  if (messagePk === state.resultRangeAnchor) return;
+  const first = state.results.findIndex(result => result.message_pk === state.resultRangeAnchor);
+  const last = state.results.findIndex(result => result.message_pk === messagePk);
+  if (first < 0 || last < 0) return;
+  state.resultRangeActive = true;
+  state.resultRangeSelection = state.results.slice(Math.min(first, last), Math.max(first, last) + 1)
+    .map(result => result.message_pk);
+  state.resultTable?.deselectRow();
+  state.resultTable?.selectRow(state.resultRangeSelection);
+}
+
+function finishResultRange() {
+  if (state.resultRangeAnchor === null) return;
+  if (state.resultRangeActive) {
+    state.suppressResultClick = true;
+    requestAnimationFrame(() => { state.suppressResultClick = false; });
+  }
+  state.resultRangeAnchor = null;
+  state.resultRangeActive = false;
+}
+
+function selectResultRow(event, row) {
+  if (state.suppressResultClick) {
+    state.resultTable?.deselectRow();
+    state.resultTable?.selectRow(state.resultRangeSelection);
+    state.suppressResultClick = false;
+    return;
+  }
+  window.setTimeout(() => {
+    let selected = state.resultTable?.getSelectedRows() || [];
+    if (!event.shiftKey && !event.metaKey && !event.ctrlKey && selected.length !== 1) {
+      state.resultTable?.deselectRow();
+      state.resultTable?.selectRow(row);
+      selected = state.resultTable?.getSelectedRows() || [];
+    }
+    if (selected.length !== 1 || selected[0] !== row) return;
+    void selectMessage(row.getData().message_pk);
+  }, 0);
+}
+
+async function openResultWindow(_event, row) {
+  await call(() => window.pywebview.api.open_message_window(row.getData().message_pk, state.highlightTerms));
+  row.getElement().querySelector(".result")?.setAttribute("data-opened-window", "true");
+}
+
+async function requestPreviews(messagePks, request) {
   if (!messagePks.length) return;
   const requested = await call(() => window.pywebview.api.request_previews(messagePks));
-  if (requested === null) return;
+  if (request !== state.searchRequest) return;
+  if (requested === null) {
+    messagePks.forEach(messagePk => state.resultPreviewPending.delete(messagePk));
+    return;
+  }
   while (true) {
     const batch = await call(() => window.pywebview.api.take_previews(messagePks));
-    if (!batch) return;
+    if (request !== state.searchRequest) return;
+    if (!batch) {
+      messagePks.forEach(messagePk => state.resultPreviewPending.delete(messagePk));
+      return;
+    }
     for (const item of batch.previews) {
-      const preview = document.querySelector(`.result[data-message-pk="${item.message_pk}"] .result-preview`);
-      if (preview) preview.textContent = item.preview;
+      state.resultPreviews.set(item.message_pk, item.preview);
+      state.resultPreviewPending.delete(item.message_pk);
+      state.resultTable?.getRow(item.message_pk)?.reformat();
     }
     if (batch.error) { showError(`Could not load message previews: ${batch.error}`); return; }
-    if (!batch.pending) return;
+    if (!batch.pending) {
+      messagePks.forEach(messagePk => state.resultPreviewPending.delete(messagePk));
+      return;
+    }
     await new Promise(resolve => setTimeout(resolve, 75));
   }
 }
@@ -746,25 +1088,28 @@ async function requestPreviews(messagePks) {
 function queuePreviews(messagePks, request) {
   previewQueue = previewQueue.then(() => {
     if (request !== state.searchRequest) return undefined;
-    return requestPreviews(messagePks);
+    return requestPreviews(messagePks, request);
   }).catch(error => showError(`Could not load message previews: ${error?.message || error}`));
 }
 
 async function selectMessage(messagePk) {
   state.selectionRequest = messagePk;
   state.partRequest += 1;
+  state.remoteContentAuthorizedMessage = null;
+  state.remoteContentAuthorizedPart = null;
+  clearCurrentMessageFind();
+  clearMessageFindUpdate();
+  state.messageFindQuery = elements["message-find"].hidden ? "" : elements["message-find-query"].value.trim();
+  invalidateMessageFindTargets();
   const view = await call(() => window.pywebview.api.message(messagePk));
   if (!view || state.selectionRequest !== messagePk) return;
   state.selected = messagePk;
   state.view = view;
-  document.querySelectorAll(".result.selected").forEach(row => {
-    row.classList.remove("selected");
-    row.setAttribute("aria-selected", "false");
-  });
-  const selectedRow = document.querySelector(`.result[data-message-pk="${messagePk}"]`);
-  selectedRow?.classList.add("selected");
-  selectedRow?.setAttribute("aria-selected", "true");
-  elements["result-list"].setAttribute("aria-activedescendant", `message-result-${messagePk}`);
+  state.messageFindIndex = -1;
+  state.resultTable?.deselectRow();
+  state.resultTable?.selectRow(messagePk);
+  updateMessageFileWell();
+  void state.resultTable?.scrollToRow(messagePk, "middle", false);
   elements["message-content"].hidden = false;
   const adjustment = view.date_adjustment;
   const banner = elements["computed-date-banner"];
@@ -776,13 +1121,15 @@ async function selectMessage(messagePk) {
     : "";
   elements["message-well"].classList.toggle("computed-date", Boolean(adjustment));
   setHighlightedText(elements["message-subject"], view.subject);
-  elements["message-file-name"].textContent = state.dragExports.get(messagePk)?.filename || "Message.eml";
-  elements["message-headers"].replaceChildren(...headerNodes(view.headers));
+  updateMessageFileWell();
+  renderMessageHeaders(view);
   elements["part-select"].replaceChildren(...view.body_parts.map(partOption));
   elements["part-select"].value = String(view.preferred_part_id);
   renderAttachments(view.attachments);
   renderLocations(view);
-  await showPart(view.preferred_part_id, false);
+  const displayed = await showPart(view.preferred_part_id, false);
+  if (state.selectionRequest !== messagePk || state.selected !== messagePk || !displayed) return;
+  if (state.messageFindQuery) await moveMessageFind(1);
 }
 
 function renderLocations(view) {
@@ -821,19 +1168,41 @@ async function copySourcePath(sourceLocationIndex) {
 
 function navigateResults(event) {
   if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return;
-  const rows = [...elements["result-list"].querySelectorAll(".result")];
-  if (!rows.length) return;
+  if (!state.results.length) return;
   event.preventDefault();
-  let index = rows.findIndex(row => Number(row.dataset.messagePk) === state.selected);
-  if (event.key === "ArrowDown") index = Math.min(index + 1, rows.length - 1);
-  else index = index < 0 ? rows.length - 1 : Math.max(index - 1, 0);
-  const row = rows[index];
-  row.scrollIntoView({block: "nearest"});
-  selectMessage(Number(row.dataset.messagePk));
+  let index = state.results.findIndex(result => result.message_pk === state.selected);
+  if (event.key === "ArrowDown") index = Math.min(index + 1, state.results.length - 1);
+  else index = index < 0 ? state.results.length - 1 : Math.max(index - 1, 0);
+  void selectMessage(state.results[index].message_pk);
 }
 
 function handleCommandShortcut(event) {
-  if (!event.metaKey || event.altKey || !state.view) return;
+  if (!event.metaKey || event.altKey) return;
+  if (isTextInput(event.target) && event.target !== elements["message-find-query"]) return;
+  if (event.key.toLowerCase() === "a" && !isTextInput(event.target)) {
+    if (state.commandAContext === "results") {
+      event.preventDefault();
+      selectAllResults();
+      return;
+    }
+    if (state.commandAContext === "message" && state.view) {
+      event.preventDefault();
+      selectMessageText();
+      return;
+    }
+  }
+  if (!state.view) return;
+  if (event.key.toLowerCase() === "f") {
+    event.preventDefault();
+    void openMessageFind();
+    return;
+  }
+  if (event.key.toLowerCase() === "g") {
+    event.preventDefault();
+    if (elements["message-find"].hidden) void openMessageFind();
+    else void moveMessageFind(event.shiftKey ? -1 : 1);
+    return;
+  }
   let partId = null;
   if (event.key === "0" || (event.shiftKey && event.key.toLowerCase() === "u")) partId = -1;
   else if (!event.shiftKey && /^[1-9]$/.test(event.key)) partId = Number(event.key);
@@ -842,7 +1211,296 @@ function handleCommandShortcut(event) {
   const part = state.view.body_parts.find(candidate => candidate.part_id === partId);
   if (!part) { showError(`This message has no displayable MIME part ${partId}.`); return; }
   elements["part-select"].value = String(partId);
-  showPart(partId, false);
+  void selectMessagePart(partId, false);
+}
+
+function isTextInput(target) {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement || target.closest?.("[contenteditable]");
+}
+
+function selectAllResults() {
+  state.resultTable?.selectRow();
+}
+
+function selectMessageText() {
+  const range = document.createRange();
+  range.selectNodeContents(elements["body-view"]);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function displayedHeaderText() {
+  const headers = elements["message-headers"];
+  const fields = [...headers.querySelectorAll("dt")].map((label, index) =>
+    `${label.innerText} ${headers.querySelectorAll("dd")[index].innerText}`);
+  return [elements["message-subject"].innerText, ...fields].join("\n");
+}
+
+function copyVisibleMessageText() {
+  const frame = elements["body-view"].querySelector(".html-frame");
+  const body = frame ? frame.contentDocument?.body.innerText : elements["body-view"].innerText;
+  const text = frame ? `${displayedHeaderText()}\n\n${body || ""}` : body || "";
+  if (text) void call(() => window.pywebview.api.copy_visible_text(text));
+}
+
+function renderMessageHeaders(view) {
+  elements["message-headers"].replaceChildren(...headerNodes(view.headers));
+}
+
+function initialMessageFindQuery() {
+  return state.highlightTerms[0] || "";
+}
+
+async function openMessageFind() {
+  elements["message-find"].hidden = false;
+  const selectionRequest = state.selectionRequest;
+  let query = state.messageFindQuery;
+  let renderRequest = state.messageFindRenderRequest;
+  if (!state.messageFindQuery) {
+    state.messageFindQuery = initialMessageFindQuery();
+    elements["message-find-query"].value = state.messageFindQuery;
+    query = state.messageFindQuery;
+    if (query) {
+      const displayed = await renderMessageFindHighlights();
+      renderRequest = state.messageFindRenderRequest;
+      if (!displayed || state.selectionRequest !== selectionRequest || state.messageFindQuery !== query ||
+        elements["message-find-query"].value.trim() !== query) return;
+    }
+  }
+  if (state.selectionRequest !== selectionRequest || state.messageFindQuery !== query ||
+    state.messageFindRenderRequest !== renderRequest || elements["message-find-query"].value.trim() !== query) return;
+  elements["message-find-query"].focus();
+  elements["message-find-query"].select();
+  if (state.messageFindQuery) await moveMessageFind(1);
+}
+
+async function closeMessageFind() {
+  clearMessageFindUpdate();
+  clearCurrentMessageFind();
+  elements["message-find"].hidden = true;
+  state.messageFindQuery = "";
+  elements["message-find-query"].value = "";
+  invalidateMessageFindTargets();
+  await renderMessageFindHighlights();
+}
+
+function scheduleMessageFindUpdate() {
+  clearMessageFindUpdate();
+  state.messageFindTimer = window.setTimeout(() => {
+    state.messageFindTimer = null;
+    void updateMessageFind();
+  }, MESSAGE_FIND_DELAY_MS);
+}
+
+function clearMessageFindUpdate() {
+  if (state.messageFindTimer !== null) window.clearTimeout(state.messageFindTimer);
+  state.messageFindTimer = null;
+}
+
+async function flushMessageFindUpdate() {
+  if (state.messageFindTimer === null) return false;
+  clearMessageFindUpdate();
+  await updateMessageFind();
+  return true;
+}
+
+async function updateMessageFind() {
+  state.messageFindQuery = elements["message-find-query"].value.trim();
+  clearCurrentMessageFind();
+  invalidateMessageFindTargets();
+  const displayed = await renderMessageFindHighlights();
+  if (displayed && state.messageFindQuery) await moveMessageFind(1);
+}
+
+async function renderMessageFindHighlights() {
+  if (!state.view || state.selectionRequest !== state.selected) return false;
+  const request = ++state.messageFindRenderRequest;
+  const render = (async () => {
+    renderMessageHeaders(state.view);
+    const partId = Number(elements["part-select"].value);
+    const allowRemote = hasRemoteContentAuthorization(state.selected, partId);
+    const displayed = await showPart(partId, allowRemote);
+    return displayed && request === state.messageFindRenderRequest;
+  })();
+  state.messageFindRender = render;
+  return render;
+}
+
+async function waitForMessageFindRender() {
+  let render;
+  do {
+    render = state.messageFindRender;
+    await render;
+  } while (render !== state.messageFindRender);
+}
+
+async function moveMessageFind(direction, retried = false) {
+  if (await flushMessageFindUpdate()) return;
+  if (!state.view || state.selectionRequest !== state.selected) {
+    updateMessageFindStatus();
+    return;
+  }
+  const messagePk = state.selected;
+  const selectionRequest = state.selectionRequest;
+  let query = state.messageFindQuery;
+  if (!state.messageFindQuery) {
+    state.messageFindQuery = initialMessageFindQuery();
+    elements["message-find-query"].value = state.messageFindQuery;
+    if (!state.messageFindQuery) {
+      updateMessageFindStatus();
+      return;
+    }
+    await renderMessageFindHighlights();
+    if (!state.view || state.selected !== messagePk || state.selectionRequest !== selectionRequest) return;
+    query = state.messageFindQuery;
+  }
+  const renderRequest = state.messageFindRenderRequest;
+  await waitForMessageFindRender();
+  if (!state.view || state.selected !== messagePk || state.selectionRequest !== selectionRequest ||
+    state.messageFindQuery !== query || state.messageFindRenderRequest !== renderRequest ||
+    elements["message-find-query"].value.trim() !== query) return;
+  const targets = state.messageFindTargets;
+  if (!targets.length) {
+    updateMessageFindStatus();
+    return;
+  }
+  const nextIndex = state.messageFindIndex < 0
+    ? (direction < 0 ? targets.length - 1 : 0)
+    : (state.messageFindIndex + direction + targets.length) % targets.length;
+  const current = targets[nextIndex];
+  const stale = !current.element.isConnected || (current.frame && (
+    !isCurrentHtmlFrame(current.frame)
+    || current.element.ownerDocument !== current.frame.contentDocument
+    || current.element.dataset.mailarchiverFindTarget !== current.frame.dataset.messageFindToken
+  ));
+  if (stale) {
+    state.messageFindIndex = -1;
+    updateMessageFindTargets();
+    if (!retried && state.messageFindTargets.length) await moveMessageFind(direction, true);
+    return;
+  }
+  state.messageFindIndex = nextIndex;
+  clearCurrentMessageFind();
+  if (current.frame) {
+    if (!selectHtmlFindTarget(current.frame, current.element)) {
+      state.messageFindIndex = -1;
+      updateMessageFindStatus();
+      return;
+    }
+  } else {
+    current.element.classList.add("message-find-current");
+    current.element.scrollIntoView({block: "center", inline: "nearest"});
+  }
+  updateMessageFindStatus();
+}
+
+function clearCurrentMessageFind() {
+  elements["message-well"].querySelectorAll('[data-mailarchiver-find-target="outer"].message-find-current')
+    .forEach(mark => mark.classList.remove("message-find-current"));
+  const frame = elements["body-view"].querySelector(".html-frame");
+  const token = frame?.dataset.messageFindToken;
+  frame?.contentDocument?.querySelectorAll(".message-find-current").forEach(mark => {
+    if (mark.dataset.mailarchiverFindTarget !== token) return;
+    mark.classList.remove("message-find-current");
+    mark.style.removeProperty("background");
+    mark.style.removeProperty("color");
+    mark.style.removeProperty("outline");
+    mark.style.removeProperty("box-shadow");
+    mark.style.removeProperty("transition");
+    mark.style.removeProperty("animation");
+  });
+}
+
+function isCurrentHtmlFrame(frame) {
+  return frame.isConnected && elements["body-view"].querySelector(".html-frame") === frame;
+}
+
+function selectHtmlFindTarget(frame, mark) {
+  if (!isCurrentHtmlFrame(frame) || !mark.isConnected || mark.ownerDocument !== frame.contentDocument
+    || mark.dataset.mailarchiverFindTarget !== frame.dataset.messageFindToken) return false;
+  mark.classList.add("message-find-current");
+  mark.style.setProperty("background", "#ff9f0a", "important");
+  mark.style.setProperty("color", "#000", "important");
+  mark.style.setProperty("outline", "2px solid #b54a00", "important");
+  mark.style.setProperty("box-shadow", "inset 0 0 0 1px #fff", "important");
+  mark.style.setProperty("transition", "none", "important");
+  mark.style.setProperty("animation", "none", "important");
+  scrollHtmlFindTarget(frame, mark);
+  return true;
+}
+
+function scrollHtmlFindTarget(frame, mark) {
+  const scroll = () => {
+    if (!isCurrentHtmlFrame(frame) || !mark.classList.contains("message-find-current")) return;
+    resizeFrame(frame);
+    const pane = elements["message-pane"];
+    const frameBounds = frame.getBoundingClientRect();
+    const paneBounds = pane.getBoundingClientRect();
+    const markBounds = mark.getBoundingClientRect();
+    pane.scrollTo({top: pane.scrollTop + frameBounds.top - paneBounds.top + markBounds.top - pane.clientHeight / 2});
+  };
+  scroll();
+  window.setTimeout(scroll, 50);
+  requestAnimationFrame(() => requestAnimationFrame(scroll));
+}
+
+function currentHtmlFindTarget(frame) {
+  const token = frame.dataset.messageFindToken;
+  return [...(frame.contentDocument?.querySelectorAll("mark.message-find-current") || [])]
+    .find(mark => mark.dataset.mailarchiverFindTarget === token) || null;
+}
+
+function refreshHtmlFrameLayout(frame) {
+  if (!isCurrentHtmlFrame(frame)) return;
+  resizeFrame(frame);
+  const current = currentHtmlFindTarget(frame);
+  if (current) scrollHtmlFindTarget(frame, current);
+}
+
+function installFrameLayoutUpdates(frame) {
+  const document = frame.contentDocument;
+  if (!document) return;
+  const refresh = () => refreshHtmlFrameLayout(frame);
+  document.addEventListener("load", refresh, true);
+  document.addEventListener("error", refresh, true);
+  document.fonts?.ready.then(refresh).catch(() => undefined);
+  frame.addEventListener("load", refresh, {once: true});
+}
+
+function updateMessageFindTargets() {
+  const targets = [...elements["message-well"].querySelectorAll('[data-mailarchiver-find-target="outer"]')]
+    .map(element => ({element}));
+  const frame = elements["body-view"].querySelector(".html-frame");
+  const token = frame?.dataset.messageFindToken;
+  if (frame?.contentDocument && token) {
+    for (const element of frame.contentDocument.querySelectorAll("mark.message-find-match")) {
+      if (element.dataset.mailarchiverFindTarget === token) targets.push({frame, element});
+    }
+  }
+  state.messageFindTargets = targets;
+  if (state.messageFindIndex >= targets.length) state.messageFindIndex = -1;
+  updateMessageFindStatus();
+}
+
+function invalidateMessageFindTargets() {
+  state.messageFindTargets = [];
+  state.messageFindIndex = -1;
+  state.messageFindRenderRequest += 1;
+  state.messageFindRender = Promise.resolve(false);
+  updateMessageFindStatus();
+}
+
+function hasRemoteContentAuthorization(messagePk, partId) {
+  return messagePk !== null && state.remoteContentAuthorizedMessage === messagePk
+    && state.remoteContentAuthorizedPart === partId;
+}
+
+function updateMessageFindStatus() {
+  const count = state.messageFindTargets.length;
+  elements["message-find-status"].textContent = !state.messageFindQuery ? "" :
+    (count ? `${state.messageFindIndex + 1 || 0}/${count}` : "0/0");
 }
 
 function headerNodes(headers) {
@@ -862,35 +1520,69 @@ function partOption(part) {
 }
 
 async function showPart(partId, allowRemote) {
-  if (!state.selected) return;
+  if (!state.selected || state.selectionRequest !== state.selected) return false;
   const messagePk = state.selected;
   const request = ++state.partRequest;
   const part = await call(() => window.pywebview.api.part(messagePk, partId, allowRemote));
-  if (!part || request !== state.partRequest || messagePk !== state.selected) return;
+  if (!part || request !== state.partRequest || messagePk !== state.selected) return false;
   elements["body-view"].replaceChildren();
   elements["remote-content"].hidden = !part.remote_content_blocked;
   if (part.kind === "html") {
     const frame = document.createElement("iframe");
     frame.className = "html-frame";
-    frame.setAttribute("sandbox", "allow-popups");
+    frame.setAttribute("sandbox", "allow-popups allow-same-origin");
     const highlighted = highlightedHtml(part.content);
     frame.srcdoc = highlighted.content;
     frame.dataset.highlightCount = String(highlighted.count);
-    frame.addEventListener("load", () => resizeFrame(frame));
+    frame.dataset.messageFindCount = String(highlighted.findCount);
+    frame.dataset.messageFindToken = highlighted.marker;
     elements["body-view"].append(frame);
+    try {
+      await waitForFrameDocument(frame);
+    } catch (error) {
+      if (request === state.partRequest && messagePk === state.selected && isCurrentHtmlFrame(frame)) {
+        frame.remove();
+        updateMessageFindTargets();
+        showError(String(error?.message || error));
+      }
+      return false;
+    }
+    if (request !== state.partRequest || messagePk !== state.selected || !isCurrentHtmlFrame(frame)) return false;
+    installFrameFindShortcuts(frame);
+    resizeFrame(frame);
+    installFrameLayoutUpdates(frame);
   } else {
     const body = document.createElement("div");
     body.className = part.kind === "raw" ? "raw" : "plain";
     setHighlightedText(body, part.content);
     elements["body-view"].append(body);
   }
+  if (request !== state.partRequest || messagePk !== state.selected) return false;
+  updateMessageFindTargets();
+  return true;
+}
+
+async function selectMessagePart(partId, allowRemote) {
+  if (state.selected === null || state.selectionRequest !== state.selected) return;
+  if (allowRemote && state.selected !== null) {
+    state.remoteContentAuthorizedMessage = state.selected;
+    state.remoteContentAuthorizedPart = partId;
+  }
+  clearCurrentMessageFind();
+  clearMessageFindUpdate();
+  state.messageFindQuery = elements["message-find"].hidden ? "" : elements["message-find-query"].value.trim();
+  invalidateMessageFindTargets();
+  const displayed = await showPart(partId, hasRemoteContentAuthorization(state.selected, partId));
+  if (displayed && state.messageFindQuery) await moveMessageFind(1);
 }
 
 function highlightPattern() {
-  const terms = [...new Map(state.highlightTerms
+  const find = state.messageFindQuery;
+  const terms = [...new Map([find, ...state.highlightTerms]
     .filter(term => typeof term === "string" && term.length)
-    .map(term => [term.toLowerCase(), term])).values()]
-    .sort((left, right) => right.length - left.length);
+    .map(term => [term.toLowerCase(), term])).values()];
+  if (find) terms.splice(1, terms.length - 1, ...terms.slice(1).sort((left, right) => right.length - left.length));
+  else terms.sort((left, right) => right.length - left.length);
   const key = terms.map(term => term.toLowerCase()).join("\u0000");
   if (highlightPattern._cacheKey === key) return highlightPattern._cache;
   if (!terms.length) {
@@ -905,16 +1597,21 @@ function highlightPattern() {
   return regex;
 }
 
-function highlightedFragment(value, owner = document) {
+function highlightedFragment(value, owner = document, marker = "outer") {
   const fragment = owner.createDocumentFragment();
   const pattern = highlightPattern();
   let cursor = 0;
   let count = 0;
   if (pattern) {
+    pattern.lastIndex = 0;
     for (const match of value.matchAll(pattern)) {
       fragment.append(owner.createTextNode(value.slice(cursor, match.index)));
       const mark = owner.createElement("mark");
       mark.className = "search-highlight";
+      if (state.messageFindQuery && match[0].toLowerCase() === state.messageFindQuery.toLowerCase()) {
+        mark.classList.add("message-find-match");
+        mark.dataset.mailarchiverFindTarget = marker;
+      }
       mark.textContent = match[0];
       fragment.append(mark);
       cursor = match.index + match[0].length;
@@ -939,19 +1636,31 @@ function highlightedHtml(value) {
     }
   }
   let count = 0;
+  let findIndex = 0;
+  const marker = `mailarchiver-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${++state.messageFindMarker}`}`;
   for (const node of nodes) {
-    const highlighted = highlightedFragment(node.nodeValue, parsed);
+    const highlighted = highlightedFragment(node.nodeValue, parsed, marker);
     count += highlighted.count;
+    highlighted.fragment.querySelectorAll?.(".message-find-match").forEach(mark => {
+      mark.dataset.messageFindIndex = String(findIndex);
+      findIndex += 1;
+    });
     node.replaceWith(highlighted.fragment);
   }
   const style = parsed.createElement("style");
-  style.textContent = `mark.search-highlight { color: inherit; background: ${state.highlightBackground}; }`;
+  style.textContent = `mark.search-highlight { color: inherit; background: ${state.highlightBackground}; } mark.message-find-current { color: #000 !important; background: #ff9f0a !important; box-shadow: inset 0 0 0 2px #b54a00; }`;
   parsed.head.append(style);
-  return {content: `<!doctype html>${parsed.documentElement.outerHTML}`, count};
+  parsed.documentElement.dataset.mailarchiverFrameToken = marker;
+  return {content: `<!doctype html>${parsed.documentElement.outerHTML}`, count, findCount: findIndex, marker};
 }
 
 function resizeFrame(frame) {
-  try { frame.style.height = `${Math.max(460, frame.contentDocument.documentElement.scrollHeight + 20)}px`; } catch (_) { /* sandbox */ }
+  try {
+    const document = frame.contentDocument;
+    const height = Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0,
+      document.documentElement.offsetHeight, document.body?.offsetHeight || 0);
+    frame.style.height = `${Math.max(460, height + 20)}px`;
+  } catch (_) { /* sandbox */ }
 }
 
 function renderAttachments(attachments) {
@@ -1008,30 +1717,53 @@ function clearAttachmentPreview() {
   elements["attachment-preview"].replaceChildren();
 }
 
-function installDrag(element, messagePk) {
+function selectedDragMessagePks() {
+  const selection = [...state.resultSelection];
+  return selection.length ? selection : state.selected ? [state.selected] : [];
+}
+
+function dragExportKey(messagePks) {
+  return [...new Set(messagePks)].sort((left, right) => left - right).join(",");
+}
+
+function updateMessageFileWell() {
+  const messagePks = selectedDragMessagePks();
+  if (!messagePks.length) return;
+  const info = state.dragExports.get(dragExportKey(messagePks));
+  const multiple = messagePks.length > 1;
+  elements["message-file-name"].textContent = info?.filename || (multiple ? `${messagePks.length} Messages.zip` : "Message.eml");
+  const action = multiple ? "Drag selected messages to Finder as a ZIP archive" : "Drag this message to Finder";
+  elements["message-file-well"].title = `${action}; the first drag prepares its temporary file`;
+  elements["message-file-well"].setAttribute("aria-label", action);
+}
+
+function installDrag(element, messagePks) {
   element.addEventListener("dragstart", async event => {
-    const message = messagePk();
-    const info = state.dragExports.get(message);
+    const messages = messagePks();
+    const key = dragExportKey(messages);
+    const info = state.dragExports.get(key);
     if (!info) {
       event.preventDefault();
-      await prepareDrag(message);
+      await prepareDrag(messages);
       return;
     }
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData("text/uri-list", info.url);
-    event.dataTransfer.setData("DownloadURL", `message/rfc822:${info.filename}:${info.url}`);
+    event.dataTransfer.setData("DownloadURL", `${info.content_type}:${info.filename}:${info.url}`);
     event.dataTransfer.setData("text/plain", info.url);
   });
 }
 
-async function prepareDrag(messagePk) {
-  if (!messagePk || state.dragExports.has(messagePk) || state.dragPreparing.has(messagePk)) return;
-  state.dragPreparing.add(messagePk);
-  const info = await call(() => window.pywebview.api.prepare_drag(messagePk));
-  state.dragPreparing.delete(messagePk);
+async function prepareDrag(messagePks) {
+  if (!messagePks.length) return;
+  const key = dragExportKey(messagePks);
+  if (state.dragExports.has(key) || state.dragPreparing.has(key)) return;
+  state.dragPreparing.add(key);
+  const info = await call(() => window.pywebview.api.prepare_drag(messagePks));
+  state.dragPreparing.delete(key);
   if (info) {
-    state.dragExports.set(messagePk, info);
-    if (state.selected === messagePk) elements["message-file-name"].textContent = info.filename;
+    state.dragExports.set(key, info);
+    if (dragExportKey(selectedDragMessagePks()) === key) updateMessageFileWell();
   }
 }
 

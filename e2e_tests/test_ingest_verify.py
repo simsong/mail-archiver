@@ -37,7 +37,7 @@ NORMAL_MESSAGE_COUNT = 207
 PROCESSED_MESSAGE_COUNT = 210
 GUI_API_METHODS = (
     "attachment", "choose_archive", "delete_filter_set", "mailbox_tree", "message",
-    "copy_source_path", "ingest_overview", "open_attachment", "open_ingest_window", "open_message_window", "part", "prepare_drag", "rename_filter_set",
+    "copy_source_path", "copy_visible_text", "ingest_overview", "open_attachment", "open_ingest_window", "open_message_window", "part", "prepare_drag", "rename_filter_set",
     "request_previews", "save_attachment", "save_filter_set", "save_message",
     "saved_filter_sets", "search", "search_count", "status", "suggestions", "take_previews",
 )
@@ -342,30 +342,29 @@ def sample_process(process: subprocess.Popen[str], destination: Path) -> None:
         destination.write_text(sampled.stdout + sampled.stderr, encoding="utf-8")
 
 
-@pytest.mark.skipif(
-    sys.platform != "darwin" or os.environ.get("MAILARCHIVER_NATIVE_GUI_E2E") != "1",
-    reason="set MAILARCHIVER_NATIVE_GUI_E2E=1 to exercise the native macOS WKWebView",
-)
-def test_native_search_ui_smoke(native_smoke_archive: Path, tmp_path: Path) -> None:
-    """Exercise one bounded real search through a hidden pywebview bridge process."""
+def run_native_smoke(native_smoke_archive: Path, tmp_path: Path, *, html_find: bool = False) -> None:
+    """Run a bounded Cocoa/WKWebView smoke subprocess and retain its diagnostics."""
     configured_artifacts = os.environ.get("MAILARCHIVER_NATIVE_GUI_ARTIFACT_DIR")
     artifacts = Path(configured_artifacts) if configured_artifacts else tmp_path
     artifacts.mkdir(parents=True, exist_ok=True)
-    report_path = artifacts / "native-smoke-report.json"
-    sample_path = artifacts / "native-smoke-sample.txt"
+    name = "native-html-find-smoke" if html_find else "native-smoke"
+    report_path = artifacts / f"{name}-report.json"
+    sample_path = artifacts / f"{name}-sample.txt"
     report_path.unlink(missing_ok=True)
     sample_path.unlink(missing_ok=True)
+    command = [
+        sys.executable,
+        "-m",
+        "mailarchiver.gui_app",
+        "--archive",
+        str(native_smoke_archive),
+        "--smoke-test",
+    ]
+    if html_find:
+        command.append("--smoke-html-find")
+    command.extend(("--smoke-report", str(report_path)))
     tested = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "mailarchiver.gui_app",
-            "--archive",
-            str(native_smoke_archive),
-            "--smoke-test",
-            "--smoke-report",
-            str(report_path),
-        ],
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -387,7 +386,25 @@ def test_native_search_ui_smoke(native_smoke_archive: Path, tmp_path: Path) -> N
     assert tested.returncode == 0, detail
     assert stdout.endswith("GUI bridge smoke test passed\n")
     report = NativeSmokeReport.model_validate_json(report_text)
-    assert report.completed and report.passed, detail
+    assert report.completed and report.passed and report.error is None, detail
     assert {"window-loaded", "bridge-passed", "destroy-requested", "event-loop-returned"} <= {
         phase.name for phase in report.phases
     }
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or os.environ.get("MAILARCHIVER_NATIVE_GUI_E2E") != "1",
+    reason="set MAILARCHIVER_NATIVE_GUI_E2E=1 to exercise the native macOS WKWebView",
+)
+def test_native_search_ui_smoke(native_smoke_archive: Path, tmp_path: Path) -> None:
+    """Exercise one bounded real search through a hidden pywebview bridge process."""
+    run_native_smoke(native_smoke_archive, tmp_path)
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or os.environ.get("MAILARCHIVER_NATIVE_HTML_FIND_E2E") != "1",
+    reason="set MAILARCHIVER_NATIVE_HTML_FIND_E2E=1 for the visible macOS HTML-find check",
+)
+def test_native_html_find_smoke(native_smoke_archive: Path, tmp_path: Path) -> None:
+    """Requirement: WKWebView paints the active HTML finder match after a header transition."""
+    run_native_smoke(native_smoke_archive, tmp_path, html_find=True)

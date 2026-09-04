@@ -10,6 +10,7 @@ import mailbox
 import sqlite3
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ from mailarchiver.gui_service import (
     search_suggestions,
     write_attachment,
     write_message,
+    write_messages_zip,
 )
 from mailarchiver.gui_app import (
     GuiApi,
@@ -82,6 +84,15 @@ X_HTML_MENTION_MESSAGE = (
     b"Message-ID: <x-html-mention@example>\nFrom: sender@example.net\nTo: recipient@example.net\n"
     b"Subject: x-html mention\nDate: Sat, 06 Jan 2024 10:00:00 +0000\n\n"
     b"This plain text mentions <x-html> without wrapping the whole body.\n"
+)
+MULTI_HTML_MESSAGE = (
+    b"Message-ID: <multi-html@example>\nFrom: sender@example.net\nTo: recipient@example.net\n"
+    b"Subject: multi HTML message\nDate: Sun, 07 Jan 2024 10:00:00 +0000\n"
+    b"Content-Type: multipart/mixed; boundary=html\n\n"
+    b"--html\nContent-Type: text/html\n\n<p>Brief notice.</p>\n"
+    b"--html\nContent-Type: text/html\n\n"
+    b"<html><body><h1>Complete web report</h1><p>The complete report is here.</p></body></html>\n"
+    b"--html--\n"
 )
 
 
@@ -423,6 +434,19 @@ def test_gui_selects_multipart_views_and_sanitizes_html(tmp_path: Path) -> None:
     assert "Subject: multipart message" in render_part(archive, 2, RAW_PART_ID).content
 
 
+def test_gui_prefers_the_most_substantive_html_part(tmp_path: Path) -> None:
+    """Requirement: a message with multiple HTML parts opens its substantive HTML view."""
+    archive = make_gui_archive(
+        tmp_path,
+        ((MULTI_HTML_MESSAGE, "multi-html@example", "multi HTML message", "2024-01-07T10:00:00+00:00"),),
+    )
+
+    view = describe_message(archive, 3)
+
+    assert view.preferred_part_id == 2
+    assert "Complete web report" in render_part(archive, 3, view.preferred_part_id).content
+
+
 def test_gui_recognizes_whole_body_legacy_x_html_without_hiding_raw_source(tmp_path: Path) -> None:
     """Requirement: a whole-body x-html wrapper is a safe HTML view while raw RFC 5322 remains selectable."""
     archive = make_gui_archive(
@@ -570,6 +594,20 @@ def test_gui_exports_exact_eml_and_decoded_attachment(tmp_path: Path) -> None:
     content = attachment_content(archive, 2, pdf.part_id)
     assert base64.b64decode(content.content_base64) == pdf_path.read_bytes()
     assert content.filename == "report.pdf"
+
+
+def test_gui_multi_message_drag_zip_preserves_each_exported_message(tmp_path: Path) -> None:
+    """Requirement: an explicit multi-message drag creates a ZIP of exact RFC 5322 exports."""
+    archive = make_gui_archive(tmp_path)
+    destination = tmp_path / "drag" / "messages.zip"
+
+    write_messages_zip(archive, [1, 2, 1], destination)
+
+    with zipfile.ZipFile(destination) as exported:
+        names = exported.namelist()
+        values = {name: exported.read(name) for name in names}
+    assert len(names) == 2
+    assert set(values.values()) == {SIMPLE_MESSAGE, MULTIPART_MESSAGE}
 
 
 def test_gui_concurrent_drag_exports_have_distinct_temporary_paths(tmp_path: Path) -> None:

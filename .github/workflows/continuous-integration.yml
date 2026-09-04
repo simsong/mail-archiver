@@ -69,7 +69,7 @@ jobs:
         run: uv sync --locked --all-groups
       - name: Install headless test browser
         run: make install-test-browser PLAYWRIGHT_INSTALL_ARGS="--with-deps chromium"
-      - name: Pytest
+      - name: Archive and Chromium GUI tests
         run: make check
 
   pylint:
@@ -88,42 +88,3 @@ jobs:
         run: uv sync --locked --all-groups
       - name: Pylint
         run: make pylint
-
-  native-gui-e2e:
-    runs-on: macos-26
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
-      - name: Set up Python
-        uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.12"
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
-      - name: Install dependencies
-        run: uv sync --locked --all-groups
-      - name: Native UI bridge smoke test
-        id: native-smoke
-        continue-on-error: true
-        env:
-          MAILARCHIVER_NATIVE_GUI_ARTIFACT_DIR: ${{ runner.temp }}/native-gui-diagnostics
-        run: make test-native-gui
-      - name: Upload native GUI diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: native-gui-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/native-gui-diagnostics
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Report native GUI advisory result
-        if: always()
-        env:
-          NATIVE_SMOKE_OUTCOME: ${{ steps.native-smoke.outcome }}
-        shell: bash
-        run: |
-          echo "Native GUI smoke outcome: **${NATIVE_SMOKE_OUTCOME}**" >> "${GITHUB_STEP_SUMMARY}"
-          if [[ "${NATIVE_SMOKE_OUTCOME}" != success ]]; then
-            echo '::warning title=Native GUI advisory failed::See the native-gui-diagnostics artifact for the phase report and any process sample.'
-          fi

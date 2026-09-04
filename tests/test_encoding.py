@@ -138,6 +138,17 @@ def test_ftfy_repairs_mojibake_after_valid_utf8_decode() -> None:
     assert result.repaired
 
 
+def test_quoted_printable_utf8_html_decodes_before_rendering() -> None:
+    """Requirement: derived HTML applies transfer decoding before its declared charset."""
+    part = BytesParser(policy=policy.compat32).parsebytes(
+        b"Content-Type: text/html; charset=UTF-8\n"
+        b"Content-Transfer-Encoding: quoted-printable\n\n"
+        b"<p>I=E2=80=99m ready.</p>\n"
+    )
+
+    assert decoded_part(part) == "<p>I’m ready.</p>\n"
+
+
 def test_message_text_uses_declared_korean_charset() -> None:
     """Requirement: search and previews use the same source-preserving decoder."""
     raw = b"Content-Type: text/plain; charset=ks_c_5601-1987\n\n" + "안녕하세요".encode("euc-kr")

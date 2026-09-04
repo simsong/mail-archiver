@@ -98,11 +98,11 @@ The test retains a Playwright trace on failure.
 
 ### Native macOS smoke test
 
-A macOS job launches the real pywebview application in an isolated subprocess
-using its Cocoa/WKWebView backend. It verifies that the hidden window loads,
-pywebview injects the JavaScript-to-Python bridge, one real search returns its
-highlight terms, and the application closes cleanly. This is the boundary
-Chromium cannot test.
+The explicit local macOS target launches the real pywebview application in an
+isolated subprocess using its Cocoa/WKWebView backend. It verifies that the
+hidden window loads, pywebview injects the JavaScript-to-Python bridge, one real
+search returns its highlight terms, and the application closes cleanly. This is
+the boundary Chromium cannot test, and it is not run in CI/CD.
 
 Run it explicitly with `make test-native-gui`. The native test window is created
 hidden against a purpose-built one-message derived archive. It does not run
@@ -111,18 +111,29 @@ bridge methods and sends one completion callback to Python. Its dedicated
 bridge exposes only those three calls, and smoke mode omits the custom
 application menu. Python never polls WKWebView with a synchronous JavaScript
 evaluation. Secondary windows, dialogs, attachment openers, and exports are
-therefore inaccessible in smoke mode, so local and hosted execution must not
-disturb the desktop. The comprehensive interaction flow remains in headless
-Chromium; normal application behavior is unchanged.
+therefore inaccessible in smoke mode. The comprehensive interaction flow
+remains in headless Chromium; normal application behavior is unchanged.
+
+`make test-native-html-find` is a separate opt-in macOS check and intentionally
+briefly shows its window. It uses a static, scriptless HTML iframe to verify
+WKWebView's computed active-match style and outer-pane scrolling when finder
+navigation crosses from a header to an offscreen body match. It complements the
+hidden bridge smoke and the Chromium interaction test; it does not exercise a
+live archive part or native physical keyboard input.
+
+The Chromium interaction test also delays a real `part()` bridge response while
+the user starts Command-F/Command-G and selects another result. It proves that
+the new result remains at its first finder match rather than accepting stale
+keyboard work. It separately checks Command-A boundaries for result rows, plain
+text, raw source, and nonselectable provenance.
 
 The child process atomically writes a JSON report after each phase and has a
 watchdog for bridge completion and Cocoa shutdown. Pytest independently bounds
 the process, captures a five-second macOS process sample on an outer timeout,
-and then terminates the whole process group. Hosted CI pins the macOS runner
-image and uploads these diagnostics. Because an unattended hosted GUI session
-can still make AppKit scheduling nondeterministic, this job is advisory rather
-than a required merge gate. A failed smoke emits an explicit workflow warning
-and job-summary outcome while leaving the required checks unblocked.
+and then terminates the whole process group. The Makefile retains these local
+diagnostics under `.tmp/native-gui-diagnostics`. Hosted CI does not launch
+AppKit or WKWebView; its required GUI coverage is the complete headless Chromium
+acceptance test.
 
 Testing window contents through Cocoa accessibility, system dialogs, Finder
 drag-out, and native-menu selection requires XCUITest/XCUIAutomation in a
@@ -183,6 +194,6 @@ keyboard equivalents, and dispatch.
 
 The required end-to-end gate is successful only when the archive lifecycle and
 headless browser interface pass. A browser-only pass is not proof that the
-macOS application shell works; the hosted native result is separate advisory
-evidence. Required native evidence must come from XCUITest/XCUIAutomation in a
-logged-in local or self-hosted macOS session.
+macOS application shell works; `make test-native-gui` supplies separate local
+smoke evidence. Required native evidence must come from
+XCUITest/XCUIAutomation in a logged-in macOS session.
