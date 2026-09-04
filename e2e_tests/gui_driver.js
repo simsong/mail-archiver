@@ -165,6 +165,10 @@
     await waitFor(() => rows().some(row => Number(row.dataset.messagePk) === state.results[0].message_pk),
       "virtual result list repaints the first row after scrolling back");
     const list = document.getElementById("result-list");
+    const textSelection = new Event("selectstart", {bubbles: true, cancelable: true});
+    rows()[0].querySelector(".result-subject").dispatchEvent(textSelection);
+    assert(textSelection.defaultPrevented,
+      "the result table prevents native text selection so a pointer drag selects rows");
     rows()[0].click();
     await waitFor(() => state.selected === Number(rows()[0].dataset.messagePk),
       "a pointer gesture ending in its starting row remains a message click");
@@ -177,6 +181,10 @@
     await waitFor(() => state.resultSelection.size === 3, "dragging in the Tabulator table selects three rows");
     assert(state.resultSelection.size === 3 && !window.getSelection().toString(),
       "dragging in the result list selects message rows rather than text");
+    const selectionSummary = document.getElementById("message-selection-summary");
+    assert(!selectionSummary.hidden && selectionSummary.textContent.includes("3 messages selected.") &&
+      document.getElementById("message-file-well").parentElement === selectionSummary,
+    "multiple selected rows replace the stale message with a selected-message summary and ZIP drag icon");
     const zipTransfer = {values: {}, effectAllowed: "", setData(type, value) { this.values[type] = value; }};
     const zipDrag = new Event("dragstart", {bubbles: true, cancelable: true});
     Object.defineProperty(zipDrag, "dataTransfer", {value: zipTransfer});
@@ -195,7 +203,8 @@
     }
     await sleep(0);
     rows()[0].click();
-    await waitFor(() => state.selected === Number(rows()[0].dataset.messagePk),
+    await waitFor(() => state.selected === Number(rows()[0].dataset.messagePk) && selectionSummary.hidden &&
+      document.getElementById("message-file-well").parentElement.classList.contains("message-summary"),
       "a completed row drag cannot suppress the next row click");
     rows()[0].dispatchEvent(new MouseEvent("mousedown", {bubbles: true}));
     document.dispatchEvent(new KeyboardEvent("keydown", {key: "a", metaKey: true, bubbles: true}));

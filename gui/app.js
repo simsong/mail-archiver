@@ -86,7 +86,7 @@ async function initialize() {
     "result-help",
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
-    "message-pane", "message-content", "message-well", "computed-date-banner", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "message-find", "message-find-query", "message-find-status", "message-find-previous", "message-find-next", "message-find-close", "remote-content",
+    "message-pane", "message-content", "message-well", "computed-date-banner", "message-selection-summary", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "message-find", "message-find-query", "message-find-status", "message-find-previous", "message-find-next", "message-find-close", "remote-content",
     "copy-message-text", "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "ingest-status-line", "error"]) {
     elements[id] = byId(id);
   }
@@ -119,6 +119,7 @@ async function initialize() {
   elements["result-list"].addEventListener("keydown", navigateResults);
   elements["result-list"].addEventListener("mousedown", () => { state.commandAContext = "results"; });
   elements["result-list"].addEventListener("focusin", () => { state.commandAContext = "results"; });
+  elements["result-list"].addEventListener("selectstart", event => event.preventDefault());
   document.addEventListener("mouseup", finishResultRange);
   elements["message-pane"].addEventListener("mousedown", () => { state.commandAContext = "message"; });
   elements["part-select"].addEventListener("change", () => void selectMessagePart(Number(elements["part-select"].value), false));
@@ -347,6 +348,7 @@ function resetArchiveView() {
   state.dragExports.clear();
   state.dragPreparing.clear();
   clearResultViewport();
+  showSingleMessageSelection();
   renderSearchFilters();
   closeSuggestions();
   clearAttachmentPreview();
@@ -934,6 +936,10 @@ function initializeResultTable() {
   state.resultTable.on("rowSelectionChanged", selected => {
     state.resultSelection = new Set(selected.map(result => result.message_pk));
     updateMessageFileWell();
+    if (state.resultSelection.size > 1) showMultipleMessageSelection();
+    else if (state.resultSelection.size === 1 && state.selected === null && state.selectionRequest === null) {
+      void selectMessage(selected[0].message_pk);
+    }
   });
 }
 
@@ -1046,7 +1052,7 @@ function selectResultRow(event, row) {
       state.resultTable?.selectRow(row);
       selected = state.resultTable?.getSelectedRows() || [];
     }
-    if (selected.length !== 1 || selected[0] !== row) return;
+    if (selected.length !== 1 || selected[0] !== row || state.selectionRequest === row.getData().message_pk) return;
     void selectMessage(row.getData().message_pk);
   }, 0);
 }
@@ -1093,6 +1099,7 @@ function queuePreviews(messagePks, request) {
 }
 
 async function selectMessage(messagePk) {
+  showSingleMessageSelection();
   state.selectionRequest = messagePk;
   state.partRequest += 1;
   state.remoteContentAuthorizedMessage = null;
@@ -1720,6 +1727,39 @@ function clearAttachmentPreview() {
 function selectedDragMessagePks() {
   const selection = [...state.resultSelection];
   return selection.length ? selection : state.selected ? [state.selected] : [];
+}
+
+function showMultipleMessageSelection() {
+  const count = state.resultSelection.size;
+  if (count < 2) return;
+  state.selectionRequest = null;
+  state.partRequest += 1;
+  state.selected = null;
+  state.view = null;
+  clearCurrentMessageFind();
+  clearMessageFindUpdate();
+  state.remoteContentAuthorizedMessage = null;
+  state.remoteContentAuthorizedPart = null;
+  const title = document.createElement("h1");
+  title.textContent = `${count} messages selected.`;
+  const detail = document.createElement("p");
+  detail.textContent = "Drag the file icon to Finder to export the selected messages as a ZIP archive.";
+  elements["message-selection-summary"].replaceChildren(title, detail, elements["message-file-well"]);
+  elements["message-selection-summary"].hidden = false;
+  elements["message-content"].hidden = false;
+  elements["message-content"].classList.add("multi-selection");
+  elements["message-well"].classList.add("multi-selection");
+}
+
+function showSingleMessageSelection() {
+  const summary = elements["message-selection-summary"];
+  if (elements["message-file-well"].parentElement !== elements["message-well"].querySelector(".message-summary")) {
+    elements["message-well"].querySelector(".message-summary").append(elements["message-file-well"]);
+  }
+  summary.replaceChildren();
+  summary.hidden = true;
+  elements["message-content"].classList.remove("multi-selection");
+  elements["message-well"].classList.remove("multi-selection");
 }
 
 function dragExportKey(messagePks) {

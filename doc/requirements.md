@@ -510,9 +510,10 @@ without blocking the initial result display. The Tabulator result table retains
 complete result metadata client-side but uses its virtual DOM to paint only
 visible rows; preview work is requested when a row is painted. Its row events
 identify pointer range endpoints without depending on transient DOM positions,
-so ordinary drags select message rows rather than message text. A single
-selected row opens its message; a multi-row
-selection remains a selection and an explicit drag from the message-file well
+and disables native text selection within result rows, so ordinary drags select
+message rows rather than message text. A single
+selected row opens its message; a multi-row selection replaces any stale
+single-message display with an explicit selected-message count and an explicit drag from the message-file well
 exports those selected messages as one ZIP whose entries preserve their RFC
 5322 bytes. A pointer gesture that starts and ends on
 the same result row is a normal message click, not a range drag.

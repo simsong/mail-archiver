@@ -450,10 +450,13 @@ queues preview IDs only when it paints a row through the Python bridge. A
 single-worker executor reads the indexed 18-word previews, and JavaScript polls
 the typed result batch until it can update visible rows. Its `rowMouseDown` and
 `rowMouseEnter` events provide row components for the small range adapter;
-there is no custom scroll/viewport or pointer-coordinate code. A single
-selected row displays its message, a gesture ending on its original row remains
-a click, and an explicit drag from the file well prepares a ZIP of a
-multi-row selection only when that drag begins. Global macOS Command-key handlers
+the result-table boundary cancels native `selectstart` and its row subtree has
+explicit WebKit and standard `user-select: none` rules, so drag selection never
+also selects card text. There is no custom scroll/viewport or pointer-coordinate code. A single
+selected row displays its message. A multi-row selection clears its stale
+single-message view, displays the selected-message count with the same file well,
+and an explicit drag from that well prepares a ZIP only when the drag begins.
+A gesture ending on its original row remains a click. Global macOS Command-key handlers
 select numeric MIME part IDs or raw source. Command-F opens an in-message
 finder from the first current search-highlight term and selects its input;
 Command-G opens the finder at its first match when it is closed, while
