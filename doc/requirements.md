@@ -517,6 +517,11 @@ single-message display with an explicit selected-message count and an explicit d
 exports those selected messages as one ZIP whose entries preserve their RFC
 5322 bytes. A pointer gesture that starts and ends on
 the same result row is a normal message click, not a range drag.
+Message HTML links are never opened directly. Hovering an allowed `http`,
+`https`, or `mailto` destination shows its complete destination in the bottom
+status bar. Clicking it presents that destination with **Open Link**, **Copy
+Link**, and **Ignore** choices; only **Open Link** invokes the system handler,
+and **Copy Link** writes the destination as text and a URL to the pasteboard.
 Literal, case-insensitive occurrences of every ordinary free-text query term
 and every textual selector value (`any:`, `from:`, `to:`, `cc:`, `bcc:`, and
 `subject:`) must be highlighted in the selected message's displayed headers and

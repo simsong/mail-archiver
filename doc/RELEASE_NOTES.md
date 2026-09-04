@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* Stop opening message links immediately. The message viewer now shows an
+  allowed link destination in the bottom status bar on hover and requires an
+  explicit **Open Link**, **Copy Link**, or **Ignore** choice on click.
 * Make graphical searches complete across the full archival time span instead
   of favoring the newest 10,000 catalog rows. Probe at most 2,001 matches,
   display all sets up to 2,000, and automatically load larger remainders with

@@ -122,6 +122,17 @@
       </section>
       <button id="ingest-status-line" class="ingest-status-line no-print" type="button" hidden></button>
       <div id="error" role="alert" hidden></div>
+      <dialog id="link-dialog">
+        <form method="dialog">
+          <h2>Open external link?</h2>
+          <p id="link-destination" class="link-destination"></p>
+          <div class="dialog-actions">
+            <button id="link-ignore" type="submit">Ignore</button>
+            <button id="link-copy" type="button">Copy Link</button>
+            <button id="link-open" type="button">Open Link</button>
+          </div>
+        </form>
+      </dialog>
       <dialog id="save-filter-dialog">
         <form id="save-filter-form">
           <h2>Save Filter Set</h2>

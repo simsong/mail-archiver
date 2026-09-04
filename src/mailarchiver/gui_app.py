@@ -15,7 +15,7 @@ from importlib.metadata import version
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import webview
 from pydantic import BaseModel
@@ -51,6 +51,22 @@ E2E_DRIVER = Path(__file__).parents[2] / "e2e_tests" / "gui_driver.js"
 DEFAULT_PAGE_SIZE = 100
 APPLICATION_NAME = "Mail Archiver"
 APPLICATION_ICON = GUI_DIRECTORY / "icons" / "rainbow-post-192.png"
+EXTERNAL_LINK_SCHEMES = frozenset({"http", "https", "mailto"})
+
+
+def external_link_destination(value: str) -> str:
+    """Validate a message link before it reaches the system link handler."""
+    if not value or value != value.strip() or any(ord(character) < 32 for character in value):
+        raise ValueError("invalid external link")
+    parsed = urlsplit(value)
+    scheme = parsed.scheme.casefold()
+    if scheme not in EXTERNAL_LINK_SCHEMES:
+        raise ValueError("unsupported external link scheme")
+    if scheme in {"http", "https"} and not parsed.netloc:
+        raise ValueError("web link has no host")
+    if scheme == "mailto" and not parsed.path:
+        raise ValueError("mail link has no recipient")
+    return value
 
 
 class ApplicationMetadata(BaseModel):
@@ -473,6 +489,30 @@ class GuiApi:
         pasteboard.setString_forType_(text, AppKit.NSPasteboardTypeString)
         return text
 
+    def copy_link(self, destination: str) -> str:
+        """Copy an approved message link as both text and a macOS URL."""
+        destination = external_link_destination(destination)
+        import AppKit
+
+        pasteboard = AppKit.NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(destination, AppKit.NSPasteboardTypeString)
+        pasteboard.setString_forType_(destination, AppKit.NSPasteboardTypeURL)
+        return destination
+
+    def open_link(self, destination: str) -> str:
+        """Open an approved message link only after an explicit viewer action."""
+        destination = external_link_destination(destination)
+        if self.e2e_directory is not None:
+            return destination
+        import AppKit
+        from Foundation import NSURL  # pylint: disable=no-name-in-module
+
+        url = NSURL.URLWithString_(destination)
+        if url is None or not AppKit.NSWorkspace.sharedWorkspace().openURL_(url):
+            raise ValueError("could not open external link")
+        return destination
+
     def part(self, message_pk: int, part_id: int, allow_remote: bool = False) -> dict[str, object]:
         return render_part(self._archive(), message_pk, part_id, allow_remote).model_dump(mode="json")
 
@@ -728,7 +768,7 @@ def main() -> int:
         smoke.bind_window(window)
         window.events.loaded += lambda *_args: smoke.page_loaded()
     webview.settings["ALLOW_FILE_URLS"] = True
-    webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
+    webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
     if smoke:
         smoke.mark("event-loop-starting")
     webview.start(http_server=True, private_mode=True, menu=[] if smoke else application_menu(api))

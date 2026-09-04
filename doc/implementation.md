@@ -475,7 +475,12 @@ stale key continuations. The viewer waits for the parsed local iframe document,
 not every remote resource, so authorized slow images cannot blank local message
 text. The sandbox grants same-origin access only to this inert, scriptless
 sanitized document; scripts remain prohibited and the document keeps its
-restrictive CSP. Selecting another message resets the finder index to its first
+restrictive CSP. It does not grant popups: a frame-level link handler writes an
+allowed destination to the bottom status bar on hover, prevents its default
+click, and presents **Open Link**, **Copy Link**, and **Ignore**. The native
+bridge independently validates only `http`, `https`, and `mailto` destinations;
+it writes copied links as both text and a URL, and opens them through NSWorkspace
+only after **Open Link**. Selecting another message resets the finder index to its first
 match without replacing the finder text.
 Command-A uses the most recently clicked pane: it marks all result rows as
 selected in the list, or creates a DOM range over the displayed body for plain

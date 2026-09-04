@@ -38,6 +38,9 @@ const state = {
   dragExports: new Map(),
   dragPreparing: new Set(),
   previewUrl: null,
+  ingestStatusText: "",
+  linkDestination: "",
+  pendingLink: "",
   showTree: false,
   showVolumes: false,
   mailboxTree: [],
@@ -87,7 +90,7 @@ async function initialize() {
     "sort-by", "sort-direction", "search-attachments", "show-original-folders", "mailbox-browser", "mailbox-tree", "show-source-volumes", "filter-set", "manage-filter-sets",
     "save-filter-dialog", "save-filter-form", "filter-set-name", "cancel-save-filter", "manage-filter-dialog", "filter-set-list", "close-filter-manager",
     "message-pane", "message-content", "message-well", "computed-date-banner", "message-selection-summary", "message-file-well", "message-file-name", "message-subject", "message-headers", "part-select", "message-find", "message-find-query", "message-find-status", "message-find-previous", "message-find-next", "message-find-close", "remote-content",
-    "copy-message-text", "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "ingest-status-line", "error"]) {
+    "copy-message-text", "save-message", "print-message", "body-view", "attachment-section", "attachment-list", "attachment-preview", "provenance-section", "message-locations", "ingest-status-line", "link-dialog", "link-destination", "link-ignore", "link-copy", "link-open", "error"]) {
     elements[id] = byId(id);
   }
   initializeResultTable();
@@ -132,6 +135,9 @@ async function initialize() {
   elements["save-message"].addEventListener("click", () => call(() => window.pywebview.api.save_message(state.selected)));
   elements["print-message"].addEventListener("click", () => window.print());
   elements["ingest-status-line"].addEventListener("click", openIngestWindow);
+  elements["link-dialog"].addEventListener("close", dismissExternalLink);
+  elements["link-copy"].addEventListener("click", () => void copyExternalLink());
+  elements["link-open"].addEventListener("click", () => void openExternalLink());
   installDrag(elements["message-file-well"], selectedDragMessagePks);
   document.addEventListener("keydown", handleCommandShortcut);
 
@@ -222,6 +228,70 @@ function installFrameFindShortcuts(frame) {
     }
   });
   return true;
+}
+
+function frameLink(event) {
+  return event.target?.closest?.("a[href]") || null;
+}
+
+function approvedFrameLink(link) {
+  try {
+    const destination = new URL(link.href).href;
+    return ["http:", "https:", "mailto:"].includes(new URL(destination).protocol) ? destination : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function installFrameLinkHandlers(frame) {
+  const document = frame.contentDocument;
+  if (!document) return;
+  const hover = event => {
+    const link = frameLink(event);
+    const destination = link && approvedFrameLink(link);
+    if (destination) showLinkDestination(destination);
+  };
+  const leave = event => {
+    const link = frameLink(event);
+    if (link && !link.contains(event.relatedTarget)) clearLinkDestination(approvedFrameLink(link));
+  };
+  document.addEventListener("pointerover", hover);
+  document.addEventListener("focusin", hover);
+  document.addEventListener("pointerout", leave);
+  document.addEventListener("focusout", leave);
+  document.addEventListener("click", event => {
+    const link = frameLink(event);
+    const destination = link && approvedFrameLink(link);
+    if (!destination) return;
+    event.preventDefault();
+    event.stopPropagation();
+    presentExternalLink(destination);
+  });
+}
+
+function presentExternalLink(destination) {
+  state.pendingLink = destination;
+  elements["link-destination"].textContent = destination;
+  elements["link-dialog"].showModal();
+}
+
+function dismissExternalLink() {
+  state.pendingLink = "";
+  clearLinkDestination();
+}
+
+async function copyExternalLink() {
+  const destination = state.pendingLink;
+  if (!destination) return;
+  await call(() => window.pywebview.api.copy_link(destination));
+  elements["link-dialog"].close();
+}
+
+async function openExternalLink() {
+  const destination = state.pendingLink;
+  if (!destination) return;
+  elements["link-dialog"].close();
+  await call(() => window.pywebview.api.open_link(destination));
 }
 
 async function verifyNativeHtmlFindHighlight() {
@@ -379,18 +449,43 @@ async function refreshIngestOverview() {
   line.className = `ingest-status-line no-print${status ? ` ${status.state}` : ""}`;
   line.dataset.statusId = status?.status_id || "";
   if (!status) {
-    line.textContent = "No ingest history · Click to open Ingests";
+    setIngestStatusText("No ingest history · Click to open Ingests");
     return;
   }
   const messages = Number(status.processed_messages).toLocaleString();
   const percent = Number(status.percent).toFixed(1);
   if (status.state === "running") {
-    line.textContent = `Ingesting ${percent}% · ${messages} messages · ${status.active_workers}/${status.configured_workers} workers · ETA ${status.eta}`;
+    setIngestStatusText(`Ingesting ${percent}% · ${messages} messages · ${status.active_workers}/${status.configured_workers} workers · ETA ${status.eta}`);
   } else if (status.state === "completed") {
-    line.textContent = `Last ingest completed · ${messages} messages · ${formatElapsed(status.elapsed_seconds)} · Click for history`;
+    setIngestStatusText(`Last ingest completed · ${messages} messages · ${formatElapsed(status.elapsed_seconds)} · Click for history`);
   } else {
-    line.textContent = `Last ingest ${status.state}: ${status.phase} · ${messages} messages · Click for details`;
+    setIngestStatusText(`Last ingest ${status.state}: ${status.phase} · ${messages} messages · Click for details`);
   }
+}
+
+function setIngestStatusText(text) {
+  state.ingestStatusText = text;
+  renderBottomStatus();
+}
+
+function showLinkDestination(destination) {
+  state.linkDestination = destination;
+  renderBottomStatus();
+}
+
+function clearLinkDestination(destination = "") {
+  if (destination && state.linkDestination !== destination) return;
+  state.linkDestination = "";
+  renderBottomStatus();
+}
+
+function renderBottomStatus() {
+  const line = elements["ingest-status-line"];
+  if (!line) return;
+  const destination = state.linkDestination;
+  line.textContent = destination || state.ingestStatusText;
+  line.title = destination;
+  line.classList.toggle("link-destination", Boolean(destination));
 }
 
 async function openIngestWindow() {
@@ -810,6 +905,7 @@ async function runSearch() {
   const searchAttachments = elements["search-attachments"].checked;
   const request = ++state.searchRequest;
   clearCurrentMessageFind();
+  clearLinkDestination();
   state.partRequest += 1;
   state.selectionRequest = null;
   state.selected = null;
@@ -1100,6 +1196,7 @@ function queuePreviews(messagePks, request) {
 
 async function selectMessage(messagePk) {
   showSingleMessageSelection();
+  clearLinkDestination();
   state.selectionRequest = messagePk;
   state.partRequest += 1;
   state.remoteContentAuthorizedMessage = null;
@@ -1532,12 +1629,13 @@ async function showPart(partId, allowRemote) {
   const request = ++state.partRequest;
   const part = await call(() => window.pywebview.api.part(messagePk, partId, allowRemote));
   if (!part || request !== state.partRequest || messagePk !== state.selected) return false;
+  clearLinkDestination();
   elements["body-view"].replaceChildren();
   elements["remote-content"].hidden = !part.remote_content_blocked;
   if (part.kind === "html") {
     const frame = document.createElement("iframe");
     frame.className = "html-frame";
-    frame.setAttribute("sandbox", "allow-popups allow-same-origin");
+    frame.setAttribute("sandbox", "allow-same-origin");
     const highlighted = highlightedHtml(part.content);
     frame.srcdoc = highlighted.content;
     frame.dataset.highlightCount = String(highlighted.count);
@@ -1556,6 +1654,7 @@ async function showPart(partId, allowRemote) {
     }
     if (request !== state.partRequest || messagePk !== state.selected || !isCurrentHtmlFrame(frame)) return false;
     installFrameFindShortcuts(frame);
+    installFrameLinkHandlers(frame);
     resizeFrame(frame);
     installFrameLayoutUpdates(frame);
   } else {
@@ -1732,6 +1831,7 @@ function selectedDragMessagePks() {
 function showMultipleMessageSelection() {
   const count = state.resultSelection.size;
   if (count < 2) return;
+  clearLinkDestination();
   state.selectionRequest = null;
   state.partRequest += 1;
   state.selected = null;

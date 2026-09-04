@@ -331,7 +331,10 @@ message bytes.
 All HTML views are sanitized before display. Scripts, forms, plugins, file URLs,
 event handlers, and unsafe URL schemes are removed. Remote images remain blocked
 unless you choose **Load Remote Content** for that message; embedded CID images
-may render from the verified message.
+may render from the verified message. Hovering an allowed link shows its complete
+destination in the bottom status bar. Clicking it shows the destination and
+offers **Open Link**, **Copy Link**, and **Ignore**; a link opens only after you
+choose **Open Link**.
 
 ### Date adjusted
 

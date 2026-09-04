@@ -624,7 +624,8 @@ def safe_html(value: str, message: Message, allow_remote: bool) -> tuple[str, bo
             if urlparse(href).scheme.casefold() not in {"http", "https", "mailto"}:
                 del element.attrs["href"]
             else:
-                element["target"], element["rel"] = "_blank", "noopener noreferrer"
+                element.attrs.pop("target", None)
+                element["rel"] = "noopener noreferrer"
         if element.name == "img" and element.get("src"):
             source = str(element["src"])
             if source.casefold().startswith("cid:"):

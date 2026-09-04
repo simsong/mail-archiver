@@ -41,6 +41,7 @@ from mailarchiver.gui_app import (
     application_icon_path,
     application_menu,
     application_metadata,
+    external_link_destination,
 )
 from mailarchiver.mailsearch import RECENT_FTS_SCAN_LIMIT, _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
@@ -62,7 +63,7 @@ MULTIPART_MESSAGE = (
     b"--outer\nContent-Type: multipart/alternative; boundary=alternative\n\n"
     b"--alternative\nContent-Type: text/plain; charset=utf-8\n\nPlain version.\n"
     b"--alternative\nContent-Type: text/html; charset=utf-8\n\n"
-    b'<html><body onload="bad()"><script>bad()</script><p>HTML version.</p>'
+    b'<html><body onload="bad()"><script>bad()</script><p>HTML version.</p><a href="https://example.org/archive" target="_blank">Archive</a>'
     b'<img src="cid:logo"><img src="https://tracker.example/pixel"></body></html>\n'
     b"--alternative--\n"
     b"--outer\nContent-Type: image/png\nContent-ID: <logo>\nContent-Disposition: inline; filename=logo.png\n"
@@ -425,6 +426,8 @@ def test_gui_selects_multipart_views_and_sanitizes_html(tmp_path: Path) -> None:
     blocked = render_part(archive, 2, html_id)
     assert "<script" not in blocked.content
     assert "onload" not in blocked.content
+    assert 'href="https://example.org/archive"' in blocked.content
+    assert "target=\"_blank\"" not in blocked.content
     assert "data:image/png;base64,aW1hZ2U=" in blocked.content
     assert "tracker.example" not in blocked.content
     assert blocked.remote_content_blocked
@@ -626,6 +629,20 @@ def test_gui_flags_executable_attachment_types() -> None:
     assert is_risky("installer.dmg", "application/octet-stream")
     assert is_risky("script", "application/x-sh")
     assert not is_risky("report.pdf", "application/pdf")
+
+
+def test_gui_external_links_require_a_safe_explicit_destination(tmp_path: Path) -> None:
+    """Requirement: the viewer can pass only approved external links to its explicit actions."""
+    api = GuiApi(None, e2e_directory=tmp_path)
+    try:
+        for destination in ("https://example.org/path?view=1", "http://example.org/", "mailto:archivist@example.org"):
+            assert external_link_destination(destination) == destination
+            assert api.open_link(destination) == destination
+        for destination in ("", "https://", "file:///private/secret", "javascript:alert(1)", "https://example.org/\nnext"):
+            with pytest.raises(ValueError):
+                external_link_destination(destination)
+    finally:
+        api.close()
 
 
 def find_tree_node(nodes: list[MailboxTreeNode], label: str) -> MailboxTreeNode:

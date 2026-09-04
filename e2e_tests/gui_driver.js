@@ -274,6 +274,31 @@
     const htmlFrame = document.querySelector("#body-view iframe");
     assert(htmlFrame, "preferred HTML body displayed");
     assert(htmlFrame.dataset.highlightCount === "1", "search phrase is highlighted in HTML body text");
+    const externalLink = htmlFrame.contentDocument.createElement("a");
+    externalLink.href = "https://example.org/archive?source=mail";
+    externalLink.textContent = "External archive reference";
+    htmlFrame.contentDocument.body.append(" ", externalLink);
+    externalLink.dispatchEvent(new MouseEvent("pointerover", {bubbles: true}));
+    assert(document.getElementById("ingest-status-line").textContent === externalLink.href,
+      "hovering a message link shows its destination in the bottom status bar");
+    let copiedLink = "";
+    let openedLink = "";
+    window.pywebview.api.copy_link = destination => { copiedLink = destination; return destination; };
+    window.pywebview.api.open_link = destination => { openedLink = destination; return destination; };
+    const firstLinkClick = new MouseEvent("click", {bubbles: true, cancelable: true});
+    externalLink.dispatchEvent(firstLinkClick);
+    const linkDialog = document.getElementById("link-dialog");
+    await waitFor(() => linkDialog.open && document.getElementById("link-destination").textContent === externalLink.href,
+      "clicking a message link presents the destination instead of opening it");
+    assert(firstLinkClick.defaultPrevented, "message-link click prevents automatic external navigation");
+    document.getElementById("link-copy").click();
+    await waitFor(() => copiedLink === externalLink.href && !linkDialog.open,
+      "Copy Link sends the reviewed destination to the pasteboard bridge");
+    externalLink.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true}));
+    await waitFor(() => linkDialog.open, "the reviewed link can be presented again for opening");
+    document.getElementById("link-open").click();
+    await waitFor(() => openedLink === externalLink.href && !linkDialog.open,
+      "Open Link invokes the explicit native bridge action");
     document.dispatchEvent(new KeyboardEvent("keydown", {key: "f", metaKey: true, bubbles: true}));
     await waitFor(() => messageFind.value === "message viewer" &&
       currentFrameFind(),
