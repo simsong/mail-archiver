@@ -8,7 +8,7 @@
 ## Tech Debt & Code Quality Analysis
 Overall, the Python codebase in `src/mailarchiver/` is extremely well-maintained and follows strict typing, comprehensive docstrings, and modular structure. Pylint gave it an initial score of 10.00/10 before disabling certain rules, and an 8.85/10 when analyzing specific structural issues.
 ### Code Quality and Maintainability
-- **Cyclic Imports**: There is a cyclic import between `mailarchiver.source_integrity` and `mailarchiver.sources` that should be resolved to prevent future initialization issues. (`src/mailarchiver/plugins/files/__init__.py:1:0: R0401: Cyclic import (mailarchiver.source_integrity -> mailarchiver.sources)`)
+- **Cyclic Imports**: There is a cyclic dependency between `mailarchiver.source_integrity` and `mailarchiver.sources` (see `src/mailarchiver/source_integrity.py` importing `.sources`, and `src/mailarchiver/sources.py` importing `.source_integrity` inside `LocalSourcePlugin.__init__`). If this shows up in linting (e.g., pylint R0401), consider extracting shared types into a third module to remove the cycle.
 - **Duplicate Code**: There are a few instances of duplicate code, specifically between `mailarchiver.mbox` and `mailarchiver.standalone_verify`, and between `mailarchiver.bagit` and `mailarchiver.validation`. These should be refactored into shared utility functions to improve maintainability.
 - **File Sizes**: The `__main__.py` file is quite large (1939 lines) and handles a lot of responsibilities including CLI argument parsing, workflow orchestration, and status reporting. This could be split into smaller, more focused modules (e.g., `cli.py`, `orchestrator.py`).
 ### Performance
