@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from mailarchiver.application import ApplicationController, ApplicationPreferencesStore
 from mailarchiver.bagit import initialize_bag
 from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.configuration import application_configuration, load_configuration
@@ -38,6 +39,7 @@ from mailarchiver.gui_service import (
 )
 from mailarchiver.gui_app import (
     GuiApi,
+    PyWebViewApplication,
     application_icon_path,
     application_menu,
     application_metadata,
@@ -261,7 +263,7 @@ def test_gui_application_metadata_names_the_product() -> None:
 
     assert metadata.name == "Mail Archiver"
     assert metadata.version == "0.0.0"
-    assert "Mail Archiver" in metadata.copyright
+    assert metadata.copyright == "Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved."
 
 
 def test_gui_application_uses_the_source_controlled_rainbow_icon() -> None:
@@ -272,16 +274,38 @@ def test_gui_application_uses_the_source_controlled_rainbow_icon() -> None:
     assert icon.is_file()
 
 
-def test_gui_windows_menu_opens_the_ingest_browser(tmp_path: Path) -> None:
-    """Requirement: the native Windows menu exposes the independent ingest browser."""
-    api = GuiApi(None, e2e_directory=tmp_path)
+def test_native_menus_route_through_the_application_controller(tmp_path: Path) -> None:
+    """Requirement: native menu callbacks resolve active state instead of capturing one GuiApi."""
+    controller = ApplicationController(ApplicationPreferencesStore(tmp_path / "preferences.json"))
+    application = PyWebViewApplication(controller)
+
+    menus = application_menu(application)
+
+    assert [menu.title for menu in menus] == ["File", "Window"]
+    assert [item.title for item in menus[0].items] == [
+        "New", "Open…", "New Search Window", "Import…", "Close",
+    ]
+    assert [item.title for item in menus[1].items] == ["Ingests"]
+    assert not menus[1].items[0].function()
+
+
+def test_gui_api_records_independent_search_window_state(tmp_path: Path) -> None:
+    """Requirement: each GUI bridge records search and selection state on its search window."""
+    archive = make_gui_archive(tmp_path)
+    controller = ApplicationController(ApplicationPreferencesStore(tmp_path / "preferences.json"))
+    document = controller.open_document(archive)
+    session = controller.new_search_window(document)
+    api = GuiApi(archive, document=document, search_window=session)
     try:
-        menus = application_menu(api)
-        assert [menu.title for menu in menus] == ["Windows"]
-        assert [item.title for item in menus[0].items] == ["Ingest"]
-        assert menus[0].items[0].function()
+        page = api.search("report", sort_by="subject", direction="ascending")
+        api.message(page["results"][0]["message_pk"])
     finally:
         api.close()
+
+    assert session.query == "report"
+    assert session.sort_by == "subject"
+    assert session.sort_direction == "ascending"
+    assert session.selected_message == 1
 
 
 def test_gui_copy_source_path_reports_missing_macos_bridge(

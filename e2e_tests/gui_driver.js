@@ -215,7 +215,7 @@
     chooseArchive.click();
     await waitFor(
       () => chooseArchive.dataset.completed !== completedChoices && state.results.length === 0,
-      "choose-archive control refreshes the active archive without searching",
+      "open-archive control leaves the current test document without searching",
     );
 
     await search("bulk", 203, false);

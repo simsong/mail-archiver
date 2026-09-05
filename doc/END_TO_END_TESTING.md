@@ -143,12 +143,15 @@ required release gate. Appium's Mac2 driver can expose XCUITest through
 WebDriver, but adds infrastructure without increasing coverage for this
 application. Swift Testing is for Swift logic and does not automate the UI.
 
-## macOS menu bar
+## Native application menus
 
-Mailarchiver passes a custom **Windows** menu to `webview.start`, with an
-**Ingest** action that delegates to the same singleton-window owner as the
-main HTML status line. pywebview's Cocoa backend also creates these native
-defaults:
+Mailarchiver passes custom **File** and **Window** menus to `webview.start`.
+File supplies **New**, **Open…**, launch-time **Open Recent**, **New Search
+Window**, **Import…**, and **Close** actions. Window supplies **Ingests** and
+the current About, search, and Ingests window inventory. Every callback
+resolves the active logical search window when invoked; opening an archive
+creates a new document window rather than retargeting an existing one.
+pywebview's Cocoa backend also creates these native defaults:
 
 * the application menu: About, Services, Hide, Hide Others, Show All, and Quit;
 * Edit: Cut, Copy, Paste, and Select All; and
@@ -159,26 +162,31 @@ identity to **Mail Archiver**, including version and copyright metadata and a
 mail-archive system icon. Consequently the application menu and standard About
 panel no longer identify the host Python interpreter.
 
-There is currently no native File, Search, or Help menu. Choose Archive,
-Save Message, Print, mailbox filtering, and filter-set management are HTML
-toolbar controls. Command-1 through Command-9 select a displayable MIME part;
-Command-0 and Command-Shift-U select raw RFC 5322 source. Those shortcuts are
-global JavaScript `keydown` handlers and do not appear as native menu items.
+There is currently no native Search or Help menu. Save Message, Print, mailbox
+filtering, and filter-set management remain HTML toolbar controls. Command-1
+through Command-9 select a displayable MIME part; Command-0 and Command-Shift-U
+select raw RFC 5322 source. Those shortcuts are global JavaScript `keydown`
+handlers and do not appear as native menu items.
 
-The current cross-platform `MenuAction` interface invokes Python but does not
-expose keyboard equivalents or dynamic enabled state. A conventional File or
-Message menu with standard macOS shortcuts would therefore need a small AppKit
-adapter (or a more complete native application shell) that delegates to the
-existing application actions. The HTML controls remain available so browser
-acceptance tests exercise the same underlying operations.
+The cross-platform `MenuAction` interface invokes Python but does not expose
+keyboard equivalents or dynamic enabled state. A small AppKit adapter rebuilds
+the active macOS menu when window or ingest state changes and disables **Close**
+for About and for the search window that owns Import. The controller also
+refuses that menu action and native close event. Standard keyboard equivalents
+still need a more complete native application shell.
+The HTML controls remain available so browser acceptance tests exercise the
+same underlying operations.
 
 Playwright can test the HTML controls and dispatch the Command-key events, but
 it cannot inspect or select Cocoa menu items. The native smoke test establishes
 that pywebview created a working application shell; it does not assert the
-contents of the inherited menu. If mailarchiver adds application-specific
-native menu commands, their callbacks should delegate to the same tested
-application actions, and XCUITest should verify their titles, enabled states,
-keyboard equivalents, and dispatch.
+contents of the inherited menu. Lifecycle pytest covers document identity,
+read-only rejection of invalid saved databases, destination-safe New,
+active-window routing, independent search state, real subprocess writer
+contention and release, nonce-authenticated loopback assets, and shared ingest
+state. XCUITest and a corresponding Windows native harness still need
+to verify menu titles, enabled states, keyboard equivalents, activation,
+file-open events, and dispatch in packaged applications under issues 72 and 76.
 
 ## Coverage boundaries
 
@@ -189,6 +197,7 @@ keyboard equivalents, and dispatch.
 | Complete HTML interaction | No | Yes | Smoke | Optional |
 | Chromium rendering | No | Yes | No | No |
 | Cocoa bridge injection and shutdown | No | No | Yes | Yes |
+| Document identity, startup, and active-window routing | Yes | No | No | Yes |
 | Independent Ingests-window content and action routing | No | Yes | No | Yes |
 | Native menu inspection, dialogs, Finder drag | No | No | No | Yes |
 

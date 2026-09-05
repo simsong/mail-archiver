@@ -1,7 +1,12 @@
 # Mail archive GUI prototype
 
-This macOS-first pywebview prototype searches an existing mailarchiver archive.
-It does not ingest mail or modify the archive.
+This pywebview prototype searches existing mailarchiver archives. Its
+platform-neutral application controller owns multiple archive documents and
+multiple independent search windows; native host adapters use WKWebView on
+macOS and are designed for WebView2 on Windows. It can initialize a selected
+new archive and run the existing typed ingest service against explicitly
+selected local sources. Canonical writes remain inside the ingest engine and
+are guarded by the shared OS writer lease.
 On macOS, the native Dock and About identity use the checked-in 192-pixel PNG
 derived from the shared `icons/rainbow-post.svg` project icon.
 
@@ -13,8 +18,15 @@ make gui ARGS="--archive /path/to/archive"
 ```
 
 The archive must contain `archive.sqlite3`, `search.sqlite3`, and the canonical
-MBOX files referenced by the catalog. Without `--archive`, the app opens with a
-directory chooser.
+MBOX files referenced by the catalog. Without `--archive`, the app opens the
+last valid archive or an in-memory Untitled document. Use **File → Open…** or
+**Open Archive…** to open an archive in a new window, and **File → New Search
+Window** for another independently searchable view of the active archive.
+**File → New** selects a permanent destination before initialization, and
+**File → Import…** selects source files/directories and the owner-names file.
+The always-present About window reports version, disk, network, warnings, and
+ingest activity. GUI assets are served only over the application's
+nonce-authenticated loopback server; Python calls still use the native bridge.
 
 This prototype revision adds attachment metadata, deterministic 18-word body
 previews, and a separate text-attachment FTS table to the disposable search

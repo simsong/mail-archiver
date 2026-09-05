@@ -19,10 +19,12 @@ from collections import Counter, deque
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
+from importlib.metadata import version
 from pathlib import Path
 from types import TracebackType
 from typing import Literal, TypeVar
 from urllib.parse import quote
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 from tabulate import tabulate
@@ -90,6 +92,7 @@ from .sources import (
     local_hierarchy_path,
 )
 from .standalone_verify import semantic_bytes
+from .writer_lock import ArchiveBusyError, WriterLease
 
 DEFAULT_REPORT_TOP = 10
 PROGRESS_REFRESH_SECONDS = 0.25
@@ -100,6 +103,18 @@ DISCOVERY_PHASE = "discovering sources"
 TOP_LINE_STYLE = "\x1b[37;44m"
 ANSI_RESET = "\x1b[0m"
 WorkerItem = TypeVar("WorkerItem")
+
+
+class IngestRequest(BaseModel):
+    """Typed ingest service request shared by command-line and GUI callers."""
+
+    archive: Path
+    owner_names_file: Path
+    roots: list[str] = Field(min_length=1)
+    earliest_year: int = Field(default=1900, ge=1)
+    workers: int = Field(default_factory=lambda: min(os.cpu_count() or 1, 8), ge=1)
+    plugin_dir: list[Path] = Field(default_factory=list)
+    index_attachments: bool = False
 
 
 def positive_integer(value: str) -> int:
@@ -281,10 +296,15 @@ class RefreshIndexPublication:
     """Make the final paired derived-data publication uninterruptible."""
 
     def __enter__(self) -> None:
-        self.previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        self.previous_handler = (
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            if threading.current_thread() is threading.main_thread()
+            else None
+        )
 
     def __exit__(self, exception_type: type[BaseException] | None, _value: BaseException | None, _traceback: TracebackType | None) -> None:
-        signal.signal(signal.SIGINT, self.previous_handler)
+        if self.previous_handler is not None:
+            signal.signal(signal.SIGINT, self.previous_handler)
 
 
 def formatted_bytes(value: int) -> str:
@@ -917,6 +937,7 @@ def open_ingest_search(
     archive: Path,
     catalog: sqlite3.Connection,
     index_attachments: bool,
+    writer_lease: WriterLease,
 ) -> tuple[sqlite3.Connection, PublicationRecovery]:
     """Open the disposable index, rebuilding an obsolete layout before ingest."""
     path = archive / "search.sqlite3"
@@ -932,7 +953,7 @@ def open_ingest_search(
         finally:
             recovery_search.close()
             recovery_path.unlink(missing_ok=True)
-        rebuild_search_index(archive, index_attachments)
+        rebuild_search_index(archive, index_attachments, writer_lease=writer_lease)
         return create_search(path, check_same_thread=False), recovery
     try:
         return search, recover_publication(archive, catalog, search)
@@ -942,8 +963,46 @@ def open_ingest_search(
 
 
 def ingest(args: argparse.Namespace) -> None:
-    plugins = load_plugins(args.plugin_dir)
-    source_specs = [SourceSpec(locator=root) for root in args.roots]
+    """Adapt parsed CLI options to the shared typed ingest service."""
+    run_ingest(
+        IngestRequest(
+            archive=Path(args.archive),
+            owner_names_file=Path(args.owner_names_file),
+            roots=list(args.roots),
+            earliest_year=args.earliest_year,
+            workers=args.workers,
+            plugin_dir=list(args.plugin_dir),
+            index_attachments=args.index_attachments,
+        )
+    )
+
+
+def run_ingest(request: IngestRequest, writer_lease: WriterLease | None = None) -> None:
+    """Run ingest under the archive's OS writer lock."""
+    request.archive.mkdir(parents=True, exist_ok=True)
+    identity = os.path.normcase(str(request.archive.resolve(strict=True)))
+    owned = writer_lease is None
+    lease = writer_lease or WriterLease.acquire(
+        request.archive,
+        identity,
+        "ingest",
+        uuid4().hex,
+        version("mailarchiver"),
+    )
+    if not lease.acquired or lease.archive_identity != identity:
+        if owned:
+            lease.release()
+        raise ValueError("an acquired writer lease for this archive is required")
+    try:
+        _run_ingest(request, lease)
+    finally:
+        if owned:
+            lease.release()
+
+
+def _run_ingest(request: IngestRequest, writer_lease: WriterLease) -> None:
+    plugins = load_plugins(request.plugin_dir)
+    source_specs = [SourceSpec(locator=root) for root in request.roots]
     selected_sources: list[tuple[SourceSpec, LoadedPlugin]] = []
     selected_source_keys: set[tuple[str, str, str | None]] = set()
     for source_spec in source_specs:
@@ -961,7 +1020,7 @@ def ingest(args: argparse.Namespace) -> None:
         if key not in selected_source_keys:
             selected_sources.append((source_spec, matches[0]))
             selected_source_keys.add(key)
-    archive = Path(args.archive)
+    archive = request.archive
     archive.mkdir(parents=True, exist_ok=True)
     catalog_path = archive / "archive.sqlite3"
     existing_output = (
@@ -997,14 +1056,16 @@ def ingest(args: argparse.Namespace) -> None:
                 progress.display(safe_status_text(event.phase))
 
     try:
-        search, recovery = open_ingest_search(archive, catalog, args.index_attachments)
+        search, recovery = open_ingest_search(
+            archive, catalog, request.index_attachments, writer_lease
+        )
     except BaseException:
         catalog.close()
         raise
     if recovery is not PublicationRecovery.NONE:
         checkpoint_archive()
         print(f"recovered: pending message publication {recovery.value}", file=sys.stderr)
-    owners = owner_tokens(Path(args.owner_names_file))
+    owners = owner_tokens(request.owner_names_file)
     started_at = datetime.now(timezone.utc)
     run_pk = catalog.execute(
         "INSERT INTO ingest_runs(started_at) VALUES (?)", (started_at.isoformat(),)
@@ -1030,7 +1091,7 @@ def ingest(args: argparse.Namespace) -> None:
         catalog.close()
         raise
     progress = ProgressReporter(
-        args.workers,
+        request.workers,
         status_file=status_file,
         archive=archive,
         run_pk=int(run_pk),
@@ -1422,7 +1483,12 @@ def ingest(args: argparse.Namespace) -> None:
             raise
         if category in SEARCH_CATEGORIES:
             index_message_safely(
-                catalog, search, message_pk, raw, args.index_attachments, date_utc=parsed.date_utc
+                catalog,
+                search,
+                message_pk,
+                raw,
+                request.index_attachments,
+                date_utc=parsed.date_utc,
             )
         progress.record_disposition("archived")
         if category == "INFECTED":
@@ -1514,7 +1580,7 @@ def ingest(args: argparse.Namespace) -> None:
                         None if source_file is None else source_file.path,
                         prior_date,
                         source.source_date_utc,
-                        args.earliest_year,
+                        request.earliest_year,
                     )
                 except Exception as error:
                     digest = hashlib.sha256(raw).hexdigest()
@@ -1720,7 +1786,7 @@ def ingest(args: argparse.Namespace) -> None:
         progress.set_phase("checking sources")
         run_file_workers(
             snapshotted_containers(),
-            args.workers,
+            request.workers,
             ingest_container,
             stop,
             progress.refresh,
@@ -1918,9 +1984,36 @@ def prepare_refresh_index_message(
 
 
 def rebuild_search_index(
-    archive: Path, index_attachments: bool, workers: int = REFRESH_INDEX_DEFAULT_WORKERS
+    archive: Path,
+    index_attachments: bool,
+    workers: int = REFRESH_INDEX_DEFAULT_WORKERS,
+    *,
+    writer_lease: WriterLease | None = None,
 ) -> None:
-    """Build and validate a replacement search database before publishing it."""
+    """Build and publish a replacement search database under the writer lease."""
+    identity = os.path.normcase(str(archive.resolve(strict=True)))
+    owned = writer_lease is None
+    lease = writer_lease or WriterLease.acquire(
+        archive,
+        identity,
+        "refresh search index",
+        uuid4().hex,
+        version("mailarchiver"),
+    )
+    if not lease.acquired or lease.archive_identity != identity:
+        if owned:
+            lease.release()
+        raise ValueError("an acquired writer lease for this archive is required")
+    try:
+        _rebuild_search_index(archive, index_attachments, workers)
+    finally:
+        if owned:
+            lease.release()
+
+
+def _rebuild_search_index(
+    archive: Path, index_attachments: bool, workers: int
+) -> None:
     temporary = archive / "search.sqlite3.tmp"
     temporary.unlink(missing_ok=True)
     catalog = create_catalog(archive / "archive.sqlite3")
@@ -2102,6 +2195,9 @@ def main() -> int:
         return 1
     except ClamScannerStartupError as error:
         print(f"ClamAV startup failed: {error}", file=sys.stderr, flush=True)
+        return 1
+    except ArchiveBusyError as error:
+        print(f"archive busy: {error}", file=sys.stderr, flush=True)
         return 1
     except PluginDiscoveryError as error:
         print(f"plug-in discovery failed: {error}", file=sys.stderr, flush=True)

@@ -145,7 +145,9 @@ class FilterSetStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary: str | None = None
         try:
-            with tempfile.NamedTemporaryFile("w", dir=self.path.parent, prefix=".filter-sets-", delete=False) as output:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", dir=self.path.parent, prefix=".filter-sets-", delete=False
+            ) as output:
                 temporary = output.name
                 output.write(preferences.model_dump_json(indent=2) + "\n")
                 output.flush()

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; connect-src 'self'">
+    <title>About Mail Archiver</title>
+    <link rel="stylesheet" href="about.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icons/rainbow-post-192.png" alt="" width="96" height="96">
+        <div><h1 id="name">Mail Archiver</h1><p id="version"></p><p id="copyright"></p></div>
+      </header>
+      <section aria-labelledby="health-heading">
+        <h2 id="health-heading">System health</h2>
+        <dl>
+          <dt>Free disk space</dt><dd id="disk">Checking…</dd>
+          <dt>Internet</dt><dd id="internet">Checking…</dd>
+        </dl>
+      </section>
+      <section aria-labelledby="activity-heading">
+        <h2 id="activity-heading">Archive activity</h2>
+        <div id="activity"><p class="empty">No saved archive is open.</p></div>
+      </section>
+      <section aria-labelledby="messages-heading">
+        <h2 id="messages-heading">Messages and warnings</h2>
+        <div id="notices" aria-live="polite"><p class="empty">No messages.</p></div>
+      </section>
+      <div id="error" role="alert" hidden></div>
+    </main>
+    <script src="about.js"></script>
+  </body>
+</html>
