@@ -455,6 +455,83 @@ Index extraction and insertion happen after canonical MBOX/catalog publication.
 An indexing failure is recorded as a metadata defect and does not reject mail;
 `refresh-index` repairs missing disposable content.
 
+## Desktop application documents and windows
+
+The first macOS and Windows applications retain the Python implementation and
+share the pywebview HTML, CSS, and JavaScript. They use WKWebView on macOS and
+WebView2 on Windows. An application-owned HTTP server binds only to
+`127.0.0.1` on an ephemeral port and serves only packaged GUI assets. Each
+window starts with an unlogged, one-use cryptographic nonce that establishes a
+session-only `HttpOnly`, `SameSite=Strict` cookie and redirects to a clean URL;
+every asset request requires that cookie and the exact loopback host, and any
+request carrying an `Origin` header must name that exact origin.
+The server sends no permissive CORS response and stops with the application.
+Any future state-changing HTTP API must additionally require an explicit CSRF
+header. The applications must be packaged
+with Python and all application dependencies. Users must not need Python,
+`pip`, `pipx`, `uv`, or a source checkout.
+
+An `ApplicationController` owns application preferences, archive-document
+sessions, active-window routing, recent archives, and operating-system open
+and reopen events. Native menu callbacks resolve the active window when they
+are invoked. Discardable, versioned preferences are outside every archive in
+the platform-appropriate per-user application directory. They contain the
+last archive and at most ten recent archive paths, but no archive content or
+credentials.
+
+An `ArchiveDocument` represents one archive. Opening validates the directory
+and the versioned layout and SQLite readable state of both databases without
+creating or modifying anything. A missing or invalid saved archive is removed
+from recent preferences and reported in the persistent About window. The document
+retains the user's absolute display path and also uses a canonical,
+case-normalized path as its process-local identity. Windows opened through
+aliases of the same archive share the document's ingest state, child windows,
+and publication generation. The document remains alive while any search
+window, child window, or ingest operation uses it.
+
+Every search window has a lifetime-stable document binding and independent
+query, sort, selection, mailbox-filter, and geometry state. **New Search
+Window** attaches another window to the active document. **Open** and an
+operating-system open event create a window for the requested document; they
+must not silently retarget an existing search window.
+
+Startup opens explicit document paths first, otherwise the last valid archive,
+otherwise a new in-memory **Untitled** document. A missing or invalid last
+archive is removed from recent state and reported, never recreated. Untitled
+documents cannot write until the creation/import workflow chooses and creates
+a destination archive. After the native event loop starts, first-launch
+Untitled immediately offers the same destination dialog and then the Import
+source workflow; canceling either dialog safely leaves the appropriate blank
+document open.
+
+An About window always opens at application startup and remains present while
+the application has another window. It displays the installed version, current
+free space on the active archive's filesystem (or the user's home filesystem),
+live Internet reachability, startup errors, warnings, and each open archive's
+latest ingest status.
+
+**File → New** asks for a new or empty permanent `.mailarchive` destination
+before creating its blank search window. It initializes BagIt, both databases,
+and operational status state, and refuses to overwrite an existing archive or
+nonempty invalid directory. **File → Import…** collects one or more supported
+local files or directories, an owner-names UTF-8 text file, explicit final
+confirmation, and starts the same typed ingest service used by the CLI on a
+worker thread. ClamAV must be separately installed and available.
+
+Only a saved document holding the matching cross-process writer lease may
+start ingest. The process-local document registry prevents duplicate UI jobs
+but is not the operating-system lock. Different documents may ingest
+independently. Successful publication increments the document generation and
+identifies all attached search windows for refresh.
+The OS lease is a nonblocking exclusive lock on
+`status/archive-write.lock`; diagnostic JSON in that file records the operation,
+PID, host, start time, version, and archive identity, but file presence never
+determines ownership and a process crash releases the lock. CLI ingest and
+search-index rebuild use the same lease. During Import, **File → Close** does
+nothing for the owning search window and that window's close box is refused;
+other search and child windows remain independently closeable. The Window menu
+lists the About, search, and Ingests windows and brings a selected window forward.
+
 `mailsearch` is a read-only command-line consumer of both databases.  It
 accepts ordinary full-text terms plus `any:ADDRESS`, `from:ADDRESS`,
 role-specific `to:ADDRESS`, `cc:ADDRESS`, and `bcc:ADDRESS`, `subject:TEXT`,
@@ -554,7 +631,7 @@ body text; for HTML it also copies the displayed message subject and headers.
 The bottom of the main GUI contains a clickable ingest-status line. During a
 run it shows live completion, message count, active/configured workers, and ETA;
 otherwise it summarizes the latest run. Clicking it opens a separate native
-Ingests window with its own close box. The **Windows → Ingest** menu opens the
+Ingests window with its own close box. The **Window → Ingests** menu opens the
 same window. That window browses every retained status file and shows the
 selected run's aggregate statistics, sources, failure detail, and all worker
 threads. If it is already visible, either action brings it to the front and

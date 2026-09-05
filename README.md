@@ -356,10 +356,16 @@ all headers, `--html` shows decoded HTML, and `--mime` shows its original MIME
 source. Printing uses its catalogued MBOX location and verifies its recorded
 SHA-256; it does not alter canonical message bytes.
 
-### Graphical search on macOS
+### Graphical search desktop architecture
 
-The initial graphical search tool runs on macOS using pywebview and the system
-WKWebView. It has one search field with the same selectors and quoting rules as
+The graphical search tool uses pywebview with the system WKWebView on macOS;
+the same Python controller and HTML/CSS/JavaScript are designed for WebView2 on
+Windows. The controller supports multiple archive documents and multiple
+independent search windows on one archive. Packaged GUI assets come from an
+application-owned, nonce-authenticated server bound to an ephemeral
+`127.0.0.1` port; it exposes no HTTP service API, and JavaScript calls Python
+through pywebview's native bridge.
+It has one search field with the same selectors and quoting rules as
 `mailsearch`, sortable results, message and MIME-part viewing, `.eml` export
 and drag-out, printing, and attachment viewing. Typing three characters offers
 ranked address and subject completions. Selected addresses become removable
@@ -376,8 +382,16 @@ make gui ARGS="--archive /path/to/mail-archive"
 
 The bottom status line shows the current ingest, or the latest completed run.
 Click it to open the separate ingest-history and worker-detail window. The same
-window is available from **Windows → Ingest**; choosing it again brings the
+window is available from **Window → Ingests**; choosing it again brings the
 existing window to the front.
+
+The About window is present throughout the run and shows the installed version,
+free disk space, Internet reachability, startup warnings, and ingest activity.
+Use **File → New** to select and initialize a new or empty `.mailarchive`
+destination, **File → Import…** to choose local mail sources and an owner-names
+file, and **Window** to bring any application window forward. Import uses a
+cross-process writer lock; its owning search window cannot close until the run
+finishes, while other search windows remain usable.
 
 Select **Search attachments** to include the separate text-attachment index in
 ordinary full-text searches. Build the attachment index with `uv run

@@ -203,13 +203,32 @@ Start the graphical search interface with:
 make gui ARGS='--archive "/path/to/mail-archive"'
 ```
 
-If no archive was supplied, choose one with **Choose Archive…**.
-The window title shows the archive path and the total number of deduplicated,
-searchable messages.
+If no archive was supplied, the application opens the last valid archive or an
+in-memory **Untitled** document. Use **File → Open…** or **Open Archive…** to
+open an existing archive in a new window. **File → New Search Window** opens
+another independently searchable window on the active archive. Recent archives
+are kept in **File → Open Recent**. A missing or invalid saved archive is
+ignored, removed from recents, and reported in the About window. **File → New**
+asks for a new or empty `.mailarchive` destination before initializing and
+opening it. **File → Import…** asks whether to select local files or directories,
+asks for the UTF-8 owner-names file, shows the destination and sources for final
+confirmation, and starts import using the separately installed ClamAV.
+For a saved document, the window title shows the archive path and total number
+of deduplicated, searchable messages.
+On first launch with no usable archive, the Untitled window immediately offers
+the New destination and then Import dialogs. Canceling leaves the blank window
+open and does not choose or mutate any other path.
+
+The About window remains available for the application run. It shows the
+installed version, free disk space, live Internet reachability, startup errors,
+warnings, and current or latest ingest activity. The Window menu lists it and
+every search and Ingests window. During Import, the search window that started
+the run cannot be closed from **File → Close** or its close box; other windows
+remain searchable and independently closeable.
 
 The status line at the bottom shows a running ingest, or summarizes the most
 recent run. Click it to open the independent Ingests window. You can also use
-**Windows → Ingest**. The window lists all retained runs and shows the selected
+**Window → Ingests**. The window lists all retained runs and shows the selected
 run's sources, totals, failures, and every configured worker thread. It has its
 own close box; opening it again while it is visible brings the same window to
 the front.

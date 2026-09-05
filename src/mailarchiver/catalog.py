@@ -201,8 +201,36 @@ def create_search(path: Path, *, check_same_thread: bool = True) -> sqlite3.Conn
         raise
 
 
+def validate_catalog(path: Path) -> None:
+    """Validate the catalog schema and readable SQLite state without writing."""
+    database = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        database.execute("PRAGMA query_only = ON")
+        tables = _tables(database)
+        _require_version(database, tables, SCHEMA_VERSION, "archive")
+        _require_archive_layout(database, tables)
+        if database.execute("PRAGMA quick_check").fetchone() != ("ok",):
+            raise RuntimeError("archive database failed SQLite quick_check")
+    finally:
+        database.close()
+
+
+def validate_search(path: Path) -> None:
+    """Validate the disposable search schema and readable SQLite state without writing."""
+    database = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        database.execute("PRAGMA query_only = ON")
+        tables = _tables(database)
+        _require_version(database, tables, SEARCH_SCHEMA_VERSION, "search")
+        _require_search_layout(database, tables)
+        if database.execute("PRAGMA quick_check").fetchone() != ("ok",):
+            raise RuntimeError("search database failed SQLite quick_check")
+    finally:
+        database.close()
+
+
 def owner_tokens(path: Path) -> list[str]:
-    lines = (line.strip().lower() for line in path.read_text().splitlines())
+    lines = (line.strip().lower() for line in path.read_text(encoding="utf-8").splitlines())
     return [line for line in lines if line and not line.startswith("#")]
 
 

@@ -10,14 +10,17 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page
 from pydantic import BaseModel
 
+from mailarchiver.application import ApplicationController, ApplicationPreferencesStore
 from mailarchiver.catalog import address_pk, create_catalog, create_search
 from mailarchiver.gui_app import (
+    AboutApi,
     E2E_DRIVER,
     GUI_DIRECTORY,
     GuiApi,
@@ -26,6 +29,7 @@ from mailarchiver.gui_app import (
     NativeSmokeApi,
     NativeSmokeController,
     NativeSmokeReport,
+    PyWebViewApplication,
 )
 from mailarchiver.ingest_status import read_ingest_history
 from mailarchiver.search import index_message
@@ -36,7 +40,7 @@ DATA = Path(__file__).parent / "data"
 NORMAL_MESSAGE_COUNT = 207
 PROCESSED_MESSAGE_COUNT = 210
 GUI_API_METHODS = (
-    "attachment", "choose_archive", "delete_filter_set", "mailbox_tree", "message",
+    "activate", "attachment", "choose_archive", "delete_filter_set", "mailbox_tree", "message",
     "copy_link", "copy_source_path", "copy_visible_text", "ingest_overview", "open_attachment", "open_ingest_window", "open_link", "open_message_window", "part", "prepare_drag", "rename_filter_set",
     "request_previews", "save_attachment", "save_filter_set", "save_message",
     "saved_filter_sets", "search", "search_count", "status", "suggestions", "take_previews",
@@ -255,6 +259,70 @@ def test_ingest_history_ui_end_to_end(built_archive: BuiltArchive, page: Page) -
     assert "Completed" in page.locator(".history-row").inner_text()
     assert page.locator(".worker-table tbody tr").count() == 2
     assert str(PROCESSED_MESSAGE_COUNT) in page.locator(".statistics").inner_text()
+
+
+def test_about_window_displays_version_disk_and_warnings(tmp_path: Path, page: Page) -> None:
+    """Requirement: the persistent About UI surfaces health and application diagnostics."""
+    controller = ApplicationController(ApplicationPreferencesStore(tmp_path / "preferences.json"))
+    application = PyWebViewApplication(controller)
+    application.add_notice("warning", "Saved archive was ignored because its database was invalid.")
+    api = AboutApi(application)
+    page.expose_function("mailarchive_about_status", api.status)
+    page.add_init_script(
+        "window.pywebview = {api: {status: (...args) => window.mailarchive_about_status(...args)}}; "
+        "window.addEventListener('DOMContentLoaded', () => "
+        "window.dispatchEvent(new Event('pywebviewready')));"
+    )
+
+    page.goto((GUI_DIRECTORY / "about.html").as_uri())
+
+    page.wait_for_function("document.getElementById('version').textContent.startsWith('Version ')")
+    assert "available on" in page.locator("#disk").inner_text()
+    assert "invalid" in page.locator("#notices").inner_text()
+
+
+def test_gui_import_uses_typed_ingest_service_without_a_subprocess(tmp_path: Path) -> None:
+    """Requirement: GUI Import publishes searchable mail through the shared typed service."""
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "message.eml").write_bytes(
+        b"Message-ID: <gui-import@example>\n"
+        b"From: owner@example.org\n"
+        b"To: reader@example.net\n"
+        b"Subject: GUI import\n"
+        b"Date: Wed, 03 Jan 2024 10:00:00 +0000\n\n"
+        b"Imported without a command-line subprocess.\n"
+    )
+    owner_names = tmp_path / "owner-names.txt"
+    owner_names.write_text("owner@example.org\n", encoding="utf-8")
+    controller = ApplicationController(ApplicationPreferencesStore(tmp_path / "preferences.json"))
+    document = controller.create_document(tmp_path / "GUI.mailarchive")
+    session = controller.new_search_window(document)
+    application = PyWebViewApplication(controller)
+    api = GuiApi(
+        document.path,
+        temporary_directory=tmp_path / "exports",
+        application=application,
+        document=document,
+        search_window=session,
+    )
+    try:
+        assert application.start_import(api, [source], owner_names)
+        deadline = time.monotonic() + 90
+        while document.ingest_job is not None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert document.ingest_job is None
+        database = sqlite3.connect(document.path / "archive.sqlite3")
+        try:
+            assert database.execute("SELECT COUNT(*) FROM messages").fetchone() == (1,)
+        finally:
+            database.close()
+        status = application.about_status()
+        assert status.ingests[0].status is not None
+        assert status.ingests[0].status.state == "completed"
+        assert status.notices[-1].message.startswith("Import completed")
+    finally:
+        api.close()
 
 
 def test_native_smoke_page_reports_one_real_search(
