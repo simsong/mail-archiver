@@ -203,10 +203,10 @@ def refresh_index_line(progress: RefreshIndexProgress, now: float, width: int = 
     completed = min(progress.completed, progress.total)
     percent = 100 if progress.total == 0 else 100 * completed / progress.total
     elapsed = max(now - progress.started_monotonic, 0.001)
-    if completed == 0:
-        eta = "calculating"
-    elif completed >= progress.total:
+    if completed >= progress.total:
         eta = "0s"
+    elif completed == 0:
+        eta = "calculating"
     else:
         eta = formatted_duration((progress.total - completed) * elapsed / completed)
     filled = round(width * percent / 100)
@@ -2026,7 +2026,7 @@ def rebuild_search_index(
     except KeyboardInterrupt as error:
         if catalog.in_transaction:
             catalog.rollback()
-        raise RefreshIndexInterrupted(published or not temporary.exists()) from error
+        raise RefreshIndexInterrupted(published) from error
     finally:
         catalog.close()
         temporary.unlink(missing_ok=True)

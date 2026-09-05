@@ -74,6 +74,20 @@ def test_refresh_index_progress_has_a_bar_and_eta() -> None:
     )
 
 
+def test_empty_refresh_index_progress_is_complete() -> None:
+    """Requirement: an empty index rebuild reports completion without a contradictory ETA."""
+    progress = RefreshIndexProgress(
+        phase="Refreshing search index",
+        total=0,
+        unit="messages",
+        started_monotonic=10,
+    )
+
+    assert refresh_index_line(progress, now=20, width=8) == (
+        "Refreshing search index: [########] 100.0% 0/0 messages  0 messages/s  ETA 0s"
+    )
+
+
 def test_overall_progress_reports_finalizing_before_last_checkpoint() -> None:
     """Requirement: complete byte input does not claim completion before its stable checkpoint."""
     state = ProgressState(

@@ -482,7 +482,10 @@ class GuiApi:
 
     def copy_visible_text(self, text: str) -> str:
         """Copy the user-visible message text to the macOS pasteboard."""
-        import AppKit
+        try:
+            import AppKit  # pylint: disable=import-error,import-outside-toplevel
+        except ImportError as error:
+            raise ValueError("copying visible text requires macOS with PyObjC installed") from error
 
         pasteboard = AppKit.NSPasteboard.generalPasteboard()
         pasteboard.clearContents()
@@ -492,7 +495,10 @@ class GuiApi:
     def copy_link(self, destination: str) -> str:
         """Copy an approved message link as both text and a macOS URL."""
         destination = external_link_destination(destination)
-        import AppKit
+        try:
+            import AppKit  # pylint: disable=import-error,import-outside-toplevel
+        except ImportError as error:
+            raise ValueError("copying links requires macOS with PyObjC installed") from error
 
         pasteboard = AppKit.NSPasteboard.generalPasteboard()
         pasteboard.clearContents()
@@ -505,8 +511,11 @@ class GuiApi:
         destination = external_link_destination(destination)
         if self.e2e_directory is not None:
             return destination
-        import AppKit
-        from Foundation import NSURL  # pylint: disable=no-name-in-module
+        try:
+            import AppKit  # pylint: disable=import-error,import-outside-toplevel
+            from Foundation import NSURL  # pylint: disable=import-error,import-outside-toplevel,no-name-in-module
+        except ImportError as error:
+            raise ValueError("opening links requires macOS with PyObjC installed") from error
 
         url = NSURL.URLWithString_(destination)
         if url is None or not AppKit.NSWorkspace.sharedWorkspace().openURL_(url):
