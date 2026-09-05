@@ -13,15 +13,21 @@ RICH_MESSAGE = (
     b"Received: by first.example; Thu, 1 Feb 2024 12:00:00 +0000\n"
     b"Received: by second.example; Fri, 2 Feb 2024 12:00:00 +0000\n"
     b"Received: by new-outlier.example; Sun, 4 Feb 2024 12:00:00 +0000\n"
-    b"From: curator@example.net\nTo: archive-owner@example.org\nCc: Beth Rosenberg <beth@example.org>\n"
+    b'From: "Curator" <curator@example.net>\nTo: archive-owner@example.org\nCc: Beth Rosenberg <beth@example.org>\n'
     b"Subject: Rich UI message\nMIME-Version: 1.0\n"
     b"Content-Type: multipart/mixed; boundary=outer\n\n"
     b"--outer\nContent-Type: multipart/alternative; boundary=alternative\n\n"
     b"--alternative\nContent-Type: text/plain; charset=utf-8\n\n"
-    b"Plain E2E body for the message viewer.\n"
+    b"Plain E2E body for the message viewer. https://example.org/plain-link?source=mail\n"
     b"--alternative\nContent-Type: text/html; charset=utf-8\n\n"
-    b'<html><body><p>HTML E2E body for the message viewer.</p>'
+    b'<html><head><style>mark { background: yellow !important; }</style></head><body>'
+    b'<mark class="message-find-match message-find-current" data-mailarchiver-find-target="outer">decoy</mark>'
+    b'<span id="message-find-0">decoy</span><p>HTML E2E body for the message viewer.</p>'
+    + b"<br>" * 180
+    + b'<p>Curator one.</p><p>Curator two.</p>'
     b'<img src="https://tracker.invalid/pixel.png"></body></html>\n'
+    b"--alternative\nContent-Type: text/html; charset=utf-8\n\n"
+    b'<html><body><p>Secondary HTML alternative.</p><img src="https://tracker.invalid/secondary.png"></body></html>\n'
     b"--alternative--\n"
     b"--outer\nContent-Type: image/png\nContent-Disposition: attachment; filename=tiny.png\n"
     b"Content-Transfer-Encoding: base64\n\n"

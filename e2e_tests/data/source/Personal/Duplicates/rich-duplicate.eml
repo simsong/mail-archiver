@@ -4,7 +4,7 @@ Received: by old-outlier.example; Wed, 31 Jan 2024 12:00:00 +0000
 Received: by first.example; Thu, 1 Feb 2024 12:00:00 +0000
 Received: by second.example; Fri, 2 Feb 2024 12:00:00 +0000
 Received: by new-outlier.example; Sun, 4 Feb 2024 12:00:00 +0000
-From: curator@example.net
+From: "Curator" <curator@example.net>
 To: archive-owner@example.org
 Cc: Beth Rosenberg <beth@example.org>
 Subject: Rich UI message
@@ -17,11 +17,15 @@ Content-Type: multipart/alternative; boundary=alternative
 --alternative
 Content-Type: text/plain; charset=utf-8
 
-Plain E2E body for the message viewer.
+Plain E2E body for the message viewer. https://example.org/plain-link?source=mail
 --alternative
 Content-Type: text/html; charset=utf-8
 
-<html><body><p>HTML E2E body for the message viewer.</p><img src="https://tracker.invalid/pixel.png"></body></html>
+<html><head><style>mark { background: yellow !important; }</style></head><body><mark class="message-find-match message-find-current" data-mailarchiver-find-target="outer">decoy</mark><span id="message-find-0">decoy</span><p>HTML E2E body for the message viewer.</p><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><p>Curator one.</p><p>Curator two.</p><img src="https://tracker.invalid/pixel.png"></body></html>
+--alternative
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Secondary HTML alternative.</p><img src="https://tracker.invalid/secondary.png"></body></html>
 --alternative--
 --outer
 Content-Type: image/png

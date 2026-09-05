@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; frame-src blob: data:; object-src 'none'; connect-src 'self'">
     <title>Mail Archiver</title>
+    <link rel="stylesheet" href="vendor/tabulator/dist/css/tabulator.min.css">
     <link rel="stylesheet" href="style.css">
   </head>
   <body>
@@ -37,7 +38,7 @@
           <label class="volume-toggle"><input id="show-source-volumes" type="checkbox"> Show source volumes</label>
           <div id="mailbox-tree" role="tree" aria-label="Original mailboxes" aria-multiselectable="true"></div>
         </aside>
-        <aside class="results no-print">
+        <aside id="results-pane" class="results no-print">
           <div class="result-controls">
             <div id="result-status" class="status">Choose an archive to begin.</div>
             <label for="sort-by">Sort:</label>
@@ -48,7 +49,8 @@
             </select>
             <button id="sort-direction" type="button" aria-label="Sort descending" title="Sort descending">↓</button>
           </div>
-          <div id="result-list" role="listbox" aria-label="Search results" tabindex="0"></div>
+          <div id="result-list" aria-label="Search results"></div>
+          <div id="result-help" hidden></div>
           <template id="search-help-template">
             <section class="search-help" aria-label="Search language help">
               <h2>Search the archive</h2>
@@ -79,12 +81,21 @@
           <div id="message-content" hidden>
             <div class="message-actions no-print">
               <select id="part-select" aria-label="Message part"></select>
+              <form id="message-find" class="message-find" role="search" hidden>
+                <input id="message-find-query" type="search" autocomplete="off" spellcheck="false" aria-label="Find in message" placeholder="Find in message">
+                <span id="message-find-status" aria-live="polite"></span>
+                <button id="message-find-previous" type="button" aria-label="Previous match" title="Previous match">‹</button>
+                <button id="message-find-next" type="submit" aria-label="Next match" title="Next match">›</button>
+                <button id="message-find-close" type="button" aria-label="Close find" title="Close find">×</button>
+              </form>
               <button id="remote-content" type="button" hidden>Load Remote Content</button>
+              <button id="copy-message-text" type="button" aria-label="Copy displayed message text" title="Copy displayed message text">⧉</button>
               <button id="save-message" type="button">Save Message…</button>
               <button id="print-message" type="button">Print…</button>
             </div>
             <div id="message-well">
               <div id="computed-date-banner" class="computed-date-banner" role="status" hidden></div>
+              <section id="message-selection-summary" class="message-selection-summary" role="status" aria-live="polite" hidden></section>
               <div class="message-summary">
                 <div class="message-heading">
                   <h1 id="message-subject"></h1>
@@ -111,6 +122,17 @@
       </section>
       <button id="ingest-status-line" class="ingest-status-line no-print" type="button" hidden></button>
       <div id="error" role="alert" hidden></div>
+      <dialog id="link-dialog">
+        <form method="dialog">
+          <h2>Open external link?</h2>
+          <p id="link-destination" class="link-destination"></p>
+          <div class="dialog-actions">
+            <button id="link-ignore" type="submit">Ignore</button>
+            <button id="link-copy" type="button">Copy Link</button>
+            <button id="link-open" type="button">Open Link</button>
+          </div>
+        </form>
+      </dialog>
       <dialog id="save-filter-dialog">
         <form id="save-filter-form">
           <h2>Save Filter Set</h2>
@@ -129,6 +151,7 @@
         </div>
       </dialog>
     </main>
+    <script src="vendor/tabulator/dist/js/tabulator.min.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

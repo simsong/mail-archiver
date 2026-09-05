@@ -9,6 +9,7 @@ import os
 import mailbox
 import queue
 import re
+import signal
 import shutil
 import sqlite3
 import sys
@@ -60,7 +61,14 @@ from .mbox import (
     recover_publication,
 )
 from .scanner import ClamScanner, ClamScannerStartupError
-from .search import QUARANTINE_MAILBOX, SEARCH_CATEGORIES, index_message, index_message_safely
+from .search import (
+    QUARANTINE_MAILBOX,
+    SEARCH_CATEGORIES,
+    PreparedSearchMessage,
+    index_message_safely,
+    prepare_search_message,
+    write_prepared_search_message,
+)
 from .plugin_api import (
     ArchiveReference,
     IntegrityDecision,
@@ -85,6 +93,8 @@ from .standalone_verify import semantic_bytes
 
 DEFAULT_REPORT_TOP = 10
 PROGRESS_REFRESH_SECONDS = 0.25
+REFRESH_INDEX_DEFAULT_WORKERS = os.cpu_count() or 2
+REFRESH_INDEX_MAX_IN_FLIGHT_BYTES = 256 * 1024 * 1024
 CLAMAV_START_PHASE = "waiting for ClamAV startup"
 DISCOVERY_PHASE = "discovering sources"
 TOP_LINE_STYLE = "\x1b[37;44m"
@@ -176,6 +186,105 @@ class OverallProgress(BaseModel):
     bytes_total: int
     percent: float
     eta: str
+
+
+class RefreshIndexProgress(BaseModel):
+    """A single, observable phase of the disposable-index rebuild."""
+
+    phase: str
+    total: int
+    unit: str
+    started_monotonic: float = Field(default_factory=time.monotonic)
+    completed: int = 0
+
+
+def refresh_index_line(progress: RefreshIndexProgress, now: float, width: int = 24) -> str:
+    """Render bounded rebuild progress without relying on terminal controls."""
+    completed = min(progress.completed, progress.total)
+    percent = 100 if progress.total == 0 else 100 * completed / progress.total
+    elapsed = max(now - progress.started_monotonic, 0.001)
+    if completed >= progress.total:
+        eta = "0s"
+    elif completed == 0:
+        eta = "calculating"
+    else:
+        eta = formatted_duration((progress.total - completed) * elapsed / completed)
+    filled = round(width * percent / 100)
+    bar = "#" * filled + "-" * (width - filled)
+    rate = completed / elapsed
+    return (
+        f"{progress.phase}: [{bar}] {percent:5.1f}% {completed:,}/{progress.total:,} "
+        f"{progress.unit}  {rate:,.0f} {progress.unit}/s  ETA {eta}"
+    )
+
+
+class RefreshIndexReporter:
+    """Show low-noise, terminal-friendly progress for a refresh-index run."""
+
+    def __init__(self, phase: str, total: int, unit: str) -> None:
+        self.progress = RefreshIndexProgress(phase=phase, total=total, unit=unit)
+        self.tty = sys.stderr.isatty()
+        self.last_display_monotonic: float | None = None
+
+    def display(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        interval = PROGRESS_REFRESH_SECONDS if self.tty else 5.0
+        if not force and self.last_display_monotonic is not None and now - self.last_display_monotonic < interval:
+            return
+        line = refresh_index_line(self.progress, now)
+        if self.tty:
+            sys.stderr.write(f"\r\x1b[2K{line}")
+        else:
+            print(line, file=sys.stderr)
+        sys.stderr.flush()
+        self.last_display_monotonic = now
+
+    def advance(self, amount: int = 1) -> None:
+        self.progress.completed += amount
+        self.display()
+
+    def finish(self) -> None:
+        self.progress.completed = self.progress.total
+        self.display(force=True)
+        if self.tty:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+
+
+class RefreshIndexInterrupted(KeyboardInterrupt):
+    """Report whether Ctrl-C arrived before or after atomic search publication."""
+
+    def __init__(self, published: bool) -> None:
+        super().__init__()
+        self.published = published
+
+
+class RefreshIndexWork(BaseModel):
+    """One immutable verified-MBOX read assigned to a refresh worker."""
+
+    message_pk: int
+    sha256: str
+    date_utc: str
+    filename: str
+    location: MboxLocation
+
+
+class PreparedRefreshIndexMessage(BaseModel):
+    """The ordered worker result consumed by the sole SQLite writer."""
+
+    message_pk: int
+    date_utc: str
+    indexed: PreparedSearchMessage
+
+
+class RefreshIndexPublication:
+    """Make the final paired derived-data publication uninterruptible."""
+
+    def __enter__(self) -> None:
+        self.previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    def __exit__(self, exception_type: type[BaseException] | None, _value: BaseException | None, _traceback: TracebackType | None) -> None:
+        signal.signal(signal.SIGINT, self.previous_handler)
 
 
 def formatted_bytes(value: int) -> str:
@@ -1792,11 +1901,30 @@ def report(args: argparse.Namespace) -> None:
     print_report(Path(args.archive), report_years(args.year), args.top)
 
 
-def rebuild_search_index(archive: Path, index_attachments: bool) -> None:
+def prepare_refresh_index_message(
+    archive: Path, index_attachments: bool, work: RefreshIndexWork
+) -> PreparedRefreshIndexMessage:
+    """Verify and parse one canonical message away from the SQLite writer."""
+    raw = read_verified_location(
+        mbox_path(archive, work.filename),
+        work.location,
+        work.sha256,
+    )
+    return PreparedRefreshIndexMessage(
+        message_pk=work.message_pk,
+        date_utc=work.date_utc,
+        indexed=prepare_search_message(raw, index_attachments, sha256=work.sha256),
+    )
+
+
+def rebuild_search_index(
+    archive: Path, index_attachments: bool, workers: int = REFRESH_INDEX_DEFAULT_WORKERS
+) -> None:
     """Build and validate a replacement search database before publishing it."""
     temporary = archive / "search.sqlite3.tmp"
     temporary.unlink(missing_ok=True)
-    catalog = sqlite3.connect(f"file:{archive / 'archive.sqlite3'}?mode=ro", uri=True)
+    catalog = create_catalog(archive / "archive.sqlite3")
+    published = False
     try:
         search = create_search(temporary)
         try:
@@ -1813,9 +1941,16 @@ def rebuild_search_index(archive: Path, index_attachments: bool) -> None:
                     SEARCH_CATEGORIES,
                 )
             )
-            for path in mbox_directory(archive).glob("*.mbox"):
-                if QUARANTINE_MAILBOX.fullmatch(path.name):
-                    continue
+            mailboxes = [
+                path
+                for path in sorted(mbox_directory(archive).glob("*.mbox"))
+                if not QUARANTINE_MAILBOX.fullmatch(path.name)
+            ]
+            mailbox_progress = RefreshIndexReporter(
+                "Checking canonical mailboxes", int(expected_row[0]), "messages"
+            )
+            mailbox_progress.display(force=True)
+            for path in mailboxes:
                 box = mailbox.mbox(path, factory=None, create=False)
                 try:
                     actual = len(box)
@@ -1826,8 +1961,10 @@ def rebuild_search_index(archive: Path, index_attachments: bool) -> None:
                     raise RuntimeError(
                         f"canonical MBOX/catalog count mismatch for {path.name}: {actual} records, {expected} catalogued"
                     )
+                mailbox_progress.advance(expected)
+            mailbox_progress.finish()
             rows = catalog.execute(
-                "SELECT messages.sha256, messages.date_utc, mbox_generations.filename, "
+                "SELECT messages.message_pk, messages.sha256, messages.date_utc, mbox_generations.filename, "
                 "locations.byte_offset, locations.byte_length "
                 "FROM mbox_generations "
                 "CROSS JOIN locations ON locations.generation_pk = mbox_generations.generation_pk "
@@ -1835,32 +1972,73 @@ def rebuild_search_index(archive: Path, index_attachments: bool) -> None:
                 "WHERE messages.category IN (?, ?) ORDER BY mbox_generations.filename, locations.byte_offset",
                 SEARCH_CATEGORIES,
             )
+            catalog.execute("BEGIN")
             indexed = 0
-            for digest, date_utc, filename, offset, length in rows:
-                if QUARANTINE_MAILBOX.fullmatch(filename):
-                    raise RuntimeError(f"searchable catalog message is stored in quarantine MBOX: {filename}")
-                raw = read_verified_location(
-                    mbox_path(archive, filename),
-                    MboxLocation(byte_offset=offset, byte_length=length),
-                    digest,
-                )
-                index_message(search, raw, index_attachments, date_utc=date_utc)
-                indexed += 1
+            message_progress = RefreshIndexReporter(
+                f"Refreshing search index ({workers} workers)", int(expected_row[0]), "messages"
+            )
+            message_progress.display(force=True)
+            next_row = next(rows, None)
+            pending: deque[tuple[Future[PreparedRefreshIndexMessage], int]] = deque()
+            in_flight_bytes = 0
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="refresh-index") as pool:
+                while next_row is not None or pending:
+                    while next_row is not None and len(pending) < workers:
+                        message_pk, digest, date_utc, filename, offset, length = next_row
+                        if QUARANTINE_MAILBOX.fullmatch(filename):
+                            raise RuntimeError(f"searchable catalog message is stored in quarantine MBOX: {filename}")
+                        work = RefreshIndexWork(
+                            message_pk=message_pk,
+                            sha256=digest,
+                            date_utc=date_utc,
+                            filename=filename,
+                            location=MboxLocation(byte_offset=offset, byte_length=length),
+                        )
+                        if pending and in_flight_bytes + work.location.byte_length > REFRESH_INDEX_MAX_IN_FLIGHT_BYTES:
+                            break
+                        pending.append(
+                            (pool.submit(prepare_refresh_index_message, archive, index_attachments, work), work.location.byte_length)
+                        )
+                        in_flight_bytes += work.location.byte_length
+                        next_row = next(rows, None)
+                    future, byte_length = pending.popleft()
+                    prepared = future.result()
+                    in_flight_bytes -= byte_length
+                    write_prepared_search_message(search, prepared.indexed, date_utc=prepared.date_utc)
+                    catalog.execute(
+                        "UPDATE messages SET subject = ? WHERE message_pk = ? AND subject <> ?",
+                        (prepared.indexed.subject, prepared.message_pk, prepared.indexed.subject),
+                    )
+                    indexed += 1
+                    message_progress.advance()
             if indexed != int(expected_row[0]):
                 raise RuntimeError(
                     f"catalog has {expected_row[0]} searchable messages but only {indexed} have canonical locations"
                 )
-            search.commit()
+            message_progress.finish()
+            with RefreshIndexPublication():
+                search.commit()
+                catalog.commit()
+                os.replace(temporary, archive / "search.sqlite3")
+                published = True
         finally:
             search.close()
-        os.replace(temporary, archive / "search.sqlite3")
+    except KeyboardInterrupt as error:
+        if catalog.in_transaction:
+            catalog.rollback()
+        raise RefreshIndexInterrupted(published) from error
     finally:
         catalog.close()
         temporary.unlink(missing_ok=True)
 
 
 def refresh_index(args: argparse.Namespace) -> None:
-    rebuild_search_index(Path(args.archive), args.index_attachments)
+    print(
+        "refresh-index: Ctrl-C discards the incomplete replacement; the existing search index remains unchanged",
+        file=sys.stderr,
+        flush=True,
+    )
+    rebuild_search_index(Path(args.archive), args.index_attachments, args.workers)
 
 
 def main() -> int:
@@ -1896,11 +2074,25 @@ def main() -> int:
     report_parser.set_defaults(function=report)
     refresh_parser = commands.add_parser("refresh-index")
     refresh_parser.add_argument("--index-attachments", action="store_true", help="include text attachments; non-text attachments require the planned Tika extractor")
+    refresh_parser.add_argument(
+        "--workers",
+        type=positive_integer,
+        default=REFRESH_INDEX_DEFAULT_WORKERS,
+        help="verified-message read/hash/MIME workers (default: detected cores, or 2)",
+    )
     refresh_parser.set_defaults(function=refresh_index)
     args = parser.parse_args()
     args.archive = require_archive(parser, args.archive)
     try:
         args.function(args)
+    except RefreshIndexInterrupted as error:
+        message = (
+            "interrupted: the rebuilt search index was already published; no partial index exists"
+            if error.published
+            else "interrupted: discarded incomplete replacement; the existing search index is unchanged"
+        )
+        print(f"\n{message}\n", file=sys.stderr, flush=True)
+        return 130
     except KeyboardInterrupt:
         print("interrupted: archive state committed through the last completed message", file=sys.stderr, flush=True)
         print_report(Path(args.archive), None, DEFAULT_REPORT_TOP)

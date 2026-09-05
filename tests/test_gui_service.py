@@ -10,6 +10,7 @@ import mailbox
 import sqlite3
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -33,12 +34,14 @@ from mailarchiver.gui_service import (
     search_suggestions,
     write_attachment,
     write_message,
+    write_messages_zip,
 )
 from mailarchiver.gui_app import (
     GuiApi,
     application_icon_path,
     application_menu,
     application_metadata,
+    external_link_destination,
 )
 from mailarchiver.mailsearch import RECENT_FTS_SCAN_LIMIT, _search_statement, parse_query
 from mailarchiver.layout import mbox_directory
@@ -60,7 +63,7 @@ MULTIPART_MESSAGE = (
     b"--outer\nContent-Type: multipart/alternative; boundary=alternative\n\n"
     b"--alternative\nContent-Type: text/plain; charset=utf-8\n\nPlain version.\n"
     b"--alternative\nContent-Type: text/html; charset=utf-8\n\n"
-    b'<html><body onload="bad()"><script>bad()</script><p>HTML version.</p>'
+    b'<html><body onload="bad()"><script>bad()</script><p>HTML version.</p><a href="https://example.org/archive" target="_blank">Archive</a>'
     b'<img src="cid:logo"><img src="https://tracker.example/pixel"></body></html>\n'
     b"--alternative--\n"
     b"--outer\nContent-Type: image/png\nContent-ID: <logo>\nContent-Disposition: inline; filename=logo.png\n"
@@ -82,6 +85,24 @@ X_HTML_MENTION_MESSAGE = (
     b"Message-ID: <x-html-mention@example>\nFrom: sender@example.net\nTo: recipient@example.net\n"
     b"Subject: x-html mention\nDate: Sat, 06 Jan 2024 10:00:00 +0000\n\n"
     b"This plain text mentions <x-html> without wrapping the whole body.\n"
+)
+KOREAN_MESSAGE = (
+    b"Message-ID: <legacy-korean@example>\n"
+    + b"From: " + "장나나".encode("euc-kr") + b" <jjanana@hanmail.net>\n"
+    + b"To: simsong@example.net\n"
+    + b"Subject: " + "이렇게 하면 부자가 됩니다".encode("euc-kr") + b"\n"
+    + b"Date: Sat, 17 May 2003 15:23:19 +0900\n"
+    + b"Content-Type: text/html; charset=euc-kr\n\n"
+    + b"<html><body><p>" + "최고의 기회".encode("euc-kr") + b"</p></body></html>\n"
+)
+MULTI_HTML_MESSAGE = (
+    b"Message-ID: <multi-html@example>\nFrom: sender@example.net\nTo: recipient@example.net\n"
+    b"Subject: multi HTML message\nDate: Sun, 07 Jan 2024 10:00:00 +0000\n"
+    b"Content-Type: multipart/mixed; boundary=html\n\n"
+    b"--html\nContent-Type: text/html\n\n<p>Brief notice.</p>\n"
+    b"--html\nContent-Type: text/html\n\n"
+    b"<html><body><h1>Complete web report</h1><p>The complete report is here.</p></body></html>\n"
+    b"--html--\n"
 )
 
 
@@ -414,6 +435,8 @@ def test_gui_selects_multipart_views_and_sanitizes_html(tmp_path: Path) -> None:
     blocked = render_part(archive, 2, html_id)
     assert "<script" not in blocked.content
     assert "onload" not in blocked.content
+    assert 'href="https://example.org/archive"' in blocked.content
+    assert "target=\"_blank\"" not in blocked.content
     assert "data:image/png;base64,aW1hZ2U=" in blocked.content
     assert "tracker.example" not in blocked.content
     assert blocked.remote_content_blocked
@@ -421,6 +444,36 @@ def test_gui_selects_multipart_views_and_sanitizes_html(tmp_path: Path) -> None:
     assert "https://tracker.example/pixel" in allowed.content
     assert not allowed.remote_content_blocked
     assert "Subject: multipart message" in render_part(archive, 2, RAW_PART_ID).content
+
+
+def test_gui_recovers_declared_korean_headers_and_raw_display(tmp_path: Path) -> None:
+    """Requirement: GUI recovery uses declared Korean charsets for derived headers and source text."""
+    archive = make_gui_archive(
+        tmp_path,
+        ((KOREAN_MESSAGE, "legacy-korean@example", "placeholder", "2003-05-17T06:23:19+00:00"),),
+    )
+
+    view = describe_message(archive, 3)
+    raw = render_part(archive, 3, RAW_PART_ID).content
+    html = render_part(archive, 3, view.preferred_part_id).content
+
+    assert view.subject == "이렇게 하면 부자가 됩니다"
+    assert next(header.value for header in view.headers if header.name == "From").startswith("장나나")
+    assert "장나나" in raw and "최고의 기회" in raw and "�" not in raw
+    assert "최고의 기회" in html and "�" not in html
+
+
+def test_gui_prefers_the_most_substantive_html_part(tmp_path: Path) -> None:
+    """Requirement: a message with multiple HTML parts opens its substantive HTML view."""
+    archive = make_gui_archive(
+        tmp_path,
+        ((MULTI_HTML_MESSAGE, "multi-html@example", "multi HTML message", "2024-01-07T10:00:00+00:00"),),
+    )
+
+    view = describe_message(archive, 3)
+
+    assert view.preferred_part_id == 2
+    assert "Complete web report" in render_part(archive, 3, view.preferred_part_id).content
 
 
 def test_gui_recognizes_whole_body_legacy_x_html_without_hiding_raw_source(tmp_path: Path) -> None:
@@ -472,6 +525,20 @@ def test_gui_displays_archive_and_source_locations(tmp_path: Path) -> None:
     assert not view.source_locations[0].preferred
     assert view.source_locations[0].copy_path == "/Volumes/Fixture/mail/simple.eml"
     assert describe_message(archive, 2).archive_path.startswith("data/mbox/2024-Archive1.mbox?offset=")
+
+    database = sqlite3.connect(archive / "archive.sqlite3")
+    try:
+        database.execute("UPDATE source_files SET source_path = 'Users/arch/simple.eml'")
+        database.execute(
+            "UPDATE source_volumes SET metadata_json = ?",
+            (json.dumps({"volume_label": "Local source", "current_mount_path": "/"}),),
+        )
+        database.commit()
+    finally:
+        database.close()
+    local_root = describe_message(archive, 1).source_locations[0]
+    assert local_root.path == "/Users/arch/simple.eml"
+    assert local_root.copy_path == "/Users/arch/simple.eml"
 
 
 def test_gui_prefers_direct_cloud_observation_over_local_cache(tmp_path: Path) -> None:
@@ -572,6 +639,20 @@ def test_gui_exports_exact_eml_and_decoded_attachment(tmp_path: Path) -> None:
     assert content.filename == "report.pdf"
 
 
+def test_gui_multi_message_drag_zip_preserves_each_exported_message(tmp_path: Path) -> None:
+    """Requirement: an explicit multi-message drag creates a ZIP of exact RFC 5322 exports."""
+    archive = make_gui_archive(tmp_path)
+    destination = tmp_path / "drag" / "messages.zip"
+
+    write_messages_zip(archive, [1, 2, 1], destination)
+
+    with zipfile.ZipFile(destination) as exported:
+        names = exported.namelist()
+        values = {name: exported.read(name) for name in names}
+    assert len(names) == 2
+    assert set(values.values()) == {SIMPLE_MESSAGE, MULTIPART_MESSAGE}
+
+
 def test_gui_concurrent_drag_exports_have_distinct_temporary_paths(tmp_path: Path) -> None:
     """Requirement: concurrent drag preparation cannot share a temporary export file."""
     archive = make_gui_archive(tmp_path)
@@ -588,6 +669,20 @@ def test_gui_flags_executable_attachment_types() -> None:
     assert is_risky("installer.dmg", "application/octet-stream")
     assert is_risky("script", "application/x-sh")
     assert not is_risky("report.pdf", "application/pdf")
+
+
+def test_gui_external_links_require_a_safe_explicit_destination(tmp_path: Path) -> None:
+    """Requirement: the viewer can pass only approved external links to its explicit actions."""
+    api = GuiApi(None, e2e_directory=tmp_path)
+    try:
+        for destination in ("https://example.org/path?view=1", "http://example.org/", "mailto:archivist@example.org"):
+            assert external_link_destination(destination) == destination
+            assert api.open_link(destination) == destination
+        for destination in ("", "https://", "file:///private/secret", "javascript:alert(1)", "https://example.org/\nnext"):
+            with pytest.raises(ValueError):
+                external_link_destination(destination)
+    finally:
+        api.close()
 
 
 def find_tree_node(nodes: list[MailboxTreeNode], label: str) -> MailboxTreeNode:

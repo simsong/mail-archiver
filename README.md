@@ -423,5 +423,9 @@ make check
 Install the pinned headless Chromium once with `make install-test-browser`.
 `make check` then runs both suites without showing a window. On macOS,
 `make test-native-gui` additionally exercises the hidden Cocoa/WKWebView bridge.
+This native target is an explicit local development check and does not run in
+CI/CD, which retains the complete headless Chromium GUI test.
+`make test-native-html-find` is a separate visible, opt-in macOS check for
+WKWebView HTML finder highlighting and scrolling.
 Regenerate the committed safe corpus after an
 intentional fixture change with `make fixture-e2e`.

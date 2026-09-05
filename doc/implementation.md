@@ -316,7 +316,10 @@ deliberately supports database replacement while there are no users.
 `mbox_generations` are written as part of each message publication.
 
 Header parsing decodes and unfolds RFC 2047 Subject values before catalog and
-FTS insertion. `mailsearch` displays that catalog value directly.
+FTS insertion. `mailsearch` displays that catalog value directly. The verified
+MBOX traversal in `refresh-index` rederives that catalog field while rebuilding
+FTS, so existing archives acquire newly supported legacy-header decoding without
+rewriting canonical mail.
 Its result formatter determines number width from the returned `message_pk`
 values and emits ANSI bold only for a terminal subject field.
 Email-policy `compat32` header objects, including raw 8-bit `Received:`
@@ -385,15 +388,18 @@ decoder returns encoding and recovery provenance for callers, while current
 search/display callers use its value. There is intentionally no user checkbox:
 these are loss-avoiding derived-text defaults, and the exact MIME view remains
 available when the user needs the source representation.
+Malformed raw 8-bit display headers are recovered from their original header
+bytes with the message's declared body charset before RFC 2047 processing, so
+catalog, search, Raw Source display, and MIME-part displays use the same
+source-preserving recovery path.
 
 The `gui/` prototype uses pywebview's Cocoa/WKWebView backend on macOS.  Its
 Python API delegates query parsing, SQLite reads, and direct MBOX retrieval to
-the same typed functions used by `mailsearch`. A nonempty query first executes
-a capped `count(*)` over at most 2,001 rows from the shared catalog/FTS
-predicate. That threshold probe omits sorting, recipient aggregation, and
-header materialization. A result below the cap is exact; reaching the cap
-returns an intentionally unknown total. The GUI then asks the exact query for
-up to 2,000 headers. A larger result set immediately shows that prefix and
+the same typed functions used by `mailsearch`. A nonempty query directly asks
+the shared catalog/FTS predicate for up to 2,000 ordered headers. This avoids
+placing an exact or threshold count on the interactive path; SQLite FTS5 has no
+reliable approximate cardinality for arbitrary combined full-text/filter
+predicates. A larger result set immediately shows that prefix and
 then requests the unlimited remainder from offset 2,000 through a second
 bridge promise using the same SQL predicate and stable sort, so the two phases
 are complementary and cannot change membership or ordering. The result status
@@ -431,22 +437,66 @@ pattern: it requires a version-matching signed annotated tag, builds a source
 distribution, writes `SHA256SUMS`, and creates a draft GitHub Release.
 
 Result ordering is a server-side SQL whitelist over date, case-folded subject,
-or case-folded sender with a stable message-number tie break. The listbox owns
-keyboard focus after a pointer selection and implements Up/Down selection.
+or case-folded sender with a stable message-number tie break. The Tabulator
+result table owns focus, rendering, and row components, while the application
+maps Up/Down to selection and message display.
 The older bounded-recent optimization remains internal to the command-line
 client, whose automatic exact fallback preserves its one-call behavior. The
 GUI always invokes the complete SHA-256/FTS query because an archivist may be
-looking for any period in the collection. Its capped count statement reuses the
-exact search predicate but does not sort or aggregate result headers. The first and
-background queries use the same stable sort and complementary offsets, so the
-combined set has no skips or duplicates. Subject and Sender modes sort the
+looking for any period in the collection. It materializes the first ordered
+page without a count probe; first and background queries use the same stable
+sort and complementary offsets, so the combined set has no skips or duplicates.
+Subject and Sender modes sort the
 complete matching set rather than using recency to choose page membership.
 Result paperclips use attachment counts joined from the disposable search
-metadata without rereading MBOX content. Each row reserves a third line; after
-the header rows are painted, JavaScript queues one page of preview IDs through
-the Python bridge. A single-worker executor reads the indexed 18-word previews,
-and JavaScript polls the typed result batch until it can fill the rows. Global macOS Command-key handlers
-select numeric MIME part IDs or raw source.
+metadata without rereading MBOX content. Each row reserves a third line;
+Tabulator 6.5.2 is vendored under `gui/vendor/tabulator/` (MIT) so the desktop
+application remains offline-capable. Tabulator's virtual DOM paints only its
+viewport and buffer while retaining the complete result data. Its formatter
+queues preview IDs only when it paints a row through the Python bridge. A
+single-worker executor reads the indexed 18-word previews, and JavaScript polls
+the typed result batch until it can update visible rows. Its `rowMouseDown` and
+`rowMouseEnter` events provide row components for the small range adapter;
+the result-table boundary cancels native `selectstart` and its row subtree has
+explicit WebKit and standard `user-select: none` rules, so drag selection never
+also selects card text. There is no custom scroll/viewport or pointer-coordinate code. A single
+selected row displays its message. A multi-row selection clears its stale
+single-message view, displays the selected-message count with the same file well,
+and an explicit drag from that well prepares a ZIP only when the drag begins.
+A gesture ending on its original row remains a click. Global macOS Command-key handlers
+select numeric MIME part IDs or raw source. Command-F opens an in-message
+finder from the first current search-highlight term and selects its input;
+Command-G opens the finder at its first match when it is closed, while
+Shift-Command-G and subsequent Command-G presses cycle its matches. The finder adds a distinct
+current-match outline without changing canonical bytes or the archive-search
+predicate. Each accepted HTML render carries a viewer-generated per-render
+marker; cross-frame navigation keeps direct references only to marks bearing
+that marker, so email-provided IDs and CSS classes cannot redirect it. The
+current mark receives an inline, important orange style and scrolls immediately,
+after a short timer fallback, and after two animation frames. Image/font load,
+error, and window-resize events remeasure the iframe and retain its active
+target in the outer message pane. Finder updates are debounced and re-render the
+selected part with any existing part-local remote-content authorization. Finder,
+selection, part, and frame-identity generations discard stale responses and
+stale key continuations. The viewer waits for the parsed local iframe document,
+not every remote resource, so authorized slow images cannot blank local message
+text. The sandbox grants same-origin access only to this inert, scriptless
+sanitized document; scripts remain prohibited and the document keeps its
+restrictive CSP. It does not grant popups: a frame-level link handler writes an
+allowed destination to the bottom status bar on hover, prevents its default
+click, and presents **Open Link**, **Copy Link**, and **Ignore**. The native
+bridge independently validates only `http`, `https`, and `mailto` destinations;
+it writes copied links as both text and a URL, and opens them through NSWorkspace
+only after **Open Link**. Plain-text rendering tokenizes only those same allowed
+URL schemes into links and installs the identical capture-phase handler; Raw
+Source remains literal text. Selecting another message resets the finder index to its first
+match without replacing the finder text.
+Command-A uses the most recently clicked pane: it marks all result rows as
+selected in the list, or creates a DOM range over the displayed body for plain
+and raw text, excluding viewer headers, attachments, and provenance. Text
+inputs retain their normal native select-all behavior. The toolbar copy control
+passes visible plain/raw body text to the native pasteboard; for HTML it adds
+the viewer subject and headers to the rendered document's visible text.
 The toolbar's **Search attachments** checkbox passes an explicit boolean to the
 typed search service. Ordinary terms search `message_fts` by default; when the
 box is selected they search the union of `message_fts` and `attachment_fts`.
@@ -506,11 +556,15 @@ The viewer also reads the archive mailbox location and linked source
 observations from the catalog, then displays archive path, source-volume label,
 and source or forensic path at the bottom without treating an archive mailbox
 as a source. It renders nonzero byte offsets as `?offset=N` and omits zero or
-absent offsets. A local source-path control copies only the mounted pathname to
+absent offsets. A local file source stored as `Users/...` on the root volume is
+displayed as `/Users/...`. A local source-path control copies only the mounted pathname to
 the macOS pasteboard, as both text and a file URL; provider and forensic paths
 without a local pathname have no copy control. Direct provider observations sort before local evidence; retained
 Apple Gmail observations are labeled as local cache copies rather than as the
 authoritative cloud source.
+The message-content and message-well containers are vertical flex layouts; the
+source-location section uses an automatic top margin so it occupies the bottom
+of any spare viewer height without affecting normal scrolling for long messages.
 
 For a catalog row whose `date_source` is `received-median`, the typed message
 response includes the decoded original `Date:` header, the stored UTC
@@ -703,6 +757,16 @@ validate row identities against `archive.sqlite3`, then atomically replace the
 old search database. Live indexing and `refresh-index` both exclude
 `INFECTED` and the reserved `MALFORMED` quarantine category; rebuild recognizes
 numbered quarantine MBOX filenames.
+`refresh-index` first renders terminal progress for the finite canonical-MBOX
+validation phase weighted by catalogued message counts, then renders
+message-count progress and an elapsed-rate ETA
+while building the replacement database. Its replacement file is never opened
+as the live index; a `KeyboardInterrupt` rolls back catalog subject updates,
+removes the incomplete replacement, and reports that the existing index is
+unchanged. A bounded, ordered worker pool verifies source hashes and parses
+MIME content in parallel (all detected CPU cores by default, or two if the
+count is unavailable, configurable with `refresh-index --workers`); a sole main-thread SQLite writer retains stable
+catalog/update order and never shares a SQLite connection across threads.
 Ordinary `mailsearch` listings and reports select only `Sent` and `Archive`;
 the authoritative catalog still retains every quarantine record.
 Bounded date-sorted listings materialize an indexed, ordered candidate page
@@ -992,11 +1056,10 @@ to the real Python service and disposable test archive. It therefore works
 without a visible desktop on macOS and Linux. `make test-native-gui` separately
 drives a hidden Cocoa/WKWebView window on macOS against a purpose-built
 one-message derived archive to retain the native bridge boundary without
-ClamAV or the full lifecycle fixture. Hosted CI pins the macOS image, uploads
-the phase report and any timeout sample, and reports a failed smoke as an
-explicit advisory warning rather than a merge-blocking job failure. Making
-native behavior a required gate needs a logged-in self-hosted Mac and
-XCUITest/XCUIAutomation. `make test-bagit`
+ClamAV or the full lifecycle fixture. This explicit local development target is
+excluded from `make check` and CI/CD; it retains its phase report and any
+timeout sample under `.tmp/native-gui-diagnostics`. Making native behavior a
+required gate would need a logged-in Mac and XCUITest/XCUIAutomation. `make test-bagit`
 validates the database-independent three-message fixture and corruption cases.
 The installed `verify_mail_archive.py
 DIRECTORY` performs read-only validation of a supplied bag. The first acceptance run is against a copied

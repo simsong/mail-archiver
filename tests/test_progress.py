@@ -22,9 +22,11 @@ from mailarchiver.__main__ import (
     TOP_LINE_STYLE,
     ProgressReporter,
     ProgressState,
+    RefreshIndexProgress,
     WorkerProgress,
     overall_line,
     overall_progress,
+    refresh_index_line,
     run_file_workers,
 )
 from mailarchiver.plugin_api import ProgressEvent
@@ -55,6 +57,35 @@ def test_overall_progress_uses_concurrent_source_bytes_for_percentage_and_eta() 
     assert progress.percent == 50
     assert progress.eta == "10s"
     assert overall_line(state, now=20) == "Overall:  50.0%  500 B / 1000 B  Files 2 / 4  ETA 10s"
+
+
+def test_refresh_index_progress_has_a_bar_and_eta() -> None:
+    """Requirement: index rebuild makes its bounded remaining work visible."""
+    progress = RefreshIndexProgress(
+        phase="Refreshing search index",
+        total=100,
+        unit="messages",
+        started_monotonic=10,
+        completed=25,
+    )
+
+    assert refresh_index_line(progress, now=20, width=8) == (
+        "Refreshing search index: [##------]  25.0% 25/100 messages  2 messages/s  ETA 30s"
+    )
+
+
+def test_empty_refresh_index_progress_is_complete() -> None:
+    """Requirement: an empty index rebuild reports completion without a contradictory ETA."""
+    progress = RefreshIndexProgress(
+        phase="Refreshing search index",
+        total=0,
+        unit="messages",
+        started_monotonic=10,
+    )
+
+    assert refresh_index_line(progress, now=20, width=8) == (
+        "Refreshing search index: [########] 100.0% 0/0 messages  0 messages/s  ETA 0s"
+    )
 
 
 def test_overall_progress_reports_finalizing_before_last_checkpoint() -> None:

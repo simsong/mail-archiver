@@ -1,6 +1,6 @@
 .PHONY: benchmark-name-resolution check data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke website-build-check website-check release-tag-check
 .PHONY: install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality
-.PHONY: test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-pdf-mail test-plugins test-progress test-provenance test-tika test-website validation-aws-start validation-aws-start-all
+.PHONY: test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-native-html-find test-pdf-mail test-plugins test-progress test-provenance test-refresh-index test-tika test-website validation-aws-start validation-aws-start-all
 .PHONY: validation-fetch validation-list validation-prepare validation-run validation-run-all validation-sam-build validation-sam-deploy validation-sam-validate validation-test verify
 
 
@@ -12,6 +12,7 @@ TIKA_ARCHIVE := $(TIKA_DOWNLOAD_DIR)/tika-app-$(TIKA_VERSION).zip
 TIKA_SHA512 := $(TIKA_ARCHIVE).sha512
 TIKA_URL := https://downloads.apache.org/tika/$(TIKA_VERSION)/tika-app-$(TIKA_VERSION).zip
 PLAYWRIGHT_INSTALL_ARGS ?= chromium
+NATIVE_GUI_ARTIFACT_DIR ?= $(CURDIR)/.tmp/native-gui-diagnostics
 AUDIT_OUTPUT ?= $(CURDIR)/.tmp/data-quality-audit
 VALIDATION_DATA_DIR ?= $(CURDIR)/data
 VALIDATION_CONFIG_DIR ?= $(CURDIR)/validation/datasets
@@ -94,7 +95,11 @@ test-encoding:
 	uv run pytest -q tests/test_encoding.py
 
 test-native-gui:
-	MAILARCHIVER_NATIVE_GUI_E2E=1 uv run pytest -q e2e_tests/test_ingest_verify.py::test_native_search_ui_smoke
+	MAILARCHIVER_NATIVE_GUI_ARTIFACT_DIR="$(NATIVE_GUI_ARTIFACT_DIR)" MAILARCHIVER_NATIVE_GUI_E2E=1 uv run pytest -q e2e_tests/test_ingest_verify.py::test_native_search_ui_smoke
+
+test-native-html-find:
+	@test "$$(uname)" = Darwin || { echo 'test-native-html-find requires macOS'; exit 1; }
+	MAILARCHIVER_NATIVE_GUI_ARTIFACT_DIR="$(NATIVE_GUI_ARTIFACT_DIR)" MAILARCHIVER_NATIVE_HTML_FIND_E2E=1 uv run pytest -q e2e_tests/test_ingest_verify.py::test_native_html_find_smoke
 
 test-pdf-mail:
 	@command -v pdftotext >/dev/null || { echo 'test-pdf-mail requires Poppler pdftotext'; exit 1; }
@@ -117,6 +122,9 @@ test-gui:
 
 test-provenance:
 	uv run pytest -q tests/test_catalog.py tests/test_sources.py
+
+test-refresh-index:
+	uv run pytest -q tests/test_end_to_end.py::test_refresh_index_excludes_quarantine_mailboxes tests/test_end_to_end.py::test_refresh_index_interrupt_retains_prior_search_index
 
 test-headers:
 	uv run pytest -q tests/test_message.py tests/test_search.py

@@ -18,6 +18,8 @@ from ftfy import fix_encoding
 from pydantic import BaseModel, Field
 from yaml import safe_load
 
+from .encoding import decode_text
+
 
 YEAR = re.compile(r"^(19|20)\d{2}$")
 DATE_RECEIVED_TOLERANCE = timedelta(days=2)
@@ -195,6 +197,49 @@ def decode_header_value(value: str) -> DecodedHeaderValue:
     return DecodedHeaderValue(value=value, defect=defect)
 
 
+def raw_header_values(raw: bytes, name: str) -> list[bytes]:
+    """Return raw values for an RFC 5322 header name, retaining folded bytes."""
+    separator = HEADER_SEPARATOR.search(raw)
+    block = raw[: separator.start()] if separator is not None else raw
+    wanted = name.encode("ascii").lower()
+    values: list[bytes] = []
+    current: bytearray | None = None
+    for line in re.split(br"\r\n|\n|\r", block):
+        if line.startswith((b" ", b"\t")) and current is not None:
+            current.extend(b"\n")
+            current.extend(line)
+            continue
+        if current is not None:
+            values.append(bytes(current))
+            current = None
+        field, delimiter, value = line.partition(b":")
+        if delimiter and field.lower() == wanted:
+            current = bytearray(value.lstrip(b" \t"))
+    if current is not None:
+        values.append(bytes(current))
+    return values
+
+
+def decoded_header_bytes(value: bytes, declared_encoding: str | None = None) -> DecodedHeaderValue:
+    """Decode a legacy header with unencoded bytes without changing source bytes."""
+    try:
+        text = value.decode("ascii")
+    except UnicodeDecodeError:
+        recovered = decode_text(value, declared_encoding)
+        decoded = decode_header_value(recovered.value)
+        return DecodedHeaderValue(value=decoded.value, defect=decoded.defect or recovered.defect)
+    return decode_header_value(text)
+
+
+def decoded_message_header(raw: bytes, message: Message, name: str, occurrence: int = 0) -> str:
+    """Return a display header, preferring original bytes for legacy recovery."""
+    values = raw_header_values(raw, name)
+    if occurrence < len(values):
+        return decoded_header_bytes(values[occurrence], message.get_content_charset()).value
+    parsed = message.get_all(name, [])
+    return decoded_header(str(parsed[occurrence])) if occurrence < len(parsed) else ""
+
+
 def decoded_header(value: str) -> str:
     return decode_header_value(value).value
 
@@ -338,8 +383,12 @@ def parse_message(
             detail = "non-filesystem source" if path is None else str(path)
             raise ValueError(f"no date or year path fallback for {detail}")
         date, date_source = datetime(year, 1, 1, tzinfo=timezone.utc), "path-year"
-    subject_values = header_values(message, "Subject", defects)
-    subject = decode_header_value(subject_values[0] if subject_values else "")
+    subject_values = raw_header_values(raw, "Subject")
+    subject = (
+        decoded_header_bytes(subject_values[0], message.get_content_charset())
+        if subject_values
+        else decode_header_value("")
+    )
     if subject.defect is not None:
         defects.append(MetadataDefect(field="Subject", detail=subject.defect))
     autosave = bool(header_values(message, "X-Apple-Auto-Saved", defects))

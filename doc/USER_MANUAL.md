@@ -220,6 +220,8 @@ also shows its canonical archive mailbox and every remembered source location.
 MBOX byte locations appear as `path?offset=N` (with no suffix for offset zero).
 Use the small copy icon beside a local source path to put that pathname, without
 the offset, on the macOS pasteboard as both text and a file URL.
+When there is spare vertical space in the message viewer, **Locations** remains
+at the bottom of the pane.
 Search and viewing do not modify the archive.
 
 Ordinary search words and textual selector values are highlighted with a yellow
@@ -229,6 +231,20 @@ raw-source views. Thus `from:beth` highlights `beth` in the displayed From
 header. Quoted text is highlighted as one phrase; date selectors remain filters
 and do not create highlights. Highlighting changes only the viewer; it never
 changes canonical message bytes or the search index.
+
+With a message selected, press Command-F to open **Find in message**. It starts
+with the first textual part of the archive search—so `from:beth` starts with
+`beth`—and selects that value so you can replace it. The finder highlights the
+replacement text in the message. Press Command-G for the next match or
+Shift-Command-G for the previous one. Selecting another message keeps the find
+text but restarts at that message's first match, including an HTML message body.
+
+Command-A follows where you last clicked. In the result list it selects every
+result row. In a plain-text or raw-source message it selects that displayed
+message body, not the viewer headers, attachments, or **Locations** evidence;
+an HTML message uses the browser's native text selection. Use the ⧉ control in
+the message toolbar to copy the visible text. For HTML, the copied text also
+includes the displayed subject and message headers.
 
 Mail Archiver searches an archival collection; it is not an inbox or mail
 program. A search therefore covers the collection's complete time span. Recent
@@ -300,7 +316,9 @@ reachable. The pull-down menu above the message
 lists its displayable plain-text and HTML MIME parts and always offers **Raw
 Source**, which shows the complete RFC 5322 message. Command-1 through Command-9
 select the part with that numeric MIME part ID; Command-0 and Command-Shift-U
-select **Raw Source**.
+select **Raw Source**. If a message supplies more than one HTML part, Mail
+Archiver initially displays the most substantial decoded one; every part
+remains available from the menu.
 
 Some early Netscape messages use `<x-html>...</x-html>` around an HTML body even
 though their multipart declaration has no usable MIME boundaries. When the
@@ -313,7 +331,10 @@ message bytes.
 All HTML views are sanitized before display. Scripts, forms, plugins, file URLs,
 event handlers, and unsafe URL schemes are removed. Remote images remain blocked
 unless you choose **Load Remote Content** for that message; embedded CID images
-may render from the verified message.
+may render from the verified message. Hovering an allowed link shows its complete
+destination in the bottom status bar. Clicking it shows the destination and
+offers **Open Link**, **Copy Link**, and **Ignore**; a link opens only after you
+choose **Open Link**.
 
 ### Date adjusted
 

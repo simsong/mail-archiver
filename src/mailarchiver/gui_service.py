@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import zipfile
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
@@ -29,7 +30,7 @@ from .mailsearch import (
     search_result_count,
 )
 from .mailbox_tree import MailboxSelection
-from .message import decoded_header
+from .message import decoded_message_header
 from .plugin_api import SourceContainerMetadata
 from .search import SEARCH_CATEGORIES, decoded_part, is_attachment
 
@@ -328,7 +329,12 @@ def parsed_message(archive: Path, message_pk: int) -> tuple[bytes, Message]:
 def describe_message(archive: Path, message_pk: int) -> MessageView:
     """Describe selectable body parts and attachments without returning payloads."""
     raw, message = parsed_message(archive, message_pk)
-    headers = [HeaderField(name=name, value=decoded_header(str(value))) for name, value in message.items()]
+    header_names: list[str] = []
+    headers = []
+    for name, _ in message.items():
+        occurrence = sum(previous.casefold() == name.casefold() for previous in header_names)
+        header_names.append(name)
+        headers.append(HeaderField(name=name, value=decoded_message_header(raw, message, name, occurrence)))
     body_parts: list[BodyPart] = []
     attachments: list[AttachmentInfo] = []
     legacy_x_html = legacy_x_html_body(raw, message)
@@ -358,20 +364,27 @@ def describe_message(archive: Path, message_pk: int) -> MessageView:
     if legacy_x_html is not None:
         body_parts.append(BodyPart(part_id=LEGACY_X_HTML_PART_ID, content_type="text/html", label="HTML — legacy x-html"))
     body_parts.append(BodyPart(part_id=RAW_PART_ID, content_type="message/rfc822", label="Raw Source"))
-    html_part = next((part.part_id for part in body_parts if part.content_type == "text/html"), None)
+    html_candidates = [
+        (part.part_id, len(decoded_part(_part(message, part.part_id)).strip()))
+        for part in body_parts
+        if part.content_type == "text/html" and part.part_id >= 0
+    ]
+    html_part = max(html_candidates, key=lambda candidate: candidate[1])[0] if html_candidates else None
+    if legacy_x_html is not None:
+        html_part = LEGACY_X_HTML_PART_ID
     text_part = next((part.part_id for part in body_parts if part.content_type == "text/plain"), RAW_PART_ID)
     archive_path, source_locations = message_locations(archive, message_pk)
     date_utc, date_source = message_catalog_date(archive, message_pk)
     date_adjustment = None
     if date_source == "received-median":
         date_adjustment = DateAdjustment(
-            date_header=decoded_header(str(message.get("Date", "(missing)"))),
+            date_header=decoded_message_header(raw, message, "Date") or "(missing)",
             received_median_utc=date_utc,
             archive_routing_utc=date_utc,
         )
     return MessageView(
         message_pk=message_pk,
-        subject=decoded_header(str(message.get("Subject", "(no subject)"))),
+        subject=decoded_message_header(raw, message, "Subject") or "(no subject)",
         date_source=date_source,
         date_adjustment=date_adjustment,
         headers=headers,
@@ -432,6 +445,8 @@ def _volume_label(metadata_json: str) -> str:
 
 
 def _source_display_path(metadata_json: str, source_path: str, path_kind: str) -> str:
+    if path_kind == "file" and source_path.startswith("Users/"):
+        return f"/{source_path}"
     if path_kind != "provider":
         return source_path
     metadata = json.loads(metadata_json)
@@ -502,7 +517,12 @@ def _source_location(
 def render_part(archive: Path, message_pk: int, part_id: int, allow_remote: bool = False) -> PartContent:
     raw, message = parsed_message(archive, message_pk)
     if part_id == RAW_PART_ID:
-        return PartContent(part_id=part_id, kind="raw", content_type="message/rfc822", content=raw.decode("utf-8", "replace"))
+        return PartContent(
+            part_id=part_id,
+            kind="raw",
+            content_type="message/rfc822",
+            content=decode_text(raw, message.get_content_charset()).value,
+        )
     if part_id == LEGACY_X_HTML_PART_ID:
         content = legacy_x_html_body(raw, message)
         if content is None:
@@ -549,6 +569,24 @@ def attachment_descriptor(archive: Path, message_pk: int, part_id: int) -> Attac
 def write_message(archive: Path, message_pk: int, destination: Path) -> None:
     """Write an exact, verified RFC 5322 export outside the canonical archive."""
     _write_bytes(destination, read_message_bytes(archive, message_pk))
+
+
+def write_messages_zip(archive: Path, message_pks: list[int], destination: Path) -> None:
+    """Atomically write exact RFC 5322 exports as a ZIP created for an explicit drag."""
+    unique = list(dict.fromkeys(message_pks))
+    if len(unique) < 2:
+        raise ValueError("a ZIP export requires at least two messages")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
+    temporary = Path(temporary_name)
+    os.close(descriptor)
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as output:
+            for message_pk in unique:
+                output.writestr(export_filename(describe_message(archive, message_pk)), read_message_bytes(archive, message_pk))
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def write_attachment(archive: Path, message_pk: int, part_id: int, destination: Path) -> None:
@@ -598,7 +636,8 @@ def safe_html(value: str, message: Message, allow_remote: bool) -> tuple[str, bo
             if urlparse(href).scheme.casefold() not in {"http", "https", "mailto"}:
                 del element.attrs["href"]
             else:
-                element["target"], element["rel"] = "_blank", "noopener noreferrer"
+                element.attrs.pop("target", None)
+                element["rel"] = "noopener noreferrer"
         if element.name == "img" and element.get("src"):
             source = str(element["src"])
             if source.casefold().startswith("cid:"):

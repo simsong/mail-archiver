@@ -412,6 +412,9 @@ repairs affect only the disposable index and display; the original RFC 5322
 bytes, MIME headers, and raw-message hash remain unchanged. Recovery is
 per-part and automatic; a count threshold for `U+FFFD` is not a safe trigger
 because replacement has already discarded the evidence needed for recovery.
+Malformed legacy headers that contain raw 8-bit bytes instead of RFC 2047
+encoded words use the declared body charset through that same recovery path for
+derived catalog, search, and viewer text; canonical header bytes remain exact.
 For every indexed message, the disposable database records an attachment count
 and one ordered metadata row per MIME attachment containing its MIME-walk part
 ID, decoded filename, and normalized MIME type. This metadata is derived during
@@ -431,18 +434,15 @@ must express their bounds as indexed `date_utc` ranges rather than applying a
 function to every stored date.
 This is an archive search system, not a mail client. A GUI query must search the
 complete selected collection without favoring recent messages or requiring an
-archivist to request older results. Before materializing headers, the GUI runs
-the same query and mailbox scope without result sorting, recipient aggregation,
-or header materialization, stopping after 2,001 matches. Exhaustion gives an
-exact count of at most 2,000; reaching 2,001 proves that background loading
-is required without waiting for a full count. SQLite FTS5 provides no reliable
-approximate cardinality for an arbitrary combination of full-text terms and
-catalog filters, so the GUI must not display an estimated count.
-When the exact count is at most 2,000, the GUI displays every result. Otherwise
-it displays the first 2,000 results in the selected sort order, automatically
-retrieves the remainder in the background, and then displays the complete
-result set and exact count. During that continuation, the result status is red
-and says **Searching in background** with the displayed count. A newer
+archivist to request older results. The GUI directly materializes the first
+2,000 headers in the selected stable order; it does not run a pre-count query,
+because that would delay the first visible results and SQLite FTS5 has no
+reliable approximate cardinality for arbitrary full-text/filter combinations.
+When more rows exist, the GUI immediately displays that ordered prefix,
+automatically retrieves the complementary remainder in the background, and
+then displays the complete result set and exact count. During that continuation,
+the result status is red and says **Searching in background** with the displayed
+count. A newer
 query supersedes the continuation; a failure retains the first 2,000 results
 and reports that the background search failed. The GUI has no **Find older
 ones**, **Load more**, or **Load all** interaction. Limiting an unordered FTS
@@ -509,7 +509,25 @@ separate indexed text-attachment table; metadata selectors retain their normal
 meaning. The control does not extract attachment content on demand.
 The GUI paints each result page from header metadata first, then requests its
 indexed body previews on a background worker and fills a reserved third line
-without blocking the initial result display.
+without blocking the initial result display. The Tabulator result table retains
+complete result metadata client-side but uses its virtual DOM to paint only
+visible rows; preview work is requested when a row is painted. Its row events
+identify pointer range endpoints without depending on transient DOM positions,
+and disables native text selection within result rows, so ordinary drags select
+message rows rather than message text. A single
+selected row opens its message; a multi-row selection replaces any stale
+single-message display with an explicit selected-message count and an explicit drag from the message-file well
+exports those selected messages as one ZIP whose entries preserve their RFC
+5322 bytes. A pointer gesture that starts and ends on
+the same result row is a normal message click, not a range drag.
+Message HTML links and recognized `http`, `https`, or `mailto` links in rendered
+plain-text parts are never opened directly. Hovering an allowed destination
+shows its complete destination in the bottom status bar. Clicking it presents
+that destination with **Open Link**, **Copy Link**, and **Ignore** choices;
+only **Open Link** invokes the system handler, and **Copy Link** writes the
+destination as text and a URL to the pasteboard. Raw Source remains literal.
+For a local file source whose stored volume-relative path begins `Users/`, the
+viewer displays `/Users/...` so it remains an absolute filesystem path.
 Literal, case-insensitive occurrences of every ordinary free-text query term
 and every textual selector value (`any:`, `from:`, `to:`, `cc:`, `bcc:`, and
 `subject:`) must be highlighted in the selected message's displayed headers and
@@ -518,6 +536,20 @@ Highlighting applies to plain text, sanitized HTML, and raw-source views without
 changing canonical bytes or weakening the HTML sandbox. Its background color
 comes from the strictly validated, versioned packaged `configuration.yaml`;
 the initial value is yellow (`#fff59d`).
+With a message selected, Command-F opens an in-message finder seeded with the
+first textual archive-search term (for example, `from:beth` seeds `beth`) and
+selects that term for replacement. The finder highlights its replacement text
+in the displayed message; Command-G advances to the next match, and
+Shift-Command-G moves to the previous match. Changing the selected message
+retains the finder text but restarts at that message's first match, including
+within a sanitized HTML part. The active HTML target must be visibly distinct
+from ordinary archive-search highlights and scroll into view. If the finder is
+closed, Command-G opens it and selects the first match.
+Command-A respects the active pane: in the result list it selects every result
+row, while in a plain-text or raw-source message it selects that displayed
+message's text, excluding viewer headers, attachments, and provenance. HTML
+keeps its native document selection behavior. A copy control copies the visible
+body text; for HTML it also copies the displayed message subject and headers.
 
 The bottom of the main GUI contains a clickable ingest-status line. During a
 run it shows live completion, message count, active/configured workers, and ETA;
@@ -529,10 +561,14 @@ threads. If it is already visible, either action brings it to the front and
 selects the requested run instead of creating a duplicate window.
 
 The GUI lists every non-attachment `text/plain` and `text/html` MIME part and
-allows the user to select among them.  HTML is isolated and sanitized. Scripts,
+allows the user to select among them. When multiple HTML parts exist, it opens
+the most substantive decoded part by default. HTML is isolated and sanitized. Scripts,
 forms, plugins, file URLs, and remote resources are blocked by default; remote
-HTTP(S) images may load only after an explicit per-message action. Embedded
-CID images may render from the verified message. Attachments appear in a list,
+HTTP(S) images may load only after an explicit action for that HTML MIME part. Embedded
+CID images may render from the verified message. Once the sanitized local HTML
+document is available, its text remains displayable while permitted remote
+resources resolve; a slow remote resource must not blank or delay the part.
+Attachments appear in a list,
 safe images and PDFs can be previewed inline, and opening any attachment is an
 explicit action with an additional warning for executable or container types.
 For a non-multipart message whose complete raw body, apart from surrounding
@@ -549,6 +585,9 @@ was found. A nonzero MBOX byte offset is displayed as `?offset=N`, rather than
 as part of the pathname; an absent or zero offset is omitted. Each local source
 path has a copy control that writes that path, without any offset, to the macOS
 pasteboard both as plain text and as a file URL.
+When a message pane is taller than its displayed content, the source-location
+section remains at the bottom of that pane; it never floats immediately after a
+short message body.
 When `date_source` is `received-median`, the GUI shows a warning banner across
 the message and gives the message well a slight red tint. The original `Date:`
 header remains visible and unchanged. The banner identifies the original
@@ -583,15 +622,15 @@ the command fails before reading or writing an archive.
 The Python GUI identifies itself as **Mail Archiver** and uses the
 source-controlled rainbow-envelope icon in its native application identity.
 The required continuous-integration gate exercises the archive lifecycle and
-complete HTML interface with disposable fixtures. The hosted macOS native smoke
-job is advisory while it runs in an unattended hosted GUI session. It uses a
-purpose-built one-message derived archive, reports JavaScript-to-Python bridge
-completion once, exposes only `status`, `search`, and `native_smoke_complete`,
-and omits the normal application menu. It persists timestamped phases atomically
-and has independent child and parent watchdogs. The first failure remains the
-primary report error even when shutdown records additional failure phases. A required
-native-application gate must instead use a logged-in self-hosted Mac and
-XCUITest/XCUIAutomation.
+complete HTML interface in headless Chromium with disposable fixtures. Native
+Cocoa/WKWebView smoke testing is an explicit local macOS development check and
+must not run in CI/CD. It uses a purpose-built one-message derived archive,
+reports JavaScript-to-Python bridge completion once, exposes only `status`,
+`search`, and `native_smoke_complete`, and omits the normal application menu.
+It persists timestamped phases atomically and has independent child and parent
+watchdogs. The first failure remains the primary report error even when
+shutdown records additional failure phases. A required native-application gate
+would instead need a logged-in Mac and XCUITest/XCUIAutomation.
 The project also publishes a Zola-generated GitHub Pages site at
 `https://simsong.github.io/mail-archiver/`. The site links to the README,
 release notes, GitHub releases, the current stable `v1.2.3`-shaped tag and
@@ -746,7 +785,15 @@ downloaded archive against a source-controlled SHA-256 digest before execution.
 * `refresh-index` rebuilds the disposable FTS database in a temporary file,
   verifies every normal MBOX message against the catalog and the total
   searchable-message count, and replaces the prior index only after those
-  checks succeed. `review` queries the
+  checks succeed. It visibly reports a progress bar, completion count, and
+  ETA weighted by catalogued message counts for mailbox verification and
+  message indexing. It announces before starting that `Ctrl-C` discards the
+  incomplete replacement and retains the existing search index. Its
+  `--workers` option defaults to the available CPU count (or two if it cannot
+  be determined), and parallelizes bounded verified-MBOX read/hash/MIME work while
+  retaining one ordered SQLite writer. While it reads each verified message, it also refreshes the
+  derived catalog subject from canonical header bytes, repairing newly supported
+  legacy charset recovery without changing canonical mail. `review` queries the
   committed source-observation log by run, source, and disposition. Derived
   catalog fields and canonical locations are created correctly during ingest.
 

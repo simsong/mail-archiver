@@ -77,6 +77,13 @@ head. Check for overlapping files or commits, stale bases, and changes already
 integrated or superseded by another PR; never silently duplicate or overwrite
 open PR work.
 
+Every push to a GitHub branch other than `main` must have a matching open pull
+request whose head is that exact branch. Before pushing, check for that PR; if
+none exists, create it as part of the same publication workflow. After pushing,
+verify that the PR head matches the pushed commit. Never leave work only on a
+GitHub non-`main` branch, including when a previously merged branch name is
+reused.
+
 Do not commit, push, open or modify pull requests, approve, merge, close
 issues, or change remote services unless the user explicitly requests it.
 When authorized, Codex GitHub activity uses `@simsong-codex`; signed commits use
