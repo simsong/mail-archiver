@@ -446,8 +446,10 @@ On first launch, all three setup steps appear together:
 
 The chosen paths stay visible; either folder button can be used again. Canceling
 selection keeps the previous path. Keep source and archive folders separate;
-neither may contain the other. **Cancel** (or Escape) quits the application without
-starting import or changing saved preferences. If another import is running,
+neither may contain the other. **Cancel** (or Escape) quits the application;
+the button itself starts no import and makes no preference changes. It does not
+undo earlier changes: startup may already have removed a missing or invalid
+remembered archive from saved preferences before showing setup. If another import is running,
 the normal Stop Import and Quit confirmation protects its checkpoint.
 To show setup again, hold **Option (Alt)** while launching the Mac app until
 setup appears, or Option-click its Dock icon while it is running. From the CLI:

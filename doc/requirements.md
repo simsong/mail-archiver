@@ -734,8 +734,11 @@ destination. Start
 import reuses the selected root without asking for it again, retains owner email rule
 setup and antivirus confirmation, and opens the Ingests progress window after
 starting the worker. Cancellation of import settings keeps the setup choices available for retry.
-A **Cancel** button beside Start import (also Escape) quits the application
-without creating an archive, starting import, or changing saved preferences.
+A **Cancel** button beside Start import (also Escape) quits the application.
+The Cancel action itself must not create an archive, start import, or write
+preferences. It does not undo earlier writes: normal startup may already have
+removed a missing or invalid remembered archive from saved preferences before
+showing setup.
 If another window is importing, use the normal Stop Import and Quit confirmation
 and retain its writer lease until checkpoint completion. It and native File → Close are disabled while a setup operation or dialog is pending.
 The Close lock applies globally, including Cancel and native modal focus falling

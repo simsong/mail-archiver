@@ -960,8 +960,14 @@ job-free decision sets `_quitting` before new jobs can register; otherwise it
 confirms, stops jobs, and waits for completion. A deterministic native regression
 publishes a real leased job immediately before that decision and verifies the
 confirmation, stop signal, lease retention, completion, and application exit.
-No setup paths or
-preferences are written. Pending setup operations
+Picker selection and the Cancel action do not persist setup paths or write
+preferences. Normal startup may already have removed an invalid or missing
+remembered archive through `_forget_recent()` before showing setup; Cancel does
+not undo that cleanup. Start import calls `open_document()` or `create_document()`,
+which records the destination in application preferences before import settings
+are confirmed. After ingestion, the worker may save the selected source directory
+in the archive configuration through `remember_import_directory()`.
+Pending setup operations
 disable Cancel and native File → Close and prevent window closure. Menu state
 refreshes on every setup lock acquisition and release, including Cancel and error
 recovery. The native Close gate checks the setup lock independently of the active
@@ -983,7 +989,8 @@ The native setup target also tests the sampler before application configuration,
 explicit/remembered archive bypass, normal Dock reopen, and Option reopening one
 existing setup window. Only the global hardware-modifier source is substituted
 with real NSEvent flags to avoid sending keystrokes to the user's desktop; this
-does not establish a physical Option-click/Finder launch test.
+does not establish a physical Option-click/Finder launch test. Physical
+Option-launch and Dock Option-click remain unverified.
 The user holds Option through launch because the flag reports current key state.
 About is created hidden to retain the event loop and File New/Open after setup
 closes; the application menu explicitly shows it. Native dialog
