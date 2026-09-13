@@ -37,7 +37,11 @@ from .plugin_api import (
 )
 from .source_volume import SourceVolume, local_mount_path, local_source_volume
 from .ingest_diagnostics import add_message_context
-from .mbox_framing import MBOX_ENVELOPE, QUOTED_ENVELOPE, MboxNormalization, is_complete_envelope, normalize_mbox_framing
+from .mbox_framing import (
+    MBOX_ENVELOPE, QUOTED_ENVELOPE, MboxNormalization, NormalizedMboxRecord,
+    is_complete_envelope, normalize_mbox_framing,
+)
+from .mboxrd import unquote
 
 SourceKind = str
 BABYL_OPTIONS = b"babyl options:"
@@ -51,7 +55,6 @@ XXX_WRAPPER_HEADERS = {"status", "x-keywords", "x-status"}
 MMDF_DELIMITER = b"\x01\x01\x01\x01"
 RFC_HEADER = re.compile(br"^[!-9;-~]+:[ \t]*")
 HEADER_SEPARATOR = re.compile(br"\r?\n\r?\n")
-MBOXRD_QUOTED_FROM = re.compile(br"(?m)^>(?=>*From )")
 
 
 class FileProbeRules(BaseModel):
@@ -305,17 +308,21 @@ class MboxFileParser(FileParser):
                     continue
                 with box.get_file(key, from_=True) as original:
                     envelope = original.readline()
+                    raw = original.read()
                 envelope_sender = _mbox_envelope_sender(envelope.rstrip(b"\r"))
-                raw = box.get_bytes(key, from_=False)
+                declared_mboxrd = source.path.suffix.lower() == ".mboxrd"
+                if declared_mboxrd:
+                    raw = unquote(raw)
                 if mmdf_framed:
                     raw = _without_mmdf_delimiter(raw)
                 exclusion_raw = raw
-                normalized = normalize_mbox_framing(raw, envelope)
+                normalized = (NormalizedMboxRecord(raw=raw, envelope=envelope) if declared_mboxrd
+                              else normalize_mbox_framing(raw, envelope))
                 if normalized.normalization is not None:
                     # Ignore only framing we converted, not original X-From headers.
                     exclusion_raw = raw[len(normalized.normalization.quoted_envelope):]
                     raw, envelope = normalized.raw, normalized.envelope
-                elif envelope_sender == XXX_ENVELOPE_SENDER:
+                elif not declared_mboxrd and envelope_sender == XXX_ENVELOPE_SENDER:
                     raw, envelope = _unwrap_xxx_record(raw, envelope)
                 exclusion = _mbcp_exclusion(_mbox_envelope_sender(envelope), exclusion_raw)
                 yield SourceMessage(
@@ -693,7 +700,7 @@ def _unwrap_xxx_record(raw: bytes, envelope: bytes) -> tuple[bytes, bytes]:
     # Never search past the nested message's headers into quoted body text.
     if QUOTED_ENVELOPE.match(nested) is None:
         return raw, envelope
-    nested = MBOXRD_QUOTED_FROM.sub(b"", nested)
+    nested = unquote(nested)
     nested_envelope, newline, message = nested.partition(b"\n")
     if not newline or _mbox_envelope_sender(nested_envelope.rstrip(b"\r")) == b"":
         return raw, envelope

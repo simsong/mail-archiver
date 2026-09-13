@@ -12,6 +12,13 @@ Email Collection Toolkit has two independent generator plug-in layers:
 2. the built-in local source delegates each recognized filename to a
    **file-parser plug-in**.
 
+The planned [ingest executable protocol](PST_DUAL_READER.md) is a subprocess
+adapter into these layers: filename input, mboxrd stdout, stderr diagnostics,
+and separate `X-Imported-URI`, `X-Importer-Name`, `X-Importer-Version` fields.
+The [MCT Importer API 1.0](MCT_IMPORTER_API.md) Rust generator and validator are
+implemented; its archive runner and PST adapters are not. All added fields remain in
+h2; see [added headers and integrity](INTEGRITY_CONTROLS.md#headers-added-by-mail-archiver-and-ingest-executables).
+
 Plug-ins do not create threads, render status, scan messages, open the archive
 catalog, deduplicate mail, or publish canonical MBOX. The framework owns those
 operations. This keeps the same source plug-in usable with one worker or many

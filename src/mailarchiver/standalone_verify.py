@@ -352,11 +352,13 @@ def _parse_token(token: object, standards: list[HashStandard]) -> tuple[HashStan
 
 
 def _stored_candidates(box: mailbox.mbox, key: str) -> Iterable[bytes]:
-    """Independently try envelope, mboxrd, and writer-added-LF alternatives."""
-    record = box.get_bytes(key, from_=True)
+    """Independently recover mboxrd, legacy mboxo, envelope and final-LF variants."""
+    with box.get_file(key, from_=True) as source:
+        record = source.read()
     envelope, separator, raw = record.partition(b"\n")
     if not separator or not envelope.startswith(b"From "):
         raise ValueError("invalid MBOX record")
+    decoded = re.sub(br"(?m)^>(?=>*From )", b"", raw)
     lines = raw.splitlines(keepends=True)
     ambiguous = [index for index, line in enumerate(lines) if line.startswith(b">From ")]
     fully_unquoted = (1 << len(ambiguous)) - 1
@@ -365,12 +367,12 @@ def _stored_candidates(box: mailbox.mbox, key: str) -> Iterable[bytes]:
         masks.extend(range(1, fully_unquoted))
     seen: set[bytes] = set()
     for prefix in (b"", envelope + separator):
-        for mask in masks:
+        for mask in [None, *masks]:
             candidate = list(lines)
             for bit, index in enumerate(ambiguous):
-                if mask & (1 << bit):
+                if mask is not None and mask & (1 << bit):
                     candidate[index] = candidate[index][1:]
-            stored = prefix + b"".join(candidate)
+            stored = prefix + (decoded if mask is None else b"".join(candidate))
             variants = [stored]
             if stored.endswith(b"\n"):
                 variants.append(stored[:-1])

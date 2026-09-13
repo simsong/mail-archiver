@@ -17,6 +17,38 @@ test-addressbook-export: ruff
 	uv run --locked pytest -q tests/test_addressbook_exporter.py
 
 TIKA_VERSION ?= 4.0.0
+CARGO ?= cargo
+RUST_TARGET_DIR ?= $(CURDIR)/target
+CARGO_RUN = $(CARGO) --config 'build.target-dir="$(RUST_TARGET_DIR)"'
+
+.PHONY: rust-programs mdti-validator mcti-generator rust-toolchain rust-lock rust-fmt rust-check test-rust rust-smoke
+rust-programs:
+	$(CARGO_RUN) build --locked --release --workspace --bins
+
+mdti-validator mcti-generator:
+	$(CARGO_RUN) build --locked --release --bin $@
+
+rust-toolchain:
+	rustc --version
+	$(CARGO) --version
+
+rust-lock:
+	$(CARGO_RUN) generate-lockfile
+
+rust-fmt:
+	$(CARGO_RUN) fmt --all
+
+rust-check:
+	$(CARGO_RUN) fmt --all -- --check
+	$(CARGO_RUN) clippy --locked --workspace --all-targets -- -D warnings
+	$(MAKE) test-rust
+
+test-rust:
+	$(CARGO_RUN) test --locked --workspace
+
+rust-smoke: rust-programs
+	bash -o pipefail -c '"$(RUST_TARGET_DIR)/release/mcti-generator" "$(or $(COUNT),10)" | "$(RUST_TARGET_DIR)/release/mdti-validator"'
+
 .PHONY: sync-dependencies test-reconciliation distribution-check name-matcher-observations h3-ambiguous-review
 
 sync-dependencies:
@@ -58,6 +90,7 @@ OCR_RUN_ARGS ?=
 check:
 	$(MAKE) lint
 	$(MAKE) types
+	$(MAKE) rust-check
 	$(MAKE) test
 	$(MAKE) test-e2e
 	$(MAKE) website-check
@@ -381,6 +414,10 @@ website-gmail-illustrations:
 	uv run --group dev python -m scripts.gmail_setup_illustrations
 
 .PHONY: test-envelopes
+.PHONY: test-mboxrd
+test-mboxrd:
+	uv run --locked pytest -q tests/test_mboxrd.py tests/test_envelopes.py tests/test_standalone_verify.py tests/test_publication.py tests/test_sources.py tests/test_pdf_mail.py tests/test_data_quality_scripts.py tests/test_validation.py
+
 test-envelopes:
 	uv run pytest -q tests/test_envelopes.py tests/test_sources.py tests/test_publication.py tests/test_standalone_verify.py tests/test_ingest_diagnostics.py tests/test_mbox_framing.py \
 		tests/test_end_to_end.py::test_parser_failure_records_source_identity_and_failed_run

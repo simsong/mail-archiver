@@ -26,6 +26,7 @@ from typing import Literal
 
 import py7zr
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .mboxrd import unquote
 
 CONFIG_SCHEMA_VERSION = 1
 USER_AGENT = "mailarchiver-validation/0.1"
@@ -447,7 +448,9 @@ def write_mbox_messages(source: Path, prepared: Path, start: int) -> int:
     try:
         for key in box.iterkeys():
             destination = prepared_destination(prepared, count, source, ".eml")
-            destination.write_bytes(box.get_bytes(key, from_=False))
+            with box.get_file(key, from_=False) as record:
+                raw = record.read()
+            destination.write_bytes(unquote(raw) if source.suffix.lower() == ".mboxrd" else raw)
             count += 1
     finally:
         box.close()

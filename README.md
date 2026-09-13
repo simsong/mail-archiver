@@ -32,6 +32,14 @@ See [Windows setup](doc/WINDOWS.md) for clean-install VM directions and the
 remaining work required for full Windows ingest. This is a development setup
 guide, not a supported Windows application release.
 
+## Rust importer development
+
+Rust importer development uses `make rust-programs` to build `mdti-validator`
+and `mcti-generator`. See [MCT Importer API 1.0](doc/MCT_IMPORTER_API.md) for
+the contract, individual targets and validation pipeline. Rust/Cargo are
+required to build these tools and the planned PST importer. Packaged PST users
+will need the compiled helper, not a compiler; PST extraction is not yet implemented.
+
 ## Goals
 
 `mailarchiver` is preservation infrastructure for personal and research email

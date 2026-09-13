@@ -70,6 +70,15 @@ directory, and a `data/mbox/` payload directory.
 
 * Mail is stored only under `data/mbox/` in standard MBOX files, using
   byte-preserving mboxrd quoting. Do not retain a per-message EML corpus.
+  Quote every payload line matching `^>*From ` by adding one `>`; decode exactly
+  one level. Python's default mboxo escaping is insufficient. Existing mboxo
+  archive records remain unchanged and must be recovered only through their
+  expected h2. Explicit `.mboxrd` sources declare reversible decoding; unknown
+  source dialects retain stored quoting. See [MBOX_READING.md](MBOX_READING.md).
+  All stored headers, including added provenance fields, participate in h2;
+  there is no X-header exclusion from raw-message integrity. Document every
+  digest's input, purpose and limits, and all added headers, in
+  [INTEGRITY_CONTROLS.md](INTEGRITY_CONTROLS.md).
 * Preserve every available original `From ` record delimiter, including sender,
   timestamp, whitespace, and line ending. Carry MBOX framing separately from
   RFC message bytes so message hashes and deduplication stay unchanged except
@@ -664,9 +673,10 @@ An indexing failure is recorded as a metadata defect and does not reject mail;
 ## Desktop application documents and windows
 
 The compiled desktop experience will evaluate Dioxus Desktop and Tauri with the
-system webview (WKWebView on macOS, WebView2 on Windows). Rust work is limited to the desktop/UI layer;
-ingest, search, scanner orchestration, archive locking, and preservation remain
-in Python. Windows with full ingest is the next platform priority; Linux/snap
+system webview (WKWebView on macOS, WebView2 on Windows). Rust also implements
+the MCT importer test programs and planned PST extraction helper. Archive ingest
+orchestration, search, scanning, locking and preservation remain in Python.
+Windows with full ingest is the next platform priority; Linux/snap
 delivery is deferred. [DIOXUS.md](DIOXUS.md) defines the trial plan and migration,
 typed local worker boundary, packaging, and native acceptance requirements.
 The worker protocol and both candidate frontends remain unimplemented. End users must
@@ -1271,6 +1281,17 @@ and retain the current explicit-path CLI instructions.
   rather than silently omitting them. The current backend decision, fixture
   matrix, and format limitations are maintained in
   [ON_DISK_MAIL_FORMATS.md](ON_DISK_MAIL_FORMATS.md).
+  **Planned beta gate:** implement standalone ingest executables accepting a
+  filename and emitting mboxrd to stdout, with diagnostics on stderr, as
+  specified in [PST_DUAL_READER.md](PST_DUAL_READER.md). Start with a qualified
+  adapter around Microsoft's Rust PST library; allow another implementation
+  as a separate pass. Each emitted record carries `X-Imported-URI`,
+  `X-Importer-Name` and `X-Importer-Version`. These fields are included in h2.
+  Existing h3 includes selected headers AND the encoded MIME body; it is a
+  comparison control, not permission to discard conflicting variants. The
+  current Message-ID-plus-h2 dedup does not collapse different importer headers.
+  Preserve failures and partial-run provenance; a successful empty stream is
+  not proof that an arbitrary PST was fully recovered. Qualify OST separately.
   Microsoft 365 has no platform-neutral Takeout equivalent. Outlook PST export
   on Windows and OLM export from legacy Outlook for Mac are recognized future
   acquisition paths, but PST, OST, OLM, Graph, and Exchange Online IMAP are not
@@ -1425,7 +1446,39 @@ and retain the current explicit-path CLI instructions.
   committed source-observation log by run, source, and disposition. Derived
   catalog fields and canonical locations are created correctly during ingest.
 
+## MCT Importer API and Rust programs
+
+[MCT Importer API Version 1.0](MCT_IMPORTER_API.md) defines filename input and
+mboxrd stdout with `X-Imported-URI`, `X-Importer-Name`, `X-Importer-Version`.
+No h4 is required: h2 covers every header and body byte; existing h3 excludes
+top-level importer fields while covering selected headers and the encoded body.
+
+Rust/Cargo are required for building the importer tools and planned PST import
+helper. Packaged end users need the helper executable, not a Rust compiler.
+`make rust-programs` builds `mdti-validator` and `mcti-generator`; each has its
+own same-named Makefile build target. Keep a committed Cargo lockfile and run
+Rust formatting, Clippy and tests through Makefile targets, including `make check`.
+The validator warns before consuming stdin that all input is discarded, reports
+validation errors on stderr, and reports valid complete message counts after
+EOF. It never imports mail or creates archive files. The generator accepts an
+unsigned count and emits exactly that many deterministic RFC 2822/MIME text
+messages with counters and valid API provenance. Validate malformed records,
+partial EOF, size limits, MIME structure/encoding, quote levels, process exit
+statuses and recovery to following records, using actual Rust processes.
+The archive host, actual PST extraction and h3 duplicate suppression remain
+planned; these test tools must not imply they are implemented.
+
 ## Windows development environment
+
+Reliable PST import and full Windows ingest are required for the planned beta.
+Supported Windows/macOS packages and the planned Linux Snap must bundle their
+selected ingest executables and dependencies without requiring user-installed
+runtimes, compilers or Outlook. A second importer is independently selectable;
+Java is required only if a Java importer is selected for distribution.
+[PST_DUAL_READER.md](PST_DUAL_READER.md) defines architecture-specific
+packaging, runtime provenance, signing, confinement and installed-fixture gates.
+No platform is supported merely because its package builds; validate full ingest,
+scanning, locking, cancellation and recovery in the installed application.
 
 [WINDOWS.md](WINDOWS.md) documents native Windows setup with x64 CPython managed
 by uv, MSYS2 build utilities, Rust/MSVC/Dioxus tooling, WebView2, and existing
@@ -1463,6 +1516,8 @@ Python, native extension libraries, GUI assets, packaged schemas,
 plug-in manifests, and the standalone verifier source travel inside the app.
 ClamAV and experimental command-line tools (Tika/Java, PDF OCR, Apple Intelligence)
 are not prerequisites of the supported local-mail GUI and are not bundled.
+This describes the current package. The planned PST beta adds selected ingest
+executables; a private JVM is needed only if a Java importer is bundled.
 When both `APPLE_CERTIFICATE_P12_BASE64` and `APPLE_CERTIFICATE_PASSWORD`
 are present on an isolated GitHub-hosted runner, the build must import the
 PKCS#12 identity temporarily, sign the app and DMG with Developer ID, verify

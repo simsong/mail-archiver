@@ -213,7 +213,9 @@ by end users of the eventual packaged application.
    CLI compilation can take time. These commands install developer tooling,
    not this application. See [Dioxus setup](https://dioxuslabs.com/learn/0.7/getting_started/).
    Record the installed versions; pin the Rust toolchain, Dioxus dependency,
-   and matching CLI when the application's Cargo workspace is introduced.
+   and matching CLI when the Dioxus frontend is introduced. The existing Cargo
+   workspace builds the separate [MCT importer tools](MCT_IMPORTER_API.md);
+   those require no Dioxus CLI.
    A successful `dx doctor` is not an application build or ingest test.
 5. In MSYS2 UCRT64, add Cargo's tools alongside uv for the current session:
 
@@ -222,14 +224,15 @@ by end users of the eventual packaged application.
    ```
 
    Save this line in `~/.bashrc` for subsequent development terminals. Future
-   project build/run/test commands must be provided through the Makefile;
-   no Dioxus application targets exist in this documentation-only change.
+   project build/run/test commands use the Makefile. `make rust-programs`
+   builds the importer tools; no Dioxus application targets exist yet.
 
 An editor such as Visual Studio Code is useful but optional. Select
 `.venv\Scripts\python.exe` as its Python interpreter after the next step.
 
 You do **not** initially need Docker, WSL, Java, or a separate Node.js
-installation. Rust/MSVC are required for the compiled UI trials. PyInstaller and Python test/lint tools are project
+installation. Rust/MSVC are required to build the native importer tools and
+compiled UI trials. PyInstaller and Python test/lint tools are project
 dependencies. The Python Pyright wrapper can provision Node automatically, and
 Python Playwright supplies its driver. If a dependency unexpectedly requires a
 compiler, record the package, Python architecture, and error; first check that

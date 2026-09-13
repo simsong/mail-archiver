@@ -291,8 +291,8 @@ def _write_bag_info(archive: Path, byte_count: int, file_count: int, packaged_at
             "Mailbag-Agent: mailarchiver",
             f"Mailbag-Agent-Version: {version('mailarchiver')}",
             f"Payload-Oxum: {byte_count}.{file_count}",
-            "MBOX-Format-Details: mboxrd",
-            "MBOX-Agent: Python mailbox",
+            "MBOX-Format-Details: mboxrd; pre-mboxrd mailarchiver records may use mboxo",
+            "MBOX-Agent: mailarchiver mboxrd quoting with Python mailbox",
             "Mailarchiver-Message-Newline-Policy: preserve-source; add-final-LF-for-MBOX-framing",
         )
     ) + "\n"
