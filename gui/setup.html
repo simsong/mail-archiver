@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; object-src 'none'; connect-src 'self'">
+    <title>Get started</title>
+    <link rel="stylesheet" href="setup.css">
+  </head>
+  <body>
+    <main>
+      <header><img src="icons/rainbow-post-192.png" width="48" height="48" alt=""><div><h1>Get started</h1><p>Your mail, together in one archive.</p></div></header>
+      <section aria-labelledby="source-heading">
+        <span class="number" aria-hidden="true">1</span>
+        <div class="step"><h2 id="source-heading">Select the root folder to ingest</h2>
+          <p>Mail files and subfolders will be read without changing them.</p>
+          <div class="picker"><input id="source-path" aria-label="Root folder to ingest" placeholder="No folder selected" readonly><button id="choose-source" type="button" disabled>Choose folder…</button></div>
+        </div>
+      </section>
+      <section aria-labelledby="destination-heading">
+        <span class="number" aria-hidden="true">2</span>
+        <div class="step"><h2 id="destination-heading">Select where your archive is stored</h2>
+          <p>Choose an existing archive or an empty folder for a new one.</p>
+          <div class="picker"><input id="destination-path" aria-label="Archive folder" placeholder="No folder selected" readonly><button id="choose-destination" type="button" disabled>Choose folder…</button></div>
+        </div>
+      </section>
+      <section aria-labelledby="import-heading">
+        <span class="number" aria-hidden="true">3</span>
+        <div class="step"><h2 id="import-heading">Start import</h2><p>Review import settings, then follow progress in the import window.</p>
+          <button id="start-import" class="primary" type="button" disabled>Start import</button>
+          <button id="cancel" type="button" disabled>Cancel</button>
+        </div>
+      </section>
+      <p id="status" role="status">Connecting to the application…</p>
+      <p id="error" role="alert" hidden></p>
+    </main>
+    <script src="setup.js"></script>
+  </body>
+</html>

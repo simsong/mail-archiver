@@ -70,6 +70,27 @@ class ApplicationPreferencesStore:
                 Path(temporary).unlink(missing_ok=True)
 
 
+class SetupSelection(BaseModel):
+    """The two explicitly selected setup folders; validation never writes to them."""
+
+    source: Path
+    destination: Path
+
+    def validate_paths(self) -> None:
+        source = self.source.expanduser().resolve(strict=True)
+        destination = self.destination.expanduser().resolve()
+        if not source.is_dir():
+            raise ValueError("Select a root folder containing mail to import.")
+        destination_contains_source = destination.exists() and any(
+            destination.samefile(parent) for parent in (source, *source.parents)
+        )
+        source_contains_destination = any(
+            parent.exists() and source.samefile(parent) for parent in (destination, *destination.parents)
+        )
+        if destination_contains_source or source_contains_destination:
+            raise ValueError("Choose separate source and archive folders; neither may contain the other.")
+
+
 class ArchiveDescriptor(BaseModel):
     """Stable identity plus the user-visible spelling of one archive path."""
 
@@ -459,14 +480,14 @@ class ApplicationController:
                 errors.append(str(error))
         return StartupResult(windows=windows, errors=errors)
 
-    def startup(self, explicit_paths: tuple[Path, ...] = ()) -> StartupResult:
+    def startup(self, explicit_paths: tuple[Path, ...] = (), *, new: bool = False) -> StartupResult:
         errors = [self.preference_error] if self.preference_error else []
-        if explicit_paths:
+        if explicit_paths and not new:
             result = self.handle_open_documents(explicit_paths)
             errors.extend(result.errors)
             if result.windows:
                 return StartupResult(windows=result.windows, errors=errors)
-        elif self._preferences.last_archive is not None:
+        elif not new and self._preferences.last_archive is not None:
             try:
                 document = self.open_recent_document(self._preferences.last_archive)
                 return StartupResult(windows=[self.new_search_window(document)], errors=errors)

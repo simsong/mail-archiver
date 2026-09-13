@@ -16,3 +16,5 @@ data/
 validation/samconfig.toml
 .aws-sam/
 /ocr-text/
+*.p12
+*.cer

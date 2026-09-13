@@ -727,15 +727,49 @@ it is disabled when no saved archive search window is active. **Open** and an
 operating-system open event create a window for the requested document; they
 must not silently retarget an existing search window.
 
-Startup opens explicit document paths first, otherwise the last valid archive,
-otherwise a macOS dialog offers **Open Existing**, **Create New**, and **Cancel**.
+Startup opens explicit document paths first, otherwise the last valid archive.
+When neither is available, show a single setup window with all three numbered
+boxes visible: **1. Select the root folder to ingest**, **2. Select where your
+archive is stored**, and **3. Start import**. Each folder button opens a native
+folder browser and displays its accepted path in a selectable, read-only text
+field. Reopening a picker starts at the previous choice; cancel preserves that
+choice. The archive may be an existing valid archive or a pre-created empty
+directory outside the source. macOS setup pickers must disable New Folder,
+including before source selection, so browsing cannot create input directories.
+No archive is initialized by
+selection alone. Disable Start import until both folders are selected and while
+any setup dialog is pending. Reject equal or nested source/destination folders,
+including symlink, Unicode, and case aliases, before creating or opening a
+destination. Start
+import reuses the selected root without asking for it again, retains owner email rule
+setup and antivirus confirmation, and opens the Ingests progress window after
+starting the worker. Cancellation of import settings keeps the setup choices available for retry.
+A **Cancel** button beside Start import (also Escape) quits the application.
+The Cancel action itself must not create an archive, start import, or write
+preferences. It does not undo earlier writes: normal startup may already have
+removed a missing or invalid remembered archive from saved preferences before
+showing setup.
+If another window is importing, use the normal Stop Import and Quit confirmation
+and retain its writer lease until checkpoint completion. It and native File → Close are disabled while a setup operation or dialog is pending.
+The Close lock applies globally, including Cancel and native modal focus falling
+back to an existing search window; a queued Close action must also refuse closure.
+Folder pickers must clear any warning accessory left by a previous import dialog.
+Cancel must atomically reserve a job-free quit against import publication; if a
+job wins that race, present the normal stop confirmation and wait for its checkpoint.
+
 When launched through `mailsearch-gui`, macOS must not reinterpret the Python
 launcher or command-line option values as documents. Explicit `--archive`
 handling and genuine Finder document-open events remain supported. Configure
 this behavior for the running process without writing system or user defaults.
-A missing or invalid last archive is removed from recent state and reported,
-never recreated. Cancel dismisses the dialog without creating a search window;
-About and File New/Open remain available. New asks for a permanent destination
+
+`mailsearch-gui --new` forces this setup for one launch, bypassing both remembered
+and environment-selected archives without clearing preferences or altering old
+archives. `--new` and `--archive` are mutually exclusive. On macOS, holding
+Option (Alt) while launching the app invokes the same setup; keep it held until
+the window appears. Option-clicking its running Dock icon also opens setup.
+Only one setup window is shown per process. A missing or invalid last archive
+is removed from recent state and reported, never recreated. Closing setup
+leaves About and File New/Open available. New asks for a permanent destination
 before opening a search window, then offers Import. Accepting the default
 Untitled name must work. Native save results may be strings or path sequences;
 neither form may truncate the path. File New/Open/Close have Command-N/O/W
@@ -746,7 +780,8 @@ directories do not require an extension. Opening checks SQLite schema and layout
 read-only, without scanning every database page; this is not a full corruption
 audit. Open failures appear in About and stderr even if a document cannot open.
 
-An About window always opens at application startup. Closing it dismisses it
+The About window is retained hidden at startup and opens through the application
+menu. Closing it dismisses it
 until the user chooses the application menu's About command; status updates and
 Dock activation must not reopen it. Closing the last visible window keeps the
 application running with About and File New/Open available. It displays the installed version, current
@@ -1557,6 +1592,13 @@ must not make remote requests without explicit authorization.
 
 ## Developer validation gates
 
+Before pr-to-ready changes begin, inspect open PRs, active tasks, checkouts, and
+unpublished work for potential file, behavior, dependency, or shared-resource
+conflicts. List each affected task/PR, branch, path, overlap, and proposed
+coordination plan; obtain explicit user approval before conflicting work.
+Recheck before integration/publication and when scope changes; an existing
+approval covers only the disclosed conflict and plan.
+
 Copilot review requests must use `gh` with the authorized `simsong` identity,
 not browser control. That exception is review-request-only; all other Codex
 GitHub writes retain `simsong-codex`. A successful command alone does not prove
@@ -1573,6 +1615,12 @@ up its task-owned `.tmp` checkout only after the human merges the PR. Removal
 requires current-main ancestry or patch-equivalence evidence and a clean tree;
 ignored private evidence is not disposable. Dirty, unmerged, or uncertain
 checkouts must be retained and reported, not forcibly deleted.
+When the user explicitly authorizes earlier removal of clean, pushed checkouts,
+verify remote reachability of all local commits and the matching open PR head,
+preserve non-rebuildable artifacts, and confirm no active task needs the path.
+Keep unmerged branch refs until merge verification. Every handoff must report
+removed and retained task checkouts, artifact locations, and remaining blockers;
+remove retired checkout entries from the skill distribution inventory.
 
 `make check` runs Ruff and Pylint (`make lint`), then ty and Pyright
 (`make types`), then pytest, Chromium end-to-end tests, and website validation.
