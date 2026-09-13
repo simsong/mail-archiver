@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Explicit, case-insensitive mailbox/address glob rules for Sent classification."""
 
 from __future__ import annotations

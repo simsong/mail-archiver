@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirements: each AWS validation request launches one terminating, report-uploading worker."""
 
 from __future__ import annotations

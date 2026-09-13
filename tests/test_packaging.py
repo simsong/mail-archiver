@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Desktop delivery requirements: actual no-scanner ingest and headless diagnostics.
 
 Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.

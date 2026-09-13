@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Search catalog and FTS data read-only, then retrieve hash-verified MBOX bytes."""
 
 from __future__ import annotations

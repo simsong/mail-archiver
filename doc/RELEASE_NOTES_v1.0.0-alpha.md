@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Email Collection Toolkit v1.0.0 alpha — draft release notes
 
 Status: unreleased scope draft, 2026-09-07. The first alpha tag and minimum macOS version are pending.

@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Compiled desktop UI: Dioxus and Tauri trials
 
 Plan: 2026-09-10. Trial **Dioxus Desktop and Tauri** before choosing the

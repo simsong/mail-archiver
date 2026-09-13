@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Extract printed email records from standalone PDFs without modifying them."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Start, health-check, use, and stop the ingest run's on-demand ClamAV daemon."""
 
 from __future__ import annotations

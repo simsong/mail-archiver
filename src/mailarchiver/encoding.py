@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Recover readable derived text without changing source message bytes."""
 
 from __future__ import annotations

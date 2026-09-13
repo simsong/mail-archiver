@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Compare complete Apple Mail EMLX records with an Email Collection Toolkit archive read-only."""
 
 from __future__ import annotations

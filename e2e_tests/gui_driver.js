@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. */
+
 /* Requirement: archive searches automatically return matches across the collection's full time span. */
 (() => {
   "use strict";

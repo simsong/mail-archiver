@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Build original-mailbox trees and persist per-user filter sets."""
 
 from __future__ import annotations

@@ -31,6 +31,8 @@ number = "05"
 title = "Verify and share"
 description = "Verify the archive's SHA-256 hashes or transfer its MBOX files to ePADD. The archive already uses BagIt 1.0 and Mailbag 1.0 as its native storage format."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 ## What the program does
 

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Exercise the proposed Babyl adapter against every real source message."""
 
 from __future__ import annotations

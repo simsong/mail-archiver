@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Derive robust message identity, addresses, subjects, and dates from raw mail."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify ingest progress and bounded mailfile-level worker concurrency."""
 
 from __future__ import annotations

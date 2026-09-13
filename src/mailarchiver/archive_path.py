@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Share archive-path CLI and environment handling across read-only commands."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. */
+
 :root { color-scheme: light dark; font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; --border: color-mix(in srgb, CanvasText 18%, transparent); --muted: color-mix(in srgb, CanvasText 58%, transparent); }
 * { box-sizing: border-box; }
 body { margin: 0; color: CanvasText; background: Canvas; }

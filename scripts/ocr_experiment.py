@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Inventory PDF MIME attachments and run resumable, source-preserving OCR trials."""
 
 from __future__ import annotations

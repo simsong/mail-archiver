@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Build and install both distribution formats, then smoke their entry points."""
 
 from __future__ import annotations

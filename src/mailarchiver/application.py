@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Document and window ownership for the cross-platform desktop application."""
 
 from __future__ import annotations

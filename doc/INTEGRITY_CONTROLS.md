@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Archive integrity controls: BagIt and Mailbag interoperability
 
 ## Scope

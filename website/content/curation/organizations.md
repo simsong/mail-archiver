@@ -4,6 +4,8 @@ description = "Links to organizations and projects related to digital email pres
 weight = 20
 +++
 
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 - [Library of Congress](https://www.loc.gov/preservation/digital/)
   provides digital-preservation resources.
 - [Digital Preservation Coalition](https://www.dpconline.org/)

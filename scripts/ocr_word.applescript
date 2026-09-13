@@ -1,3 +1,5 @@
+-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 on run arguments
     set inputFile to POSIX file (item 1 of arguments)
     set outputPath to item 2 of arguments

@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Printed-email PDF and OCR strategy
 
 Printed or scanned email is source evidence even when no original RFC 5322

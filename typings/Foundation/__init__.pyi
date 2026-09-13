@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Minimal Cocoa Foundation selectors used by mailarchiver."""
 from typing import Callable, Mapping, Self
 

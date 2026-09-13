@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Human-editable, per-archive operational configuration.
 
 Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.

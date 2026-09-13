@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Historical checkout reconciliation — 2026-09-08
 
 Base: `origin/main` at `a4e98bd7cc58c036692582fe7c69196b0f7561e2`

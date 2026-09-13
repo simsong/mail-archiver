@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Load validated packaged application configuration."""
 
 from __future__ import annotations

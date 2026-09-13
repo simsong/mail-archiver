@@ -2,6 +2,8 @@
 title = "Importing"
 description = "Configure local and IMAP sources, then choose a fast refresh or complete source rebuild."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 Email Collection Toolkit imports supported local email files and folders into
 an archive without changing the sources. Google Takeout MBOX, Maildir, EML,

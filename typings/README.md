@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Native type interfaces
 
 These development-only stubs describe the Cocoa selectors used by the desktop

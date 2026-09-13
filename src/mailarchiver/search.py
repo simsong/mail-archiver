@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Build disposable FTS5 body, preview, and optional text-attachment indexes."""
 
 from __future__ import annotations

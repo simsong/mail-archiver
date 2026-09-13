@@ -1,6 +1,6 @@
 # Apple certificate management and signed GitHub DMGs
 
-Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
 
 ## Scope and current implementation
 

@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Email Collection Toolkit icon
 
 `rainbow-post.svg` is the source icon for the Python application and the

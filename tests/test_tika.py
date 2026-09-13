@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirement: Tika 4 installs a verified CLI JAR with its lib directory."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify read-only source discovery, EMLX/MBOX streaming, and append fingerprints."""
 
 import json

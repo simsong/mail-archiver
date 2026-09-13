@@ -2,6 +2,8 @@
 title = "Use cases"
 description = "Examples of personal and institutional email archive workflows."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 ## For Individuals
 

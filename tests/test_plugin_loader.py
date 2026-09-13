@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify trusted manifest discovery before ingest workers start."""
 
 from __future__ import annotations

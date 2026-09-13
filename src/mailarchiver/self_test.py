@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Disposable end-to-end checks for source and frozen desktop installations.
 
 Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.

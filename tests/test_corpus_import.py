@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirement: import ALL tests/data, retain exact mail, terminate, and remain idempotent.
 
 The public golden file covers tracked inputs. An ignored overlay covers private

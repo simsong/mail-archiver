@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Generate the deterministic, virus-free source corpus committed for E2E tests."""
 
 from __future__ import annotations

@@ -2,6 +2,8 @@
 title = "Searching"
 description = "Find messages across your collection by words, people, dates, subjects, attachments, and original folders."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 Email Collection Toolkit searches the full time span of your local archive.
 Search and viewing leave the preserved messages unchanged. Start with a word

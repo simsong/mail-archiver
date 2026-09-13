@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Synthetic name-resolution benchmark
 
 This benchmark is inspired by a user-provided five-address pattern: one

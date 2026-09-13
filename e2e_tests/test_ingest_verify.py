@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Fresh-process ingest, verification, and native-search acceptance test."""
 
 from __future__ import annotations

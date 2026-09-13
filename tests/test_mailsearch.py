@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify CLI search syntax, indexed plans, rendering, and exact numbered retrieval."""
 
 from __future__ import annotations

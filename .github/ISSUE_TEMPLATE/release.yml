@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 name: Release
 description: Plan, validate, and publish a versioned Email Collection Toolkit release.
 title: "release: "
@@ -37,6 +39,7 @@ body:
       description: Record CI URLs, artifact names, SHA-256 checksums, and the draft release URL.
       placeholder: |
         - [ ] make check:
+        - [ ] make runtime-license-check on each binary target platform:
         - [ ] make website-check:
         - [ ] Source distribution:
         - [ ] SHA256SUMS:
@@ -53,4 +56,6 @@ body:
         - label: The GitHub Release remains a draft until its evidence is reviewed.
           required: true
         - label: No confidential archive data or credentials are included.
+          required: true
+        - label: Binary bundles include COPYRIGHT, THIRD_PARTY_NOTICES.md, and the collected runtime license texts.
           required: true

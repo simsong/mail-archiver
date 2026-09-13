@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirements: retain failure lines, exact message identity and read-only source provenance."""
 
 import hashlib

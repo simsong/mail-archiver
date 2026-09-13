@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify the summarizer validates input and leaves canonical archives untouched."""
 
 from __future__ import annotations

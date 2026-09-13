@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Write Zola release data from newline-delimited Git tag names."""
 
 from __future__ import annotations

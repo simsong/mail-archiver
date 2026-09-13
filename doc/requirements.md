@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Mail archive normalizer requirements
 
 ## Recovered offline diagnostic boundaries
@@ -1534,6 +1536,34 @@ package. A redacted or otherwise restricted release is a separate BagIt bag
 with its own payload, manifests, Mailbag identifiers, and audit mapping. PDF
 and WARC representations remain opt-in, sandboxed publication derivatives and
 must not make remote requests without explicit authorization.
+
+## Copyright and redistribution
+
+* Every project-owned, comment-safe source, script, test, configuration,
+  template, and documentation file carries `Copyright (C) 2026 Simson L.
+  Garfinkel. All Rights Reserved.` using its native comment syntax. Shebangs,
+  encoding declarations, XML declarations, and HTML doctypes remain first.
+  Missing notices are reported as warnings with a successful checker exit status;
+  they must not fail CI or release builds.
+* Canonical mail, test fixtures, datasets, generated files, binaries, lockfiles,
+  minified files, vendored trees, standard interchange formats whose semantics
+  a comment could change, and files with another copyright or license are not
+  rewritten to add the project notice. This includes upstream website artwork
+  and generated shared-workflow files; project-authored type stubs and JavaScript
+  modules remain eligible.
+* Existing contributor, copyright, and license notices are preserved. The
+  repository `COPYRIGHT` file limits the project claim to material for which
+  the named owner holds copyright; `THIRD_PARTY_NOTICES.md` identifies vendored
+  and separately licensed material.
+* A source or binary distribution includes `COPYRIGHT`,
+  `THIRD_PARTY_NOTICES.md`, and every license text required by its included
+  components. Each platform's binary build audits its exact runtime dependency
+  closure and fails for unknown licenses, GPL/AGPL runtime dependencies, or
+  development/test packages. LGPL dependencies are recorded and redistributed
+  with their required notices and license texts.
+* Copyright ownership and redistribution terms require owner or counsel review
+  before public binary release; automated checks are inventory controls, not
+  legal advice.
 
 ## Developer validation gates
 

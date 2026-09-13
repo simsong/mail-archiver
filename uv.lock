@@ -820,6 +820,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "boto3" },
+    { name = "packaging" },
     { name = "pylint" },
     { name = "pyright" },
     { name = "pytest" },
@@ -854,6 +855,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "boto3", specifier = ">=1.43.89" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pylint", specifier = ">=3.3" },
     { name = "pyright", specifier = ">=1.1.411" },
     { name = "pytest", specifier = ">=8.0" },

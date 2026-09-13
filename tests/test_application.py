@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Exercise document identity, window routing, startup, and shared ingest state."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify packaged V1 schemas, indexes, and fail-closed schema handling."""
 
 import sqlite3

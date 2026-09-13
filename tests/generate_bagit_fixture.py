@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Regenerate the deterministic three-message Mailbag fixture used by tests."""
 
 from __future__ import annotations

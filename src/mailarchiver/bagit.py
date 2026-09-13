@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Publish native Mailbag metadata, payload manifests, and durable tag fixity."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 .PHONY: auth-detect-live benchmark-name-resolution check compare-apple-mail data-quality-audit data-quality-babyl-audit data-quality-summary extract-pdf-mail fixture-bagit fixture-e2e gui gui-smoke website-build-check website-check release-tag-check
 .PHONY: install-linux install-mac install-test-browser install-tika ocr-analyze ocr-experiment ocr-inventory ocr-profile ocr-run pylint run search summary-smoke test test-bagit test-data-quality
 .PHONY: test-application test-e2e test-encoding test-gui test-headers test-mailsearch test-native-gui test-native-html-find test-pdf-mail test-plugins test-progress test-provenance test-refresh-index test-tika test-website validation-aws-start validation-aws-start-all
@@ -15,6 +17,26 @@ test-addressbook-export: ruff
 	uv run --locked ty check dev/addressbook-exporter.py tests/test_addressbook_exporter.py --error-on-warning
 	uv run --locked pyright dev/addressbook-exporter.py tests/test_addressbook_exporter.py --warnings
 	uv run --locked pytest -q tests/test_addressbook_exporter.py
+
+.PHONY: test-copyright build-sdist copyright-check runtime-license-check runtime-license-bundle
+DIST_DIR ?= $(CURDIR)/dist
+
+build-sdist: ruff copyright-check runtime-license-check
+	uv build --sdist --out-dir "$(DIST_DIR)"
+
+test-copyright:
+	uv run --locked pytest -q tests/test_copyright.py
+
+# Missing copyright notices warn without failing CI or release builds.
+copyright-check:
+	uv run python scripts/check_copyright.py
+
+runtime-license-check:
+	uv run python scripts/check_runtime_licenses.py
+
+runtime-license-bundle:
+	@test -n "$(LICENSE_OUTPUT)" || { echo 'usage: make runtime-license-bundle LICENSE_OUTPUT=/path/to/licenses'; exit 2; }
+	uv run python scripts/check_runtime_licenses.py --output "$(LICENSE_OUTPUT)"
 
 TIKA_VERSION ?= 4.0.0
 .PHONY: sync-dependencies test-reconciliation distribution-check name-matcher-observations h3-ambiguous-review
@@ -58,6 +80,8 @@ OCR_RUN_ARGS ?=
 check:
 	$(MAKE) lint
 	$(MAKE) types
+	$(MAKE) copyright-check
+	$(MAKE) runtime-license-check
 	$(MAKE) test
 	$(MAKE) test-e2e
 	$(MAKE) website-check

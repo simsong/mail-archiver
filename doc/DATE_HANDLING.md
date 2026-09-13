@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Date handling
 
 The canonical archive stores a resolved UTC date for routing, reporting, and

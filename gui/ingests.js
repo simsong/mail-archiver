@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. */
+
 /* Display the append-by-run ingest status history in an independent window. */
 "use strict";
 

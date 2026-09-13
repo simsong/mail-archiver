@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Centralize canonical Mailbag payload and integrity-tag path construction."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 - case_id: organization-short-initials
   address: am@aerostat.example.test
   pattern: short-initials

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """High-precision, non-LLM signature-block evidence extraction."""
 
 from __future__ import annotations

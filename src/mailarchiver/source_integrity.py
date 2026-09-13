@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Source-specific integrity planning independent of ingest orchestration."""
 
 from __future__ import annotations

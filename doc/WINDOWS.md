@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Windows development setup
 
 This guide prepares a clean Windows 11 system to develop and test Email

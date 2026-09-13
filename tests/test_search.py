@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify disposable FTS extraction, attachment metadata, updates, and failure isolation."""
 
 import hashlib

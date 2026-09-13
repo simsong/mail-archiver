@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify the reusable data-quality audit's read-only and format logic."""
 
 import sqlite3

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 base_url = "https://simsong.github.io/email-collection-toolkit/"
 title = "Email Collection Toolkit"
 description = "Local software for ingesting, preserving, searching, and reporting on email archives."

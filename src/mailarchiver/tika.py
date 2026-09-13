@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verified installation of the optional Apache Tika command-line layout."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 // Compile a local CLI that summarizes UTF-8 stdin with Apple's on-device model.
 import Foundation
 import FoundationModels

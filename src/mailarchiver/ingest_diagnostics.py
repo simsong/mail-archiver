@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Local import failure evidence without copying whole messages or traceback locals."""
 
 import hashlib

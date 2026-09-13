@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Capture stable identity and read-only OS metadata for source-mail volumes."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Archive owner include/exclude settings and derived detected addresses."""
 
 from __future__ import annotations

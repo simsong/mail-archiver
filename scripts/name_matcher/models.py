@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Typed evidence exchanged by the experimental name-matcher stages."""
 
 from __future__ import annotations

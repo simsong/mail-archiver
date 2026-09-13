@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Publish canonical MBOX bytes and recover or verify their direct locations."""
 
 from __future__ import annotations

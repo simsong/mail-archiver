@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify semantic reconciliation between Apple Mail EMLX and canonical MBOX."""
 
 from __future__ import annotations

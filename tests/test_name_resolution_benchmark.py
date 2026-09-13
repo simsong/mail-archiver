@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify the privacy and structural contract of the synthetic name corpus."""
 
 from scripts.benchmark_name_resolution import CORPUS, load_cases

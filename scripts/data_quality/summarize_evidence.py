@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Print compact aggregates from the generated evidence tables."""
 
 from __future__ import annotations

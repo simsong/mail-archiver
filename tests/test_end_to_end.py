@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Exercise complete ingest, recovery, reporting, and failure behavior as subprocesses."""
 
 from __future__ import annotations

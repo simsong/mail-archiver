@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirements: Finder receives exact exported files, never URL shortcut data."""
 
 import sys

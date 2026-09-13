@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Register the distributed Gmail client
 
 This is the one-time Google OAuth setup performed by an Email Collection Toolkit release

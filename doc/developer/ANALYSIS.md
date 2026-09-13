@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Historical repository audit
 
 Recovered during checkout reconciliation on 2026-09-08. Findings and validation

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Reserved source plug-ins whose provider adapters are not implemented yet."""
 
 from __future__ import annotations

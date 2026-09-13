@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Contacts and geography design
 
 Only the read-only `human-contacts` CLI and filtering policy are implemented.

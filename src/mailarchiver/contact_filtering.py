@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Classify address identities conservatively for the human-contacts view."""
 
 from __future__ import annotations

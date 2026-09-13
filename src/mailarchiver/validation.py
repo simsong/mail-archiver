@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Acquire public validation corpora and build independently verified Mailbags."""
 
 from __future__ import annotations

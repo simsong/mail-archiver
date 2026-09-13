@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirement: ClamAV health checks and message scans have hard subprocess deadlines."""
 
 from __future__ import annotations

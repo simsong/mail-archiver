@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Exercise the actual website header and stylesheet at narrow viewport widths."""
 
 from pathlib import Path

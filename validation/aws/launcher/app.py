@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """SAM launcher for one self-terminating validation EC2 worker."""
 
 from __future__ import annotations

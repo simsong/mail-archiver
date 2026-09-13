@@ -2,6 +2,8 @@
 title = "Register the distributed Gmail client"
 description = "The one-time Google OAuth setup performed by an Email Collection Toolkit release maintainer."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 This procedure supports the experimental future Gmail API adapter. Google
 Takeout is the supported end-user path today; see [Archive Gmail](../gmail-authorization/).

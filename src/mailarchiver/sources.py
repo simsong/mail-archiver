@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Discover and stream MBOX, Babyl, EMLX, EML, and Maildir messages read-only."""
 
 from __future__ import annotations

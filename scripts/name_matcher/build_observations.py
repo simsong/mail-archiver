@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Build a private, disposable identity-evidence database from a mail archive."""
 
 from __future__ import annotations

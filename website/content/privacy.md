@@ -2,6 +2,8 @@
 title = "Privacy policy"
 description = "How Email Collection Toolkit's planned Gmail and Microsoft 365 OAuth clients will access and handle account data."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 **Effective date: September 5, 2026**
 

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Render and verify the native drag-to-Applications disk-image layout.
 
 Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.

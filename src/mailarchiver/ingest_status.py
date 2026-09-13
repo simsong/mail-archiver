@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Typed, append-by-run ingest status files shared by the CLI and GUI."""
 
 from __future__ import annotations

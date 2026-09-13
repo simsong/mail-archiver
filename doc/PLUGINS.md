@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Plug-ins
 
 Email Collection Toolkit currently implements only the two ingest plug-in architectures

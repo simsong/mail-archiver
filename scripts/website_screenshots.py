@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Capture the shipped search and import interfaces with synthetic email only."""
 
 from __future__ import annotations

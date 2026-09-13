@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Discover trusted ingest plug-ins from validated directory manifests."""
 
 from __future__ import annotations

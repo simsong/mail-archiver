@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Provide typed, read-only search, MIME rendering, and safe export services."""
 
 from __future__ import annotations

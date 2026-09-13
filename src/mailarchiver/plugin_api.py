@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Versioned contracts shared by ingest plug-ins and the framework."""
 
 from __future__ import annotations

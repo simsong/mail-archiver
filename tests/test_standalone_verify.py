@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify the installed stdlib checker enforces BagIt, Mailbag, and message fixity."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 <!-- BEGIN GENERATED pr-to-ready -->
 ## pr-to-ready
 

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Objective-C dispatch used by the native quit and file-drag adapters."""
 from typing import Any, Protocol
 from collections.abc import Callable

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirements: human-contact output suppresses explainable non-human identities."""
 
 import pytest

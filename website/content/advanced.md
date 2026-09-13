@@ -2,6 +2,8 @@
 title = "Advanced"
 description = "Identity, repeatable ingest, Apple Mail cache recovery, MBOX envelope repair, failure diagnostics, comparison, and integrity details."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 Email Collection Toolkit preserves source evidence while making repeated acquisition safe.
 These details matter when the same mail appears in provider exports, backups,

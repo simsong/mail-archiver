@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Owner routing requirements: exact mailbox globs, exclusions, durable defaults and evidence."""
 
 import hashlib

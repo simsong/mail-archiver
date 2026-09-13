@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Related Work
 
 This is a working literature map, not a claim that an existing method solves the

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Regenerate the application and website PNG icons from their shared SVG."""
 
 from pathlib import Path

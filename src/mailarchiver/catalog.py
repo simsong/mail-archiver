@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Load the packaged SQLite catalog and disposable search schemas."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Optional Developer ID signing with a short-lived imported identity."""
 
 from __future__ import annotations

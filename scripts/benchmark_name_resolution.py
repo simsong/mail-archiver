@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Measure the current header-only baseline on the synthetic name corpus."""
 
 from __future__ import annotations

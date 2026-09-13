@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Run canonical mail ingest, provenance review, reports, and FTS rebuilds."""
 
 from __future__ import annotations

@@ -2,6 +2,8 @@
 title = "Website changelog"
 description = "Changes to the Email Collection Toolkit website, separate from application releases."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 ## 2026-09-10
 

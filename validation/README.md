@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Public email validation datasets
 
 This pipeline builds disposable validation Mailbags from nine anonymously

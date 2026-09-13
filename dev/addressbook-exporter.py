@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Export referenced catalog addresses as conservative ePADD 11.1.3 contacts.
 
 Run through ``make addressbook-export ARGS='--help'``. No display-name or

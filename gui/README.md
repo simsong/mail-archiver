@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Mail archive GUI prototype
 
 The compiled replacement UI will evaluate **Dioxus Desktop and Tauri**, with Python

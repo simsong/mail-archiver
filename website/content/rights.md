@@ -2,6 +2,8 @@
 title = "Rights and licensing"
 description = "Copyright, software licensing, and ownership of archived material."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 ## Email Collection Toolkit software
 

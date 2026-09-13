@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Experimental Run Log
 
 This tracked log contains aggregate reproducibility evidence only. Private

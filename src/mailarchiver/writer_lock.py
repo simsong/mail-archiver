@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Cross-process exclusive writer lease for one archive."""
 
 from __future__ import annotations

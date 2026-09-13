@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Paper Outline
 
 Working title: **Precision-First Temporal Identity Resolution in Longitudinal

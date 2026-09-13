@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Read-only address-level Contact queries over an archive catalog."""
 
 from __future__ import annotations

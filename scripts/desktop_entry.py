@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Frozen application entry point (also usable through make self-test).
 
 Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.

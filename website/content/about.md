@@ -2,6 +2,8 @@
 title = "About Email Collection Toolkit"
 description = "The project, its author, and updates to this website."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 Email Collection Toolkit is local software for preserving and searching email collections.
 Each archive uses BagIt 1.0 and Mailbag 1.0 as its native storage format, with

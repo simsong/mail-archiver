@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify conservative recovery of legacy MIME text and Unicode mojibake."""
 
 import mailbox

@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Data-quality audit tooling
 
 The scripts in `scripts/data_quality/` reproduce the read-only investigation

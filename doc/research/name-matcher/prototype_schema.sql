@@ -1,3 +1,5 @@
+-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE extraction_runs (

@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Authoritative Name Index Research
 
 This directory is the research notebook and reproducible prototype for resolving

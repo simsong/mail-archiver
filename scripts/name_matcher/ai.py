@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """The sole provider boundary for optional local or remote LLM experiments.
 
 Extraction and baseline matching never import a provider SDK. This module only

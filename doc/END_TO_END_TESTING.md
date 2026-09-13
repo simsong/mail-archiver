@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # End-to-end testing
 
 The end-to-end suite answers a preservation question, not a coverage question:

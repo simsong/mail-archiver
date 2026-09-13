@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify Mailbag metadata and manifests detect payload, tag, and layout damage."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify journal recovery retains committed mail and rolls back orphaned appends."""
 
 import hashlib

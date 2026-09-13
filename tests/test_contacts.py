@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirements: Contact CLI is read-only and meaningful only for direct correspondence."""
 
 from __future__ import annotations

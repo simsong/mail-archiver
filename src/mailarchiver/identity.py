@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Public application identity and read-only discovery of existing settings."""
 
 from pathlib import Path

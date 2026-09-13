@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Export private, hash-verified examples of ambiguous h3 equivalence classes."""
 
 from __future__ import annotations

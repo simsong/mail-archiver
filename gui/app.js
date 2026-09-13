@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. */
+
 /* Drive the read-only pywebview mail browser while rejecting stale async responses. */
 "use strict";
 

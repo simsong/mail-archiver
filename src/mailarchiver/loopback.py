@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Authenticated loopback-only delivery of packaged GUI assets."""
 
 from __future__ import annotations

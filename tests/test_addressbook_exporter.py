@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirement: ePADD export preserves address boundaries without changing source data."""
 
 from __future__ import annotations

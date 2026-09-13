@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # mailarchiver
 
 `mailarchiver` turns scattered email exports into a durable archive that you
@@ -491,3 +493,11 @@ CI/CD, which retains the complete headless Chromium GUI test.
 WKWebView HTML finder highlighting and scrolling.
 Regenerate the committed safe corpus after an
 intentional fixture change with `make fixture-e2e`.
+
+## Copyright and licenses
+
+Original project material is covered by [COPYRIGHT](COPYRIGHT). Vendored and
+separately licensed components are identified in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Release builds must run
+`make runtime-license-check` on every target platform and include the complete
+license bundle produced by `make runtime-license-bundle LICENSE_OUTPUT=PATH`.

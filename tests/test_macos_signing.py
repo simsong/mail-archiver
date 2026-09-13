@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """macOS delivery: optional credentials, unambiguous artifact names, and secret safety."""
 
 import base64

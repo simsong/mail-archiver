@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify GUI services search, sanitize, preview, and export without archive writes."""
 
 from __future__ import annotations

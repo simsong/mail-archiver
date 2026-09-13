@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Extract and store identity evidence without modifying the source archive."""
 
 from __future__ import annotations

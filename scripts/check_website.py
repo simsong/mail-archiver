@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Check the source-controlled Zola site and its application icon assets."""
 
 from __future__ import annotations

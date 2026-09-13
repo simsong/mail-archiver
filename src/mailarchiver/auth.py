@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Authorize one remote mailbox without placing credentials in an archive."""
 
 from __future__ import annotations

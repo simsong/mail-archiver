@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify project-website validation and workflow integrity controls."""
 
 import subprocess

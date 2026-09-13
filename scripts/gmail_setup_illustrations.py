@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Render clearly labeled setup diagrams without third-party account screenshots."""
 
 from html import escape

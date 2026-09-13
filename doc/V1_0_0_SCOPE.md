@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # v1.0.0 alpha scope review
 
 Review date: 2026-09-07. This is release planning, not implementation or release

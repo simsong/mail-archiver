@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Exercise the production About and document bridges in a real Cocoa process.
 
 Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.

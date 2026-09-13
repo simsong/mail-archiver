@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify malformed metadata is recorded while message identity and dates stay stable."""
 
 import hashlib

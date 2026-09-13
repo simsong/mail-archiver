@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # End-to-end acceptance tests
 
 These black-box tests are intentionally written before the implementation.

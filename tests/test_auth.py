@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirements: remote authorization is provider-aware, bounded, and credential-safe."""
 
 from __future__ import annotations

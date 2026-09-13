@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Exercise the real cross-process archive writer lease."""
 
 from __future__ import annotations

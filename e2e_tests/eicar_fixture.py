@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Create an EICAR-bearing EMLX only inside a disposable test directory."""
 
 from __future__ import annotations

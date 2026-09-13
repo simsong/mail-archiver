@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # macOS application and DMG
 
 Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.

@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Email Collection Toolkit website
 
 This is a Zola site using the local `envelope-rainbow` theme. The checked-in

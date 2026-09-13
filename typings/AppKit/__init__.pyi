@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Minimal AppKit selectors used by mailarchiver; no runtime replacement."""
 from typing import Any, Self
 from collections.abc import Mapping

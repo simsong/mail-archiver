@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 from collections.abc import Callable
 from typing import ParamSpec
 

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirements: preserve source envelopes; synthesize delivery dates without changing h2."""
 
 import hashlib

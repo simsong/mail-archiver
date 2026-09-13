@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 # Email Collection Toolkit User Manual
 
 This manual describes the current application. The planned compiled desktop

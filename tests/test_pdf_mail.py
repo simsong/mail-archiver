@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Verify standalone printed-email PDF extraction against human-reviewed ground truth."""
 
 import hashlib

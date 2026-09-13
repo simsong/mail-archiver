@@ -2,6 +2,8 @@
 title = "Archive Gmail"
 description = "Import a Gmail snapshot using Google Takeout and MBOX."
 +++
+<!-- Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. -->
+
 
 ## END USER
 

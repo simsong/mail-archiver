@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Promote explicit export tokens to native file drags at the Cocoa boundary."""
 
 from importlib import import_module
