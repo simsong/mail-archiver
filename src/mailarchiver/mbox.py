@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .layout import integrity_path, mbox_directory, mbox_path
 from .message import ParsedMessage, parse_date, raw_header_values
+from .mboxrd import quote, unquote
 from .search import delete_indexed_message
 from .standalone_verify import IntegrityMessage, write_integrity_file
 
@@ -152,12 +153,17 @@ def add_message(
     earliest_year: int = 1900,
 ) -> MboxLocation:
     prior_size = path.stat().st_size if path.exists() else 0
-    if shutil.disk_usage(path.parent).free < len(raw) + 1024 * 1024:
+    if envelope is None:
+        if raw.startswith(b"From "):
+            first, separator, payload = raw.partition(b"\n")
+            framed = first + separator + quote(payload)
+        else:
+            framed = synthetic_envelope(raw, fallback_date, sender, earliest_year) + quote(raw)
+    else:
+        framed = envelope + quote(raw)
+    if shutil.disk_usage(path.parent).free < len(framed) + 1024 * 1024:
         raise DiskFullError(f"insufficient free space before writing {path}")
     try:
-        framed = envelope + raw if envelope is not None else raw
-        if envelope is None and not raw.startswith(b"From "):
-            framed = synthetic_envelope(raw, fallback_date, sender, earliest_year) + raw
         key = box.add(framed)
         box.flush()
         with path.open("rb") as persisted:
@@ -186,11 +192,12 @@ def _read_stored_record(path: Path, location: MboxLocation) -> tuple[bytes, byte
 def read_location_candidates(path: Path, location: MboxLocation) -> Iterator[bytes]:
     """Yield stored and alternate original-byte interpretations of one MBOX record.
 
-    Try both payload-only and envelope-plus-payload input, each possible mboxrd
-    ``>From`` interpretation, and one writer-added terminal LF or CRLF. Callers
+    Try reversible mboxrd, then legacy mboxo interpretations, with or without
+    an adopted envelope and one writer-added terminal LF or CRLF. Callers
     hash each candidate and accept only the one matching the original SHA-256.
     """
     envelope, stored = _read_stored_record(path, location)
+    decoded = unquote(stored)
     lines = stored.splitlines(keepends=True)
     ambiguous = [index for index, line in enumerate(lines) if line.startswith(b">From ")]
     fully_unquoted = (1 << len(ambiguous)) - 1
@@ -199,12 +206,12 @@ def read_location_candidates(path: Path, location: MboxLocation) -> Iterator[byt
         masks.extend(range(1, fully_unquoted))
     seen: set[bytes] = set()
     for prefix in (b"", envelope):
-        for mask in masks:
+        for mask in [None, *masks]:
             candidate = list(lines)
             for bit, index in enumerate(ambiguous):
-                if mask & (1 << bit):
+                if mask is not None and mask & (1 << bit):
                     candidate[index] = candidate[index][1:]
-            raw = prefix + b"".join(candidate)
+            raw = prefix + (decoded if mask is None else b"".join(candidate))
             variants = [raw]
             if raw.endswith(b"\n"):
                 variants.append(raw[:-1])

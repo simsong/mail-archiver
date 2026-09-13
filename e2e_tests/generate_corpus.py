@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from mailarchiver.mboxrd import quote
 
 RICH_MESSAGE = (
     b"Message-ID: <rich-e2e@example>\n"
@@ -52,7 +53,7 @@ def basic_message(number: int) -> bytes:
 def mbox_bytes(messages: list[bytes]) -> bytes:
     chunks = []
     for message in messages:
-        chunks.append(b"From fixture@example.net Mon Jan  1 00:00:00 2024\n" + message.rstrip(b"\n") + b"\n\n")
+        chunks.append(b"From fixture@example.net Mon Jan  1 00:00:00 2024\n" + quote(message.rstrip(b"\n")) + b"\n\n")
     return b"".join(chunks).rstrip(b"\n") + b"\n"
 
 

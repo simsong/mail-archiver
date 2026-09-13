@@ -88,6 +88,16 @@ def test_message_without_terminal_newline_retains_original_identity(tmp_path: Pa
     assert verified.returncode == 0, verified.stderr
 
 
+def test_installed_verifier_recovers_mboxrd_quote_depth(tmp_path: Path) -> None:
+    """Requirement: standalone verification recovers reversible quoting beyond the legacy ambiguity cap."""
+    raw = b"Message-ID: <verify@example>\nSubject: quoting\n\n" + b"".join(
+        b">" * depth + b"From preserved body\n" for depth in range(30)
+    )
+    make_integrity_archive(tmp_path, raw)
+    verified = run_verifier(install_archive_verifier(tmp_path), tmp_path)
+    assert verified.returncode == 0, verified.stderr
+
+
 def test_folded_message_id_does_not_put_bare_lf_in_mailbag_csv(tmp_path: Path) -> None:
     """Requirement: Mailbag CSV uses CRLF records and single-line metadata fields."""
     raw = (

@@ -4,14 +4,16 @@ Plan: 2026-09-10. Trial **Dioxus Desktop and Tauri** before choosing the
 compiled desktop framework. The trial scope below is proposed; neither trial
 has been implemented or evaluated. Ingest, MIME processing, search, SQLite,
 scanner orchestration, archive locking, and canonical MBOX/SHA-256 preservation
-remain in Python. Rust work is limited to the desktop/UI layer.
+remain in Python. Separately, [MCT Importer API 1.0](MCT_IMPORTER_API.md) uses
+Rust for importer test programs and the planned PST extraction helper.
 
 ## Candidates and current status
 
 The current application is Python/pywebview with HTML/CSS/JavaScript and
 macOS-specific integration. `make gui` and `make dmg` still run/build that
-implementation. This decision adds no Rust application, Cargo workspace,
-Dioxus build target, Python worker protocol, or Windows installer. Existing
+implementation. The desktop trial adds no Rust frontend, Dioxus build target,
+Python worker protocol or Windows installer. The separate Cargo workspace
+currently builds the MCT importer generator and validator. Existing
 pywebview documentation describes the baseline, not the future compiled UI.
 Retain the working macOS application during migration.
 

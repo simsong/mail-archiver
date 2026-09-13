@@ -1,4 +1,74 @@
-# Reading double-processed MBOX records
+# MBOXRD storage and MBOX input
+
+## Storage dialect
+
+Use **mboxrd** for new canonical and derived MBOX records. The
+[Library of Congress MBOXRD format description](https://www.loc.gov/preservation/digital/formats/fdd/fdd000385.shtml)
+documents reversible From-line quoting: prepend one `>` to every payload line
+matching `^>*From `, including malformed header lines. Decode by removing
+exactly one `>` from `^>+From `. The separate `From ` record separator is not
+quoted. Thus `From `, `>From ` and `>>From ` become `>From `, `>>From ` and
+`>>>From `; their original distinctions survive. LF/CRLF, MIME encodings and
+all other payload bytes are retained. A framing LF added to an unterminated
+message is distinguished using its original h2, not discarded unconditionally.
+
+[Python's mailbox documentation](https://docs.python.org/3/library/mailbox.html#mbox)
+explicitly identifies `mailbox.mbox` as **mboxo**, not mboxrd. Its escaping of
+bare From lines alone is ambiguous when a source already contains `>From `.
+Mail Archiver now prequotes payload bytes with `mboxrd.quote()` before passing
+the envelope and bytes to the standard writer. No bare payload `From ` remains
+for Python to quote a second time. Never pass parsed/reserialized messages to
+the canonical writer, or apply quoting twice.
+
+Existing archives are not converted. Their records can use the older mboxo
+encoding despite old `bag-info.txt` declarations saying mboxrd. A continued
+archive can therefore contain both encodings. Updated bag metadata discloses
+this possibility. Retrieval first tries exactly one mboxrd unquote, then the
+old bounded mboxo alternatives; it returns only bytes matching the recorded h2.
+The standalone verifier implements this independently. Mboxrd recovery has no
+quote-depth/ambiguous-line cap; the old mboxo combinatorial fallback remains
+bounded to 12 ambiguous lines. Hashes cannot repair arbitrary pre-existing
+corruption or reconstruct unknown original quoting without an expected digest.
+
+## Input dialect declaration
+
+The local source parser accepts `.mboxrd` as an explicit dialect declaration
+after content-based MBOX recognition. It removes one quoting level before
+computing message hashes and bypasses historical double-framing guesses.
+Validation-corpus MBOX-to-EML preparation follows the same declaration.
+For `.mbox` or other content-recognized inputs, the dialect is unknown: retain
+physical payload quoting except for the specific legacy transformations below.
+An ordinary `>From ` line does not identify a dialect. Do not simply rename
+an unknown or old mixed archive `.mboxrd`; that asserts information we do not
+have. Canonical archive reads use recorded offsets and h2 verification, not
+the unknown-source parser. A generic reimport of a canonical `.mbox` is not
+equivalent to that verified read.
+
+The planned [executable importer protocol](PST_DUAL_READER.md) declares stdout
+to be mboxrd. Its receiver must decode once before h2, and canonical publication
+then encodes once. That receiver and PST importers are not implemented yet.
+
+## Code audit (2026-09-12)
+
+| Path | Storage/read contract |
+| --- | --- |
+| `src/mailarchiver/mbox.py` | Canonical publication prequotes; search, GUI, refresh, checkpoint and export readers use h2-verified recovery |
+| `src/mailarchiver/standalone_verify.py` | Independent mboxrd plus legacy recovery; physical `get_file()` bytes avoid `get_bytes()` newline translation |
+| `src/mailarchiver/sources.py` | Declared mboxrd decode; unknown dialect preservation; separate explicit legacy wrapper normalization |
+| `src/mailarchiver/validation.py` | Declared mboxrd-to-EML decode without MIME serialization |
+| `src/mailarchiver/pdf_mail.py` | Derived PDF transcription output prequotes generated RFC bytes |
+| `scripts/data_quality/analyze_archive.py` | Derived sample output prequotes h2-verified message bytes |
+| `tests/generate_bagit_fixture.py`, `e2e_tests/generate_corpus.py` | Generated MBOX payloads use the same quoting rule |
+| Historical input fixtures and count-only `mailbox.mbox` uses | Deliberately retained dialect examples; counts do not decode payloads |
+
+`make test-mboxrd` exercises quote depths beyond the legacy cap, mixed old/new
+records, LF/CRLF, final-newline variants, malformed bytes, declared sources,
+derived exports, and the installed standalone verifier. Native Windows ingest
+remains unqualified: Python's platform newline conversion, locking and directory
+fsync require the Windows work described in `WINDOWS.md`; these macOS tests do
+not establish byte preservation on Windows.
+
+## Reading double-processed legacy MBOX records
 
 When the first payload
 line is exactly `>From ` followed by a sender and a ctime-style timestamp,
@@ -25,7 +95,8 @@ Subject: Example
 >From an intentional quotation
 ```
 
-The normalized archive contains:
+The normalized RFC message has the following framing and contents before
+mboxrd storage quoting (its literal body `>From ` is stored as `>>From `):
 
 ```text
 From sender@example.test Thu Apr 15 00:20:49 2004

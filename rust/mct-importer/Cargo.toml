@@ -1,0 +1,20 @@
+[package]
+name = "mct-importer"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22.1"
+chrono = { version = "0.4.42", default-features = false, features = ["std"] }
+mailparse = "0.17.0"
+quoted_printable = "0.5.1"
+uriparse = "0.6.4"
+
+[[bin]]
+name = "mdti-validator"
+path = "src/bin/mdti-validator.rs"
+
+[[bin]]
+name = "mcti-generator"
+path = "src/bin/mcti-generator.rs"

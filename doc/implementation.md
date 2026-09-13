@@ -49,8 +49,9 @@ library plus small, well-supported dependencies.  The observed local corpus
 
 Use the standard-library `mailbox.mbox` reader and writer.  Pass raw `bytes`,
 not parsed `Message` objects, to `mbox.add()` so that MIME serialization is
-never rewritten; `mailbox.mbox` handles mboxrd quoting, locking, and rewrite
-recovery.  Capture the pre-append and post-flush file offsets for the future
+never rewritten. `mboxrd.quote()` supplies reversible quoting before
+`mailbox.mbox` handles locking and container writes; Python alone writes mboxo.
+Capture the pre-append and post-flush file offsets for the future
 reader.  Use the standard `email` package only for header/MIME parsing while
 retaining original RFC 5322 bytes for identity hashing and output.
 
@@ -335,17 +336,38 @@ messages are private research evidence and must not be committed or
 distributed. The checked-in exporter and synthetic test are reproducibility
 infrastructure; the private corpus is not part of the software distribution.
 
-The [on-disk format inventory](ON_DISK_MAIL_FORMATS.md) is the authoritative
-PST/OST research and selection record. The selected first backend is libpff
-through pypff, wrapped by the typed source-adapter boundary. Libratom remains a
-useful higher-level comparison/entity-extraction layer, but its formatter must
-not define canonical MIME because it reconstructs a selected body rather than
-preserving a source RFC 5322 byte stream. The adapter must consume
-source-native components, account for every item, construct any necessary MIME
-with explicit reconstruction provenance, and remain replaceable by another
-backend. For extreme setup simplicity, supported releases need tested binary
-libpff bindings or a bundled runtime; requiring users to compile C tooling is
-not an acceptable default installation experience.
+The [on-disk format inventory](ON_DISK_MAIL_FORMATS.md) records PST/OST research;
+the [executable importer specification](PST_DUAL_READER.md) defines the planned
+filename-to-stdout-mboxrd interface. A Rust PST adapter is the first candidate;
+another implementation can run as a second pass. Neither the runner nor a PST
+adapter is implemented. The importer constructs RFC/MIME output when required;
+Python decodes mboxrd, hashes all resulting bytes including provenance headers,
+scans and publishes through the existing archive engine. H3 already includes
+the encoded body; its top-level header selection excludes importer annotations.
+Cross-importer duplicate suppression requires a separate explicit policy and
+must not silently discard differences in bodies or attachments.
+
+Packages will bundle selected OS/architecture-specific executables and native
+dependencies. This avoids a mandatory JVM when only the Rust adapter ships.
+The current macOS builder includes no PST importer. Windows installer and
+Linux Snap builders remain unimplemented, as do full native ingest prerequisites.
+
+The Cargo workspace now contains `rust/mct-importer`: the Rust library,
+`mdti-validator` and `mcti-generator` implement/test
+[MCT Importer API 1.0](MCT_IMPORTER_API.md). `make rust-programs` or each named
+binary target produces release executables under `target/release`; Windows adds
+`.exe`. `make rust-check` runs rustfmt, Clippy with warnings fatal, and Rust
+tests including real process pipelines. `make check` includes this stage after
+Python type checks and before pytest. Cargo.lock pins dependencies. The validator
+uses bounded byte reads, one mboxrd decode, mailparse header/address parsing,
+Chrono RFC-date validation, uriparse absolute URI validation, strict transfer
+decoding and explicit multipart closure/depth checks. It discards input and
+counts valid complete records at EOF, reporting the first error per rejected
+record. It is not a full RFC grammar oracle or an archive ingest command.
+The generator produces a deterministic 7bit text MIME part with a counter and
+From-like lines. No h4 is introduced; comparison uses h3 and exact fixity h2.
+Rust is required to build the planned PST importer; released packages will
+bundle its native executable without requiring users to install Rust.
 
 ## Current package shape
 
@@ -1299,7 +1321,8 @@ instructions and verification limits into the installed archive copy.
 
 `write_bag_checkpoint()` streams catalog locations in MBOX byte order through
 `write_integrity_files()` and
-uses each catalogued raw SHA-256 to resolve mboxrd `>From ` ambiguity. It then
+uses each catalogued raw SHA-256 to verify mboxrd decoding and resolve legacy
+mboxo `>From ` ambiguity. It then
 atomically writes deterministic JSON control records followed by the TSV table.
 The initial declarations are `h1` (complete MBOX, SHA-256), `h2` (recovered
 RFC 5322 bytes, SHA-256), and `h3` (semantic-message version 1, SHA-256).
@@ -1512,8 +1535,10 @@ command is currently implemented.
 ## MBOX mechanics and sorting
 
 Input detection must validate a stream rather than trust filename extensions.
-The MBOX reader recognizes separator lines, handles mboxrd `>From ` escaping,
-and reports malformed boundaries without silently merging messages. It also
+The MBOX reader recognizes separator lines and decodes declared `.mboxrd`
+sources once. Unknown-dialect sources retain stored quoting except for explicit
+legacy framing rules; unescaped body delimiters remain structurally ambiguous.
+Physical `get_file()` reads avoid `get_bytes()` newline translation. It also
 accepts a first separator within the first 16 lines when the separator has a
 classic ctime timestamp and an RFC header block follows. This recovers short
 terminal-capture preambles without claiming later `From ` text in documents.
@@ -1535,9 +1560,11 @@ zero-byte-message case. The implementation hashes the complete stored candidate
 first, then tries removing one terminal LF and one terminal CRLF in that order;
 it fails closed if no candidate has the expected hash. The MBOX-level hash still
 covers every stored byte.
-The standard-library writer's `>From ` representation is ambiguous when the
-source already contained a literal `>From ` line. The reader enumerates a
-bounded set of quote interpretations and selects only the candidate matching
+The previous standard-library mboxo writer's `>From ` representation is ambiguous
+when the source already contained a literal `>From ` line. New writes prequote
+all `^>*From ` payload lines with one `>` and are reversible. Recovery tries
+one mboxrd decoding first, then a bounded set of legacy interpretations, selecting
+only the candidate matching
 the authoritative raw-message SHA-256. Candidates are yielded once and not
 retained as a second in-memory copy of the message set; unresolved
 high-ambiguity input fails closed. A second ambiguity occurs when source bytes

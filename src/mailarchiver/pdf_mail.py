@@ -19,6 +19,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from .plugin_api import FrozenModel
+from .mboxrd import quote
 
 PDF_MAGIC = b"%PDF-"
 PDF_TEXT_POLICY = "native-pdf-text-v1"
@@ -302,7 +303,7 @@ def write_pdf_mbox(extraction: PdfMailExtraction, output: Path) -> None:
     try:
         box.lock()
         for record in extraction.messages:
-            raw = b"From pdf-scan@localhost Thu Jan  1 00:00:00 1970\n" + _message_bytes(extraction, record)
+            raw = b"From pdf-scan@localhost Thu Jan  1 00:00:00 1970\n" + quote(_message_bytes(extraction, record))
             box.add(raw)
         box.flush()
         box.unlock()

@@ -14,6 +14,7 @@ from pathlib import Path
 from mailarchiver.bagit import write_bag_checkpoint
 from mailarchiver.catalog import address_pk, create_catalog
 from mailarchiver.layout import mbox_directory
+from mailarchiver.mboxrd import quote, unquote
 
 MESSAGES = (
     (
@@ -54,7 +55,7 @@ def generate(output: Path) -> None:
     with path.open("wb") as destination:
         for ordinal, (_, raw) in enumerate(MESSAGES, 1):
             destination.write(f"From fixture{ordinal}@example.test Mon Jan  1 00:00:0{ordinal} 2024\n".encode())
-            destination.write(raw)
+            destination.write(quote(raw))
 
     catalog = create_catalog(output / "archive.sqlite3")
     try:
@@ -68,7 +69,8 @@ def generate(output: Path) -> None:
                 (path.name,),
             ).lastrowid
             for key, (message_id, expected_raw) in zip(keys, MESSAGES, strict=True):
-                raw = box.get_bytes(key, from_=False)
+                with box.get_file(key, from_=False) as record:
+                    raw = unquote(record.read())
                 if raw != expected_raw:
                     raise ValueError(f"fixture MBOX changed {message_id}")
                 sender_pk = address_pk(catalog, f"fixture-{message_id}")

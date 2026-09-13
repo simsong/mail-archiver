@@ -10,6 +10,7 @@ __pycache__/
 htmlcov/
 build/
 dist/
+/target/
 .tmp
 data/
 validation/samconfig.toml

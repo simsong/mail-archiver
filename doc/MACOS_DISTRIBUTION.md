@@ -26,6 +26,13 @@ need no Python, `uv`, Homebrew, or source checkout for the supported local-mail
 GUI. ClamAV is optional. Experimental PDF extraction/OCR, Tika/Java and the
 Apple Intelligence command are not included in this desktop workflow.
 
+The [planned ingest executables](PST_DUAL_READER.md#executables-and-installers)
+add selected native helpers, starting with a Rust PST adapter candidate. These
+are not included today. Delivery requires nested signing, dependency audits,
+notarization/stapling and installed-fixture tests on each supported architecture.
+A JVM would be needed only if a Java importer is later bundled; Tika remains
+outside the supported desktop runtime.
+
 Schema management requires no Java runtime or external migration tool. SQL files
 use Flyway naming conventions only (`V<version>__<description>.sql`); Flyway is
 not a dependency and is not bundled. Application-managed SQLite catalog upgrades

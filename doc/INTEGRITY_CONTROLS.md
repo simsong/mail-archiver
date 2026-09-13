@@ -2,10 +2,10 @@
 
 ## Scope
 
-This document defines integrity controls for the canonical message archive. It
-does not define how an input source proves that a local file, Gmail account,
-IMAP mailbox, O365 account, or stream is unchanged or safely resumable. Those
-source-specific controls belong to the source plug-in contract described in
+This document inventories hash inputs, integrity controls and added headers.
+It defines canonical message/archive fixity and summarizes other digest uses.
+The detailed source-specific unchanged/resume protocol belongs to the source
+plug-in contract described in
 [PLUGINS.md](PLUGINS.md).
 
 The per-message raw SHA-256 is the bridge between the layers: it is recorded
@@ -49,14 +49,17 @@ classification, indexing, and reporting never change those bytes.
 
 ### MBOX, including Google Takeout and envelope-prefixed Maildir files
 
-* **Extraction:** recognize the `From ` record framing by content and use
-  `mailbox.mbox.get_bytes(..., from_=False)`. The source record separator is
+* **Extraction:** recognize the `From ` record framing by content and read
+  physical bytes with `mailbox.mbox.get_file()`. The source record separator is
   container framing and is not normally part of `MailObject.raw`. Normally retain its
   complete physical bytes separately in `MailObject.mbox_envelope` and reuse it
   during publication; do not replace its date with import time. The bytes
-  returned by the standard-library MBOX reader, including its stored `>From `
+  returned from an unknown-dialect source, including its stored `>From `
   representation, become the message bytes except for the explicit framing
-  transformations below. Apply them before computing `h2`.
+  transformations below. A `.mboxrd` filename declares the dialect: remove
+  exactly one `>` from every `^>+From ` payload line before h2, bypassing legacy
+  framing normalization. See [MBOX_READING.md](MBOX_READING.md) and the
+  [Library of Congress description](https://www.loc.gov/preservation/digital/formats/fdd/fdd000385.shtml).
 * **Immediate double framing (version 1):** if the first extracted payload
   line is one qualifying `>From ` envelope, convert the displaced envelope to
   a literal `X-From:` field. The outer line must be one complete LF/CRLF-ended
@@ -88,9 +91,10 @@ classification, indexing, and reporting never change those bytes.
   that wrapper and one mboxrd quoting level from the nested envelope and
   matching nested body lines. The nested RFC bytes become `MailObject.raw`;
   retain the nested envelope separately and the outer source offset as provenance.
-* **Problems and adopted solutions:** mboxrd cannot distinguish storage-added
-  quoting from an original literal `>From ` line, so recovery enumerates the
-  bounded interpretations and uses `h2` to select one. Unescaped body lines
+* **Problems and adopted solutions:** legacy mboxo cannot distinguish storage-added
+  quoting from an original literal `>From ` line. Mboxrd can: all existing quote
+  depths gain one `>`. Canonical recovery tries that reversible decode first,
+  then bounded legacy interpretations, accepting only a matching `h2`. Unescaped body lines
   that resemble record separators can make a legacy dialect structurally
   ambiguous. The standard reader still treats physical `From ` lines as
   boundaries; not every unsupported legacy dialect can be detected. These
@@ -202,9 +206,10 @@ whether another canonical copy is written.
 For every retained message, publication supplies a preserved selected `From `
 separator, or synthesizes one only when none exists using the latest valid
 header timestamp and the documented missing-date fallback (see requirements).
-It passes the framed bytes to `mailbox.mbox.add()` without changing
-`MailObject.raw` or its `h2` identity. The standard writer quotes payload lines
-beginning `From ` and supplies a final LF when the source lacks one. If the
+It first quotes every payload line matching `^>*From ` with one added `>`,
+then passes the framed bytes to `mailbox.mbox.add()` without changing
+`MailObject.raw` or its `h2` identity. Python alone implements mboxo; our
+prequoting makes new records mboxrd. The writer supplies a final LF when needed. If the
 source bytes themselves begin with `From ` and no separate envelope exists,
 that first source line remains the separator. The catalogued location covers
 the complete stored record.
@@ -213,8 +218,8 @@ Recovery reverses the storage representation by streaming candidates in this
 order:
 
 1. interpret the record as payload-only, then as stored separator plus payload;
-2. within each interpretation, try the fully unquoted, fully stored, and then
-   bounded partial `>From ` combinations; and
+2. within each interpretation, try one reversible mboxrd decode, then legacy
+   mboxo fully unquoted, fully stored and bounded partial `>From ` combinations; and
 3. for each combination, try the complete bytes, one terminal LF removed, and
    one terminal CRLF removed when applicable.
 
@@ -372,8 +377,8 @@ External-Identifier: STABLE_IDENTIFIER
 Mailbag-Agent: mailarchiver
 Mailbag-Agent-Version: VERSION
 Payload-Oxum: BYTE_COUNT.FILE_COUNT
-MBOX-Format-Details: mboxrd
-MBOX-Agent: Python mailbox
+MBOX-Format-Details: mboxrd; pre-mboxrd mailarchiver records may use mboxo
+MBOX-Agent: mailarchiver mboxrd quoting with Python mailbox
 Mailarchiver-Message-Newline-Policy: preserve-source; add-final-LF-for-MBOX-framing
 ```
 
@@ -482,17 +487,18 @@ themselves began with `From ` and the writer adopted that line as the record
 separator, that source line remains part of `h2`. No header, body, line-ending,
 MIME, whitespace, or character-set canonicalization is applied.
 
-Python's MBOX writer cannot distinguish storage quoting from an original
-literal `>From ` body line. It also adds a final line break when the source
-message lacks one. The validator enumerates the bounded possible quoting and
-terminal-line-break interpretations and accepts only a candidate matching
+The old mboxo writer could not distinguish storage quoting from an original
+literal `>From ` line. New mboxrd writes quote all existing levels and decode
+reversibly. Both can add a final line break when the source lacks one. The
+validator tries mboxrd decoding, then bounded legacy quoting and
+terminal-line-break interpretations, and accepts only a candidate matching
 `h2`. This includes mapping a one-line-break payload back to a zero-byte message
 only when its digest is SHA-256 of empty bytes.
 
 Verification follows this explicit order:
 
 1. try payload-only, then stored separator plus payload;
-2. for each, enumerate the bounded mboxrd quoting interpretations;
+2. for each, try one mboxrd unquote, then bounded legacy mboxo interpretations;
 3. hash each complete candidate, then one terminal LF removed and one terminal
    CRLF removed when applicable; and
 4. fail verification if none matches `h2`.
@@ -528,6 +534,83 @@ canonicalization normalizes surplus terminal empty lines.
 The declaration may add another digest algorithm through a new `hN` code and
 `same_input_as`, but existing codes and meanings never change. Format version,
 hash-standard version, and digest algorithm are independent.
+
+## Headers added by Mail Archiver and ingest executables
+
+**H2 covers every header and the complete body of the accepted RFC message.**
+There is no exception for `X-` fields, provenance, or fields we generated.
+Changing an importer version/URI must change h2. H1 covers their encoded MBOX
+representation too. Source-container SHA-256 separately protects the original
+PST/file before extraction or annotation. None of these hashes proves that an
+importer's claims are truthful or that extraction is complete.
+
+| Header | Producer and purpose | Status |
+| --- | --- | --- |
+| `X-Imported-URI` | Ingest executable: source URI, with an item selector where available; file URI for a PST, HTTPS for a remote source | Generator/validator implemented; PST planned |
+| `X-Importer-Name` | Ingest executable: stable importer identity | Generator/validator implemented; PST planned |
+| `X-Importer-Version` | Ingest executable: exact adapter version, with upstream parser version recorded in the run provenance | Generator/validator implemented; PST planned |
+| `X-From` | Legacy double-framing normalizer: displaced envelope sender/timestamp; exact old framing plus pre-normalization SHA-256 retained separately | Implemented |
+| `X-Mailarchiver-Derived`, `X-Mailarchiver-Transcription-Status` | PDF exporter: reconstruction kind and machine-unreviewed status | Implemented, derived output |
+| `X-Mailarchiver-Source-PDF`, `X-Mailarchiver-Source-PDF-SHA256` | PDF exporter: source name and complete original file SHA-256 | Implemented, derived output |
+| `X-Mailarchiver-Source-Page-Start`, `X-Mailarchiver-Source-Page-End` | PDF exporter: inclusive source page range | Implemented, derived output |
+| `X-Mailarchiver-Extraction-Policy`, `X-Mailarchiver-Segmentation-Policy`, `X-Mailarchiver-Handwritten-Annotations` | PDF exporter: interpretation policies and observed annotations | Implemented, derived output |
+| `X-Mailarchiver-Observed-Message-ID` | PDF exporter: transcribed Message-ID, distinguished from the synthetic `Message-ID` built from PDF SHA-256 and start page | Implemented, derived output |
+
+These X fields are outside h3's fixed top-level allowlist; their values still
+participate in h2. H3 does not generically remove headers inside the MIME body.
+The synthetic PDF `Message-ID` is in both h2 and h3. Existing source X headers
+are retained; they are not automatically evidence created by this application.
+MCT Importer API 1.0 distinguishes its first three added header lines from
+same-named source fields later in the message. The future host must retain their
+bytes and record independently observed executable/version/source hashes.
+
+Current deduplication uses normalized Message-ID plus h2. Different importer
+annotations therefore produce distinct stored variants. H3 already includes
+**both selected headers and the complete encoded MIME body**, not just headers.
+It supports comparison across top-level annotations but is not an automatic
+drop rule. MIME boundary, charset, transfer-encoding or attachment differences
+can change h3. Even equal h3 intentionally ignores some headers and trailing
+empty body lines. Preserve provenance and variants until a separately versioned
+cross-importer policy is implemented and validated. Do not redefine h2 or h3.
+MCT Importer API 1.0 uses these existing controls; no h4 or additional
+message-content fingerprint is required. The Rust generator and discarding
+validator test the stream contract and do not hash or publish an archive.
+
+## Other hashes and their control boundaries
+
+All full digests below use SHA-256 unless otherwise stated. Record the exact
+input bytes and algorithm alongside evidence; an identifier alone is not
+integrity verification. H1/h2/h3 definitions above remain authoritative.
+
+| Digest/use | Exact input and purpose | Limit |
+| --- | --- | --- |
+| BagIt payload/tag manifests | Complete physical bytes of each listed payload/tag file; checkpoint fixity, including verifier source and integrity declarations | Does not authenticate manifests or make operational SQLite canonical |
+| Archive-control evidence | Complete `bagit.txt`, installed verifier source and payload/tag manifest files; control IDs `mailarchiver.archive.{bagit-declaration,standalone-verifier,payload-manifest,tag-manifest}.v1` | Records which declarations/verifier were used; does not make them independently trustworthy |
+| `local-file-sha256-v1` | Complete physical source file, including envelope/container bytes and EMLX metadata | Detects changed source; not extraction completeness |
+| `local-file-prefix-sha256-v1` | First previously checkpointed byte count of the current file, compared with the old full-file hash | Allows append resume only with the other source/offset checks; a file can still change during a run |
+| `source_raw_sha256` | Exact extracted payload before explicit MBOX framing normalization | Allows verification of reconstructed pre-normalization bytes; distinct from post-normalization h2 |
+| PDF/attachment evidence | Full PDF bytes (`pdf_sha256`); transfer-decoded attachment bytes for OCR extraction hashes | Derived attachment fixity does not replace h2's encoded MIME coverage |
+| Acquisition/build checks | Full downloaded validation artifact and result ZIP, source-manifest file; Tika distribution ZIP uses SHA-512 compared with its downloaded checksum | A checksum from the same origin is not an independent authenticity root |
+| Cargo registry package checksums | Registry package archive checksums pinned in Cargo.lock and checked by Cargo during dependency acquisition | Build-input fixity, not message h4 or independent publisher authentication |
+| Derived report/export digests | Full exported files; ePADD exporter hashes its input catalog and output; review tools hash exact recovered RFC bytes with h2 or canonicalized bytes with h3 | Reproducibility/change detection, not promotion of derivatives to canonical mail |
+| Research text/prompt digests | UTF-8 extracted block text and UTF-8 AI request prompt | Binds evidence to exact derived text; cannot prove interpretation accuracy |
+| Mailbag message ID | First 32 hex characters of SHA-256 over normalized identity (empty when absent), NUL, and ASCII h2, prefixed `m-` | Stable surrogate identifier, not a replacement for full fixity digests |
+| Source volume identity | UTF-8 serialized source-volume identity JSON | Stable namespace; does not hash the volume's files |
+| Local-file work ID | UTF-8 volume identity JSON, NUL, then UTF-8 source-relative path; `local-file:` plus full digest | Work identity, not source-content verification |
+| Operational cache/revision identifiers | Rules-model JSON (full digest), application/archive identity and plugin-directory text (20 hex), casefolded account address and Swift helper source bytes (16 hex). Research request ID uses UTF-8 NUL-separated provider, model, prompt version, two identities and prompt digest (32 hex) | Lookup/cache/revision tokens; not content fixity controls or anonymization guarantees |
+
+The standalone declaration reader also supports explicitly declared SHA-512
+over the same versioned byte inputs; generated h1/h2/h3 remain SHA-256. Git
+object IDs from public-inbox acquisition are external repository identifiers,
+not substitutes for acquired-file or archive-message fixity.
+
+The relevant implementations are `standalone_verify.py`, `bagit.py`,
+`source_integrity.py`, `archive_integrity.py`, `mbox_framing.py`, `validation.py`,
+`pdf_mail.py`, `tika.py`, `sources.py`, `application.py`, `plugin_loader.py`,
+`auth.py`, `document_options.py`, `aisummarize.py`, the data-quality/name-matcher
+and OCR scripts, and `dev/addressbook-exporter.py`. Message/search/diagnostic
+code reuses h2; Apple Mail comparison and h3 review reuse the h3 profile.
+New hash uses must extend this inventory without changing existing version IDs.
 
 ## Checkpoint publication
 

@@ -1,7 +1,9 @@
 # On-disk mail formats and import backends
 
-**Status:** design decision and research snapshot, 2026-08-31. No PST/OST
-import is implemented by this repository yet.
+**Status:** inventory updated 2026-09-12; original research snapshot 2026-08-31.
+No PST/OST import is implemented by this repository yet. The
+[executable importer specification](PST_DUAL_READER.md) supersedes the original
+single-backend selection and development sequence below.
 
 This is the single inventory for physical mail formats: what the project can
 read now, what it plans to read, where test material can come from, and which
@@ -15,13 +17,14 @@ rules in [requirements.md](requirements.md), the plug-in contracts in
 1. Make PST/OST the next import milestone. It is the most valuable near-term
    capability for the GUI and it supplies the data foundation for a useful,
    evidence-grounded AI finding-aid.
-2. Use **libpff through its Python bindings, pypff**, behind the existing typed
-   source/file-parser boundary. Do not make libratom's reconstructed message
-   formatter the canonical import path.
-3. Use `libpst` for an independent PST comparison where practical. Keep
-   `java-libpst`, XstReader/XstReaderNext, and `pstfree` as additional
-   comparison or investigation tools rather than adding their runtimes to the
-   core Python installation.
+2. Implement filename-to-stdout-mboxrd ingest executables, starting with a
+   qualified adapter around Microsoft's `outlook-pst-rs`. Run other importers
+   as independent passes when wanted. Python retains scanning, integrity,
+   catalog and archive publication. See [PST_DUAL_READER.md](PST_DUAL_READER.md).
+3. Keep libpff, libpst, java-libpst and XstReader as alternative candidates;
+   choose the second implementation using corpus results and package costs.
+   Avoid counting wrappers and forks as independent parsers. No mandatory
+   Java runtime or libpff-versus-libpst selection is implied by this interface.
 4. Treat `hrbrmstr/freepst`'s three public files as private validation inputs.
    They are real mail, and the repository's fixture script deliberately does
    not commit them.
@@ -153,28 +156,31 @@ or commercial converter.
 
 | Project | Language/license | PST | OST | Role in this project |
 |---|---|---:|---:|---|
-| [`libpff`](https://github.com/libyal/libpff) + [`pypff`](https://github.com/libyal/libpff/tree/main/pypff) | C/Python; LGPL-3.0-or-later; project calls its status alpha | Yes | Yes, including 4-KiB compressed OST | **Primary backend.** Broad format coverage and direct access to folders, items, properties, attachments, and recovery states. Keep behind our typed adapter and validate every supported fixture. |
+| [`libpff`](https://github.com/libyal/libpff) + [`pypff`](https://github.com/libyal/libpff/tree/main/pypff) | C/Python; LGPL-3.0-or-later; project calls its status alpha | Yes | Yes, including 4-KiB compressed OST | Alternate executable candidate; validate each claimed format and exported body/attachment representation. |
 | [`libratom`](https://github.com/libratom/libratom) | Python; MIT | Yes | Underlying pypff can reach PFF/OFF, but high-level behavior must be verified | Useful higher-level traversal/entity tooling and comparison layer. Its formatter reconstructs messages and is not the canonical byte-preserving path. |
 | [`libpst`](https://github.com/pst-format/libpst) / `readpst` | C; GPL-2.0 | Yes | No clear OST contract in the project documentation | **Secondary PST oracle.** Independent implementation; output is primarily MBOX/EML-oriented, and GPL/runtime/licensing must be considered before bundling. |
-| [`java-libpst`](https://github.com/rjohnsondev/java-libpst) | Java; LGPL and Apache 2.0 | Yes | Yes | Strong independent comparison reader. It adds a JVM and does not write or repair stores, so do not make it the Python runtime dependency. |
+| [`java-libpst`](https://github.com/rjohnsondev/java-libpst) | Java; reconcile LGPL/Apache source notices for the exact artifact | Yes | Yes | Alternate executable candidate; bundling it requires a JVM. Reader agreement is not proof of completeness. |
+| [`outlook-pst-rs`](https://github.com/microsoft/outlook-pst-rs) | Rust; MIT | Yes, read-only API | Not qualified here | First executable adapter candidate, subject to corpus and target qualification. Microsoft's portable clean-room reference implementation; no local extraction validation yet. |
 | [`XstReader`](https://github.com/Dijji/XstReader) | C#/.NET Framework; MS-PL | Yes | Yes | Useful Windows GUI and manual inspection oracle; not a core Python library. |
 | [`XstReaderNext`](https://github.com/NeedsCoffee/XstReaderNext) | C#/.NET 10; see repository license | Yes | Yes | Maintained fork with a base parser and export CLI. Non-Windows runtime is not yet tested by its README; use as an optional comparison tool. |
 | [`pstfree`](https://github.com/sp00nznet/pstfree) | Rust; MIT | Yes | Yes | Interesting Windows reader/repair project and the clearest pointer to the public fixture set. Use for comparison and recovery research, not as the core importer. |
 | [`freepst`](https://github.com/hrbrmstr/freepst) | R/rJava; Apache-2.0 package, wrapping java-libpst | Yes | Yes | Useful fixture metadata and R convenience wrapper; not appropriate as a Python ingest dependency. |
-| [`outlook-pst-rw`](https://docs.rs/crate/outlook-pst-rw/1.2.1) | Rust; inspect crate license before redistribution | Writes PST | No | Synthetic PST fixture generator only. |
+| [`outlook-pst-rw`](https://docs.rs/outlook-pst-rw/latest/outlook_pst/index.html) | Rust; MIT per upstream; inspect exact release | Reads/writes PST | Not qualified here | Fork of Microsoft's reader with Unicode creation/append support; supplementary fixture generator, not an independent parser family. |
 | [`Ahright11/ost2pst`](https://github.com/Ahright11/ost2pst) | Python; inspect repository license/status before use | Converts | Reads OST | Experimental converter built around libpff. Useful for experiments, not as an importer because conversion can hide missing/unsupported items. |
 | [`Niv2023/ost2pst`](https://github.com/Niv2023/ost2pst) | C# | Converts | Reads OST | Conversion utility with narrower stated coverage; not a general enumerator. |
 | [`pstconv`](https://github.com/cjmach/pstconv) | Java; Apache-2.0 | Yes | Yes | Command-line conversion wrapper around java-libpst; not a source-native enumeration API. |
 
 The first two rows are related, not competing at the same abstraction level:
-libpff/pypff is the low-level source adapter; libratom is a higher-level
-consumer of that stack. The choice is therefore **libpff/pypff first, libratom
-optionally above it**, not “libratom versus libpff.”
+libpff/pypff is one low-level reader; libratom is a higher-level consumer of that
+same stack and adds no independent parser. The
+[executable specification](PST_DUAL_READER.md#other-parser-candidates) prioritizes
+the Microsoft Rust adapter candidate and leaves the alternate backend to corpus
+and packaging qualification.
 
-## Proposed adapter boundary
+## Source evidence and adapter boundary
 
-The first implementation slice should enumerate before it publishes mail. A
-PST/OST adapter should yield typed records containing:
+The host retains typed source/run evidence alongside the executable's mboxrd
+output. Relevant evidence includes:
 
 * source file SHA-256, detected PFF/OFF kind and format signature;
 * parser name/version and fixture/reader capability information;
@@ -182,12 +188,12 @@ PST/OST adapter should yield typed records containing:
   and deleted/recoverable/partial status;
 * available subject, sender, recipients, dates, body variants, attachment
   metadata, and estimated sizes;
-* reconstructed RFC 5322 bytes only after item accounting and provenance are
-  available; and
+* whether the emitted RFC 5322 bytes were preserved or reconstructed; and
 * an explicit error or incomplete record for every item the parser cannot
   enumerate or reconstruct.
 
-This maps to the existing `MailContainer`/`MailObject` plug-in contract. It
+The host maps the stream into `MailContainer`/`MailObject`; native MAPI properties
+are not a required second stdout protocol. The importer
 must remain read-only and must not ask Outlook, Exchange, or a server to repair
 or complete a cache. The canonical archive may contain reconstructed RFC 5322
 messages, but the catalog must retain the source hash, native identifiers,
@@ -221,7 +227,12 @@ source lacked that property.
 | Gmail Takeout | MBOX | Baseline supported by MBOX path | It is an MBOX source, not a separate binary parser. |
 | Live Gmail/IMAP/O365/Exchange | Remote provider/API | Planned/stubbed as documented | Remote reads require explicit authorization and provider-specific provenance; no source mutation. |
 
-## Two-week development plan
+## Original two-week development plan (superseded)
+
+The following 2026-08-31 sequence is retained as research history. Follow the
+[executable implementation sequence and acceptance](PST_DUAL_READER.md#implementation-sequence-and-acceptance)
+for new work; the original estimate does not cover independent-pass comparison
+or the Windows/macOS/Snap packaging work.
 
 ### Week 1: fixture laboratory and parser spike
 

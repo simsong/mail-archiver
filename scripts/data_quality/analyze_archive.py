@@ -24,7 +24,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from mailarchiver.layout import mbox_path
-from mailarchiver.mbox import MboxLocation, read_verified_location
+from mailarchiver.mbox import MboxLocation, read_verified_location, synthetic_envelope
+from mailarchiver.mboxrd import quote
 from mailarchiver.source_volume import METADATA_CURRENT_MOUNT_PATH
 from mailarchiver.sources import source_files, source_messages
 
@@ -250,7 +251,7 @@ def write_mbox(path: Path, messages: list[bytes]) -> None:
     try:
         box.lock()
         for raw in messages:
-            box.add(raw)
+            box.add(synthetic_envelope(raw) + quote(raw))
         box.flush()
     finally:
         try:
