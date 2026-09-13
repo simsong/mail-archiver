@@ -385,6 +385,13 @@ test-envelopes:
 	uv run pytest -q tests/test_envelopes.py tests/test_sources.py tests/test_publication.py tests/test_standalone_verify.py tests/test_ingest_diagnostics.py tests/test_mbox_framing.py \
 		tests/test_end_to_end.py::test_parser_failure_records_source_identity_and_failed_run
 
+.PHONY: test-startup test-native-setup
+test-startup:
+	uv run pytest -q tests/test_application.py e2e_tests/test_startup.py --browser chromium
+
+test-native-setup:
+	MAILARCHIVER_NATIVE_SETUP_E2E=1 uv run pytest -q e2e_tests/test_startup.py -k native
+
 .PHONY: test-file-drag
 test-file-drag:
 	uv run --locked pytest -q tests/test_file_drag.py

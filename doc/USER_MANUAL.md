@@ -394,7 +394,7 @@ make gui ARGS='--archive "/path/to/mail-archive"'
 ```
 
 If no archive was supplied, the application opens the last valid archive or
-offers **Open Existing**, **Create New**, and **Cancel**. Use **File → Open…** (Command-O) to
+shows the three-step setup described below. Use **File → Open…** (Command-O) to
 open an existing archive in a new window. **Window → New Search Window** opens
 another independently searchable window on the active archive. Recent archives
 are kept in **File → Open Recent**. A missing or invalid saved archive is
@@ -434,9 +434,35 @@ rebuild: it also remembers your last source-picker directory. Invalid YAML
 produces an error rather than silently replacing your owner rules.
 For a saved document, the window title shows the archive path and total number
 of deduplicated, searchable messages.
-Cancel dismisses the startup dialog without opening a search window. About and
-File New/Open remain available. Create New asks for a destination before opening
-its search window and offering Import; accepting the default Untitled name works.
+On first launch, all three setup steps appear together:
+
+1. **Select the root folder to ingest** with **Choose folder…**. Its files and
+   subfolders are read without changing them.
+2. **Select where your archive is stored**. Choose an existing archive or an
+   empty folder you have already created outside the source tree. The Mac setup
+   browsers disable **New Folder** to avoid changing input folders while browsing.
+3. Click **Start import**, review the owner-name and antivirus settings, and
+   follow progress in the Ingests window.
+
+The chosen paths stay visible; either folder button can be used again. Canceling
+selection keeps the previous path. Keep source and archive folders separate;
+neither may contain the other. **Cancel** (or Escape) quits the application;
+the button itself starts no import and makes no preference changes. It does not
+undo earlier changes: startup may already have removed a missing or invalid
+remembered archive from saved preferences before showing setup. If another import is running,
+the normal Stop Import and Quit confirmation protects its checkpoint.
+To show setup again, hold **Option (Alt)** while launching the Mac app until
+setup appears, or Option-click its Dock icon while it is running. From the CLI:
+
+```sh
+make gui ARGS='--new'
+```
+
+This bypasses the last archive for this launch without clearing it from recent
+archives. It also bypasses `MAIL_ARCHIVE_DIR`; do not combine `--new` with
+`--archive`. About opens from the application menu when needed.
+File New asks for a destination before opening its search window and offering
+Import; accepting the default Untitled name works.
 Command-N creates an archive and Command-W closes an eligible search window.
 
 The About window remains available for the application run. It shows the

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+* Disable New Folder in macOS setup browsers to prevent source-tree writes before
+  validation. Reserve a job-free Cancel/quit atomically against new imports;
+  a competing import receives the normal stop confirmation and checkpoint wait.
+
+* Keep native Close disabled globally throughout setup operations, including
+  Cancel and modal dialogs that fall back to an existing search window; reject
+  queued Close actions while setup is locked.
+
+* Disable native Close while setup dialogs or import startup are pending, restore
+  it on completion or error, and clear stale warnings from reused folder pickers.
+  Add native Option sampling/reopen regression coverage.
+
+* Reconcile startup setup with the current owner email editor and preserve
+  Finder file dragging, launch-argument handling, and shared import safeguards.
+
+* Add a three-step first-run setup window with repeatable source/archive folder
+  selection, Cancel to quit, and Start import opening progress. Reopen setup with `--new` or
+  Option held during macOS launch (also Option-click on the running Dock icon).
+  Preserve remembered archives, reject overlapping folders, and keep About
+  available from the application menu without showing it at startup.
 * Normalize an immediate quoted MBOX delimiter into a literal `X-From:` header.
   Promote a meaningful inner envelope when the outer sender is `XXX` or
   `???@???`; retain the displaced outer value as `X-From:`. Preserve body
