@@ -27,6 +27,7 @@ build-sdist: ruff copyright-check runtime-license-check
 test-copyright:
 	uv run --locked pytest -q tests/test_copyright.py
 
+# Missing copyright notices warn without failing CI or release builds.
 copyright-check:
 	uv run python scripts/check_copyright.py
 

@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved. */
+
 "use strict";
 
 const byId = id => document.getElementById(id);

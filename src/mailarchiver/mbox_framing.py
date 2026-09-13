@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Normalize explicitly double-processed MBOX framing, retaining source evidence."""
 
 import hashlib

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+* Report missing project copyright notices as warnings so they do not fail CI
+  or release builds; retain the copyright notice in the Makefile.
+
 * Reconcile the copyright/license draft with current validation and release
   workflows. Preserve external artwork and generated workflow bytes, cover
   current project source files, and retain the ordered lint/type/test gates.

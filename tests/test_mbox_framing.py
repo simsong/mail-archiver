@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirements: normalize only immediate double framing; retain source evidence and MIME/body bytes."""
 
 import hashlib

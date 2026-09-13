@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Exercise the real three-step setup, Cocoa panels, and import worker on disposable mail."""
 
 from collections.abc import Callable

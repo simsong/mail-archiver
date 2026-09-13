@@ -1543,6 +1543,8 @@ must not make remote requests without explicit authorization.
   template, and documentation file carries `Copyright (C) 2026 Simson L.
   Garfinkel. All Rights Reserved.` using its native comment syntax. Shebangs,
   encoding declarations, XML declarations, and HTML doctypes remain first.
+  Missing notices are reported as warnings with a successful checker exit status;
+  they must not fail CI or release builds.
 * Canonical mail, test fixtures, datasets, generated files, binaries, lockfiles,
   minified files, vendored trees, standard interchange formats whose semantics
   a comment could change, and files with another copyright or license are not

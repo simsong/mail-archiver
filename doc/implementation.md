@@ -1993,8 +1993,11 @@ canonical mail and test fixtures, binary/data files, the generated release
 index, the vendored Tabulator tree, and the separately MIT-licensed website
 theme. Upstream CC-BY-SA artwork and generated shared-workflow wrappers are
 also excluded; Python stubs and JavaScript modules receive native comments.
-`make test-copyright` exercises these ownership boundaries. New eligible files
-therefore fail CI until they receive the native comment form of the project notice.
+Missing notices produce a warning listing the affected paths and exit status 0,
+so `make check` and source builds continue. Checker execution failures still
+propagate normally. `make test-copyright` exercises the ownership boundaries and
+runs the real checker in temporary Git repositories, verifying that a dependent
+Make target runs with both missing and complete notices.
 
 `scripts/check_runtime_licenses.py` starts with the installed `mailarchiver`
 distribution and follows evaluated PEP 508 runtime requirements, rather than

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Requirement: local failure evidence is readable in the real Ingests interface."""
 
 from pathlib import Path

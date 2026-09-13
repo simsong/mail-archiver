@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
+
 """Exercise Option sampling and the real Cocoa reopen delegate with disposable state.
 
 Only the global hardware modifier source is substituted: unattended tests cannot

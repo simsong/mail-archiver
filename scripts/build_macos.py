@@ -1,7 +1,6 @@
-"""Build a self-contained app and DMG, optionally Developer ID signed, and test it mounted.
+# Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
 
-Copyright (C) 2026 Simson L. Garfinkel. All Rights Reserved.
-"""
+"""Build a self-contained app and DMG, optionally Developer ID signed, and test it mounted."""
 
 from __future__ import annotations
 
