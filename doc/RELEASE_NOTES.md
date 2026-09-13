@@ -147,6 +147,11 @@
   and perform verified post-merge checkout cleanup. Retain dirty, unmerged,
   and private evidence-bearing worktrees until their disposition is settled.
 
+* Require pr-to-ready to disclose potential conflicts with active work and obtain
+  user approval for the coordination plan before proceeding. Add explicit
+  handoff cleanup with verified publication, artifact preservation, retained
+  unmerged branch refs, and removal of retired skill-distribution entries.
+
 * Limit Ruff discovery to tracked and non-ignored new Python files, avoiding
   generated directories while supporting project-local linked worktrees.
 

@@ -2104,7 +2104,12 @@ the live virtual-table row by message ID after asynchronous preview redraws.
 tablet, and desktop widths, including reordered links, in headless Chromium.
 
 The shared pr-to-ready source generates the repository skill and Copilot
-instructions. Copilot review requests use `gh pr edit <number> --add-reviewer '@copilot'`
+instructions. Its preflight compares proposed changes with open PRs, active
+tasks, and local unpublished work, including semantic and shared-resource
+overlap. Potential conflicts require a concrete list and coordination plan plus
+explicit user approval; the ledger records the approved scope and subsequent
+checks before integration or publication. Separate worktrees do not waive this
+gate. Copilot review requests use `gh pr edit <number> --add-reviewer '@copilot'`
 as `simsong`, followed by restoration of `simsong-codex` for all other writes.
 Review-request timeline or reviewer evidence verifies the request; no browser
 control is used. Before handoff it inventories task checkouts, reconciles intended
@@ -2117,6 +2122,12 @@ checks tracked/untracked/ignored files, and
 removes only safe task-owned worktrees and represented local branches. It stops
 on completion or a reported preservation decision. Repository Claude entries
 are generated regular wrapper files, not directory symlinks.
+The explicit handoff cleanup step records each task checkout's disposition.
+This repository retains unmerged checkouts unless the user authorizes earlier
+removal. Such removal verifies publication against the matching PR, preserves
+non-rebuildable artifacts with hashes, and checks active use before non-force
+worktree removal; branch refs remain until merge verification. Retired checkout
+entries are removed from the shared skill inventory to keep synchronization valid.
 
 `make check` runs Ruff and Pylint (`make lint`), then ty and Pyright
 (`make types`), then pytest, Chromium end-to-end tests, and website validation.

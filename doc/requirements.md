@@ -1537,6 +1537,13 @@ must not make remote requests without explicit authorization.
 
 ## Developer validation gates
 
+Before pr-to-ready changes begin, inspect open PRs, active tasks, checkouts, and
+unpublished work for potential file, behavior, dependency, or shared-resource
+conflicts. List each affected task/PR, branch, path, overlap, and proposed
+coordination plan; obtain explicit user approval before conflicting work.
+Recheck before integration/publication and when scope changes; an existing
+approval covers only the disclosed conflict and plan.
+
 Copilot review requests must use `gh` with the authorized `simsong` identity,
 not browser control. That exception is review-request-only; all other Codex
 GitHub writes retain `simsong-codex`. A successful command alone does not prove
@@ -1553,6 +1560,12 @@ up its task-owned `.tmp` checkout only after the human merges the PR. Removal
 requires current-main ancestry or patch-equivalence evidence and a clean tree;
 ignored private evidence is not disposable. Dirty, unmerged, or uncertain
 checkouts must be retained and reported, not forcibly deleted.
+When the user explicitly authorizes earlier removal of clean, pushed checkouts,
+verify remote reachability of all local commits and the matching open PR head,
+preserve non-rebuildable artifacts, and confirm no active task needs the path.
+Keep unmerged branch refs until merge verification. Every handoff must report
+removed and retained task checkouts, artifact locations, and remaining blockers;
+remove retired checkout entries from the skill distribution inventory.
 
 `make check` runs Ruff and Pylint (`make lint`), then ty and Pyright
 (`make types`), then pytest, Chromium end-to-end tests, and website validation.
