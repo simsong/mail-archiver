@@ -491,3 +491,59 @@ def test_renamed_application_preserves_existing_settings(tmp_path: Path) -> None
     (current / "preferences.json").write_text("{}", encoding="utf-8")
     assert application_data_directory(tmp_path) == current
     assert preferences.exists()
+
+
+def test_forced_setup_bypasses_archives_without_touching_preferences(tmp_path: Path) -> None:
+    """Startup setup requirement: --new preserves saved paths and never opens them."""
+    archive = make_archive(tmp_path / "saved")
+    preferences = ApplicationPreferencesStore(tmp_path / "preferences.json")
+    preferences.write(ApplicationPreferences(last_archive=archive, recent_archives=[archive]))
+    before = preferences.path.read_bytes()
+    application = ApplicationController(preferences)
+    result = application.startup((tmp_path / "missing-explicit-archive",), new=True)
+    assert not result.errors
+    assert all(application.document(window.document_id).descriptor.untitled for window in result.windows)
+    assert preferences.path.read_bytes() == before
+    application.close_window(result.windows[0].window_id)
+    normal = application.startup()
+    assert application.document(normal.windows[0].document_id).path == archive
+
+
+def test_setup_rejects_overlapping_source_and_destination_without_writes(tmp_path: Path) -> None:
+    """Setup requirement: prevent recursive self-import, including directory aliases."""
+    from mailarchiver.application import SetupSelection
+
+    source = tmp_path / "source"
+    source.mkdir()
+    message = source / "message.eml"
+    message.write_bytes(b"Subject: Original\n\nUntouched\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to(source, target_is_directory=True)
+    for destination in (source, tmp_path, source / "new-archive", alias / "new-archive"):
+        with pytest.raises(ValueError, match="separate"):
+            SetupSelection(source=source, destination=destination).validate_paths()
+    with pytest.raises(ValueError, match="root folder"):
+        SetupSelection(source=message, destination=tmp_path / "archive").validate_paths()
+    SetupSelection(source=source, destination=tmp_path / "archive").validate_paths()
+    assert sorted(path.name for path in source.iterdir()) == ["message.eml"]
+    assert message.read_bytes() == b"Subject: Original\n\nUntouched\n"
+    assert not (tmp_path / "archive").exists()
+
+
+@pytest.mark.parametrize("alias_name", ["Mail source u\u0308", "MAIL SOURCE Ü"])
+def test_setup_rejects_native_unicode_and_case_aliases(tmp_path: Path, alias_name: str) -> None:
+    """Setup requirement: Cocoa Unicode/case path spellings cannot bypass source isolation."""
+    from mailarchiver.application import SetupSelection
+
+    source = tmp_path / "Mail source ü"
+    source.mkdir()
+    alias = tmp_path / alias_name
+    if not alias.exists():
+        pytest.skip("filesystem treats this spelling as a different directory")
+    assert source.samefile(alias)
+    for destination in (alias, alias / "new-archive"):
+        with pytest.raises(ValueError, match="separate"):
+            SetupSelection(source=source, destination=destination).validate_paths()
+        with pytest.raises(ValueError, match="separate"):
+            SetupSelection(source=alias, destination=source).validate_paths()
+    assert not list(source.iterdir())

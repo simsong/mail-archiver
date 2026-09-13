@@ -481,6 +481,26 @@ preservation, provenance, interoperability, and usability objectives.
 
 ## Development sequence
 
+### Release milestones
+
+The phased sequence below describes product capabilities; GitHub milestones
+track release assignments and current issue status.
+
+* [Release v1.0.0](https://github.com/simsong/email-collection-toolkit/milestone/1):
+  the macOS release series, with scope detailed in [the release plan](V1_0_0_SCOPE.md).
+* [Release v1.1.0](https://github.com/simsong/email-collection-toolkit/milestone/2):
+  Windows full-ingest GUI support (#73) and a self-contained, Authenticode-signed
+  installer (#75), with Windows writer locking (#70). Shared prerequisites are
+  antivirus integration (#71), packaging/native CI (#72), and document
+  registration (#76); those cross-platform issues remain shared dependencies.
+  Merged [PR #105](https://github.com/simsong/email-collection-toolkit/pull/105) documents
+  Dioxus Desktop and Tauri trials before selecting a compiled UI, retaining the
+  Python archive engine. The framework decision remains pending.
+
+Milestone scope is planned work, not evidence of shipped support. v1.1.0 has no
+assigned release date; native Windows and clean-VM validation must establish
+the supported platforms and installer behavior before publication.
+
 ### 0. Continuation gate
 
 Run and publish the ePADD/Emailchemy comparison. Meet with ePADD and BitCurator

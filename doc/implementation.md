@@ -895,7 +895,7 @@ The UI polls import availability and prevents repeated clicks while dialogs are 
 Import's final confirmation uses an application-owned macOS NSAlert with the
 bundled icon, destination heading/path, and explicit Import/Cancel actions.
 The shared alert helper marshals presentation onto the Cocoa main thread and
-also supplies the startup chooser's app icon.
+supplies the import confirmation icon.
 An application-owned NSOpenPanel labels source selection **Import**, displays
 the destination, and enables both file and directory selection, including
 multiple selections. Both import entry points open this panel directly without
@@ -942,9 +942,60 @@ uses the saved directory if it exists, otherwise the archive parent.
 Existing message categories remain unchanged by settings edits or FTS rebuilds.
 
 When startup produces a placeholder, the shell discards it without creating a
-native search window. A `webview.start` callback presents a three-button NSAlert
-on the Cocoa main thread: Open Existing, Create New, or Cancel. About anchors
-subsequent dialogs and retains File New/Open after cancellation. Native dialog
+native search window and opens `setup.html` with all three numbered steps.
+`SetupApi` exposes only the two folder pickers, Start import, and Cancel through
+`WindowBridge`; picker cancellation retains its server-side selection. The
+source and destination NSOpenPanels accept only existing directories and disable
+New Folder, even before a source is selected. This prevents browsing from
+creating a directory inside an input tree before overlap validation. Folder-only panels treat `.mailarchive` packages as
+directories so existing archives remain selectable. `SetupSelection` compares folder and ancestor filesystem identities for overlap
+(including Cocoa Unicode and case aliases) before
+any archive initialization. Start import opens a valid existing destination or
+creates an empty one, reuses its search owner on retry, and passes the chosen
+root into the existing confirmed import workflow. A started job opens Ingests
+and hides setup after clearing its selections. The webview stays alive to
+receive the bridge reply; destroying it inside that call would strand a reply
+thread at exit. Cancel (also Escape) waits for its bridge reply thread to finish, then quits the
+application using the existing stop/checkpoint policy. `request_quit` first calls
+`prepare_quit` under the same application lock used to publish import jobs: a
+job-free decision sets `_quitting` before new jobs can register; otherwise it
+confirms, stops jobs, and waits for completion. A deterministic native regression
+publishes a real leased job immediately before that decision and verifies the
+confirmation, stop signal, lease retention, completion, and application exit.
+Picker selection and the Cancel action do not persist setup paths or write
+preferences. Normal startup may already have removed an invalid or missing
+remembered archive through `_forget_recent()` before showing setup; Cancel does
+not undo that cleanup. Start import calls `open_document()` or `create_document()`,
+which records the destination in application preferences before import settings
+are confirmed. After ingestion, the worker may save the selected source directory
+in the archive configuration through `remember_import_directory()`.
+Pending setup operations
+disable Cancel and native File → Close and prevent window closure. Menu state
+refreshes on every setup lock acquisition and release, including Cancel and error
+recovery. The native Close gate checks the setup lock independently of the active
+or fallback window, and the Close handler rejects queued actions while locked.
+Native regressions inspect both Cancel transitions and a real modal picker over
+an existing search window with no webview key window. Shared
+NSOpenPanel instances clear their accessory view before setting a new warning. Errors stay
+visible and controls recover for retry.
+`make test-startup` covers launch precedence, preference preservation, folder
+identity checks, and the three-box layout at default/minimum window sizes.
+`make test-native-setup` selects disposable folders through the actual Cocoa
+panels and bridge, checks cancellation and inline validation, imports one real
+message, verifies its SHA-256 and untouched source, and requires clean exit.
+`ApplicationController.startup(new=True)` bypasses explicit and remembered paths
+without changing preferences. The GUI maps `--new` and macOS's current
+`NSEvent.modifierFlags()` Option flag to that path before normal startup.
+The Dock reopen delegate samples the same flag and restores or creates setup.
+The native setup target also tests the sampler before application configuration,
+explicit/remembered archive bypass, normal Dock reopen, and Option reopening one
+existing setup window. Only the global hardware-modifier source is substituted
+with real NSEvent flags to avoid sending keystrokes to the user's desktop; this
+does not establish a physical Option-click/Finder launch test. Physical
+Option-launch and Dock Option-click remain unverified.
+The user holds Option through launch because the flag reports current key state.
+About is created hidden to retain the event loop and File New/Open after setup
+closes; the application menu explicitly shows it. Native dialog
 paths normalize SAVE strings and OPEN/FOLDER sequences before indexing; New
 validates the destination inside its error handler. Cocoa File menu items carry
 explicit Command-N/O/W shortcuts. Archive opening uses the File menu rather than
@@ -1963,6 +2014,9 @@ platform-specific.
 The native About metadata uses the same copyright notice. PEP 639
 `license-files` metadata places the repository notices and complete licenses
 for stored Tabulator and website-theme code in source distributions.
+`make test-native-setup` exercises the current owner email include/exclude editor
+before antivirus confirmation and verifies the saved rules after a synthetic
+import. Setup reuses File Import's current revision-checked owner-rule workflow.
 
 The Cocoa termination delegate confirms an active-import quit and returns
 `NSTerminateLater`, keeping the event loop alive while `IngestJob.stop` requests
@@ -2080,7 +2134,12 @@ the live virtual-table row by message ID after asynchronous preview redraws.
 tablet, and desktop widths, including reordered links, in headless Chromium.
 
 The shared pr-to-ready source generates the repository skill and Copilot
-instructions. Copilot review requests use `gh pr edit <number> --add-reviewer '@copilot'`
+instructions. Its preflight compares proposed changes with open PRs, active
+tasks, and local unpublished work, including semantic and shared-resource
+overlap. Potential conflicts require a concrete list and coordination plan plus
+explicit user approval; the ledger records the approved scope and subsequent
+checks before integration or publication. Separate worktrees do not waive this
+gate. Copilot review requests use `gh pr edit <number> --add-reviewer '@copilot'`
 as `simsong`, followed by restoration of `simsong-codex` for all other writes.
 Review-request timeline or reviewer evidence verifies the request; no browser
 control is used. Before handoff it inventories task checkouts, reconciles intended
@@ -2093,6 +2152,12 @@ checks tracked/untracked/ignored files, and
 removes only safe task-owned worktrees and represented local branches. It stops
 on completion or a reported preservation decision. Repository Claude entries
 are generated regular wrapper files, not directory symlinks.
+The explicit handoff cleanup step records each task checkout's disposition.
+This repository retains unmerged checkouts unless the user authorizes earlier
+removal. Such removal verifies publication against the matching PR, preserves
+non-rebuildable artifacts with hashes, and checks active use before non-force
+worktree removal; branch refs remain until merge verification. Retired checkout
+entries are removed from the shared skill inventory to keep synchronization valid.
 
 `make check` runs Ruff and Pylint (`make lint`), then ty and Pyright
 (`make types`), then pytest, Chromium end-to-end tests, and website validation.
